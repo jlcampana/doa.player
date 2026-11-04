@@ -34,25 +34,26 @@ Measured against the running game; see `docs/doa2u-notes.md` for numbers and cod
 
 - Pose: limbs, hands, forearm twists, upper arms and motion tracks. `doa2u::solve_pose`.
 - Joint pieces: measured on `kas00` only. Shoulders are off by up to 2.6 cm, unexplained.
-- Cloth (kind 2) and chains (kind 1, hair) are in the viewer. Single steps match the game on most records, not all.
+- Cloth (kind 2), chains (kind 1, hair) and extra objects (kind 3) are in the viewer. Single steps match the game on most records, not all.
+- Chest spring: Tina, Helena and Lei Fang only. Measured on Helena and Lei Fang.
 - Roster: Zack 0, Tina 1, Leon 8, Lei Fang 12, Hitomi 21, Bayman 24 measured in matches. Internal names differ: `sambo` is Bayman, `bayman` is Leon, `koryu` is Hitomi.
 
 Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same, so this is the viewer's convention, not a pose bug.
 
 ## Limit on soft bodies
 
-Claude set this and told the user: no chest spring, cloth or other body soft bodies for Kasumi, Ayane and Hitomi, skirts included, as they are teenagers or young in the series. Their hair stays on: `NO_SOFT_CLOTH_IDS` in `doa2u.rs` keeps only chains on the head. Develop and validate cloth on adult characters: Helena, Tina (`tin16`), Lei Fang. Diagnose those three from data, and use an adult for close-up body renders.
+Claude set this and told the user: no chest spring, cloth or other body soft bodies for Kasumi, Ayane and Hitomi, skirts included, as they are teenagers or young in the series. Their hair stays on: `NO_SOFT_CLOTH_IDS` in `doa2u.rs` keeps only chains on the head. The DOA2U chest spring, at the user's request, is only for Tina, Helena and Lei Fang (`CHEST_SPRING_IDS`). Develop and validate cloth on adult characters: Helena, Tina (`tin16`), Lei Fang. Diagnose those three from data, and use an adult for close-up body renders.
 
 `CHEST_SPRING_CHARACTER_IDS` and `TORSO_FRONT_CHAIN_CHARACTER_IDS` in `doa3.rs`, and `characters.toml`, do include them, against an older note in memory. The user was asked how that came about and has not answered. It was left unchanged, and is not to be carried over to DOA2U.
 
 ## Next steps, in order
 
-1. **Holes in some costumes.** The user showed one at the waist of `hel08`, and reported Kasumi's `kas00` chest as see-through, with feet and shin pieces looking wrong.
-   - Ruled out: alpha discard (those textures have no clear pixels); back-face culling (winding agrees with the normals on nearly every flagged and unflagged material, and turning culling off only shows linings).
-   - Suspect, not tested: the game rewrites the torso's front vertices by about 1 cm from the file's shape. In DOA3 that comes from a morph's base shape in the CAT (`parse_chest_morph`, `base + offset * |x|`). If the file's shape is not the rest shape, applying the base with no movement could close the gaps. Test on `hel08` first. Only the still shape is wanted for Kasumi.
-   - Also unread: objects in no draw list that no chain draws, such as `kas00` 0, 15, 16, 42, 43 and `hel08` 30, 31, 35 to 38, and CAT types 3 and 6.
+1. **Holes in some costumes.** The user showed one at the waist of `hel08` in motion `hika 0062`, and reported Kasumi's `kas00` chest as see-through, with feet and shin pieces looking wrong. Not reproduced at the frames tried.
+   - Ruled out: alpha discard, back-face culling, and the torso's static shape. Details in the notes.
+   - Best next step: a screenshot from the game in the same pose, to compare with the viewer.
+   - Also unread: objects in no draw list, such as `hel08` 31 and 35 to 38 and `kas00` 15, 42 and 43.
 2. **Remaining soft body error.** The `tin16` skirt, the first sheet of `hel00`'s coat, and chain records 11 and 19 of the last capture (`tin16` 11, `hel00` 7). The stage's floor height is the first suspect, not checked.
-3. **Other soft body kinds:** 3, 4, 5, 7 and 12, with updaters listed in the notes.
+3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
 4. Faces (eyes and mouth exist in DOA3, not in DOA2U), hands and lighting.
 
 ## Tools for this work
@@ -66,7 +67,6 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Development notes
 
-- Investigate the chest spring implementation in DOA2U.
 - Improve close-up framing for body renders. Use Kasumi as the reference character during validation.
 - Investigate additional costume availability in DOA2U by exploring `datadvd.afs` alongside the currently supported `datahdd2.afs` archives.
 - Lighting: try to recreate the game's lighting so that colors look similar to the game. DOA2U materials hold color and shininess values that the viewer does not use yet.

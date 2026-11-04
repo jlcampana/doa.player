@@ -706,6 +706,15 @@ pub fn parse_chest_morph(cat: &[u8]) -> Option<Vec<ChestMorphGroup>> {
     }
 }
 
+/// A game's parameters for the chest spring.
+#[derive(Debug, Clone, Copy)]
+pub struct ChestSpringParameters {
+    pub stiffness: f32,
+    pub damping: f32,
+    pub drive: f32,
+    pub rest: f32,
+}
+
 /// One-dimensional spring driven by the chest bone (`sub_00046030`,
 /// `sub_00046340`, `sub_00046170`). Advance it once per 60 Hz game frame.
 /// Equation verified against the game's own state: residual below 1e-9.
@@ -715,27 +724,33 @@ pub struct ChestSpring {
     velocity: f32,
     previous_point: Vec3,
     previous_local_y: f32,
+    parameters: ChestSpringParameters,
 }
 
 impl ChestSpring {
-    const STIFFNESS: f32 = 0.128;
-    const DAMPING: f32 = 0.85;
-    /// 20 in the game's parameters, times the 0.5 it applies to standing states.
-    const DRIVE: f32 = 10.0;
-    const REST: f32 = 0.125;
+    /// Drive is 20 in the game's parameters, times the 0.5 it applies to standing states.
+    pub const DOA3: ChestSpringParameters =
+        ChestSpringParameters { stiffness: 0.128, damping: 0.85, drive: 10.0, rest: 0.125 };
     const REFERENCE: Vec3 = Vec3::new(0.0, 0.2, 0.3);
 
-    fn target(chest: &Mat4) -> f32 {
-        Self::REST - Self::REST * chest.y_axis.y
+    fn target(&self, chest: &Mat4) -> f32 {
+        self.parameters.rest - self.parameters.rest * chest.y_axis.y
     }
 
     pub fn new(chest: &Mat4) -> Self {
-        Self {
-            value: Self::target(chest),
+        Self::with_parameters(chest, Self::DOA3)
+    }
+
+    pub fn with_parameters(chest: &Mat4, parameters: ChestSpringParameters) -> Self {
+        let mut spring = Self {
+            value: 0.0,
             velocity: 0.0,
             previous_point: chest.transform_point3(Self::REFERENCE),
             previous_local_y: 0.0,
-        }
+            parameters,
+        };
+        spring.value = spring.target(chest);
+        spring
     }
 
     pub fn step(&mut self, chest: &Mat4) -> f32 {
@@ -745,9 +760,9 @@ impl ChestSpring {
         self.previous_local_y = local_y;
         self.previous_point = chest.transform_point3(Self::REFERENCE);
 
-        self.velocity = Self::DAMPING * self.velocity
-            - Self::STIFFNESS * (self.value - Self::target(chest))
-            - Self::DRIVE * drive;
+        self.velocity = self.parameters.damping * self.velocity
+            - self.parameters.stiffness * (self.value - self.target(chest))
+            - self.parameters.drive * drive;
         self.value += self.velocity;
         if self.value >= 1.0 {
             self.value = 1.0;

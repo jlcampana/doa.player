@@ -133,9 +133,23 @@ The layout of DOA3's section 3: +0 object, +2 mode, +3 bone, +4 offset, +0x14 an
 
 The switch in `sub_00057370` installs kinds 1, 2, 4, 5, 7 and 12 (table at `0x57448`). `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. The switch's table sends kind 3 to no installer; the game must read those records elsewhere, which was not looked for.
 
+## Chest spring
+
+Only for Tina, Helena and Lei Fang in the viewer, fixed in code (`CHEST_SPRING_IDS`). Kasumi, Ayane and Hitomi have the data in the game, and the viewer does not use it for them.
+
+State per fighter at `0x850538`, stride `0x70`, step in `sub_0005ADA0` and `sub_0005ABA0`. Parameters are copied from the table at `0x64C894`: stiffness 0.075, damping 0.9, drive 30, rest 0.3, of which half is used. DOA3's are 0.128, 0.85, 10 and 0.125. The formula has DOA3's form. A state field at +0x6C selects another path, which was not read, and was 0 in the fighters measured.
+
+The shapes are entry 4 of the `apv` section at CAT word 3 (`sub_0005D610`): +0 targets, +4 object, +8 groups, +0x10 a table of two pointers per target, +0x14 vertex lists. Targets are absolute shapes as floats, 12 bytes per group, unlike DOA3's scaled i16 offsets. A list holds vertex byte offsets, with the low bit meaning another follows. Zack's section has only 4 entries.
+
+Measured:
+
+- `tools/re/doa2u_chest_check.py`, on `hel08` and `lei00`, 150 frames each: median error of the predicted value 0.00000. The 95th percentile is 0.65 and 1.04, and the worst 2.0. Those are taken to be reads a frame apart, which was not checked.
+- Vertices against `base + (target - base) * |x|`, best `x` fitted per read: on `hel08` the worst residual was 0.00000 and on `lei00` a median of 0.00000 and a maximum of 2.4 mm. The base equals the file's shape on both.
+- `tin` costumes and the viewer's spring running over time were not compared.
+
 ## Holes in some costumes
 
-Not solved. See "Next steps" in `CLAUDE.md`. Measured on `hel08` and `kas00`: triangle winding agrees with the stored normals on nearly every material, flag 0 or 1, so the back-face flag looks right: flag 1 hides back faces, and turning culling off shows linings from inside. Flags 5, 8 and 9 also occur, and are not culled.
+Not solved. See "Next steps" in `CLAUDE.md`. The torso's static shape is ruled out: on `hel08` the file's shape equals the morph's base, and no torso vertex stays away from it by over 2 mm. Sheets write the right vertices on `hel08` (median 0.00 mm, against a vertex buffer that some reads catch frames late). In the viewer the waist looks closed in the rest pose and in motion 62 at the frames tried, so the hole was not reproduced. Measured on `hel08` and `kas00`: triangle winding agrees with the stored normals on nearly every material, flag 0 or 1, so the back-face flag looks right: flag 1 hides back faces, and turning culling off shows linings from inside. Flags 5, 8 and 9 also occur, and are not culled.
 
 ## Not done
 
@@ -143,4 +157,3 @@ Not solved. See "Next steps" in `CLAUDE.md`. Measured on `hel08` and `kas00`: tr
 - Soft bodies other than kinds 1 and 2, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
 - Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
-- No chest spring: it is not ported for DOA2U.

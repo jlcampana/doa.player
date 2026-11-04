@@ -651,6 +651,8 @@ impl App {
             self.camera.frame_character(1.8);
             self.framed_character = Some(char_idx);
         }
+        let chest_morph = doa2u::chest_morph(&cat, id)?;
+        let chain_piece_of_chest = chest_morph.as_ref().and_then(|(object, _)| chain_pieces.get(*object).copied().flatten()).map(|(piece, _)| piece);
         let chains = Doa3Chains {
             chains,
             cloth,
@@ -664,7 +666,12 @@ impl App {
             hand_events: Default::default(),
             character: id,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest: None, chains });
+        let chest = chest_morph.and_then(|(object, groups)| {
+            let piece = chain_piece_of_chest?;
+            log::info!("Chest spring on object {object}, {} groups", groups.len());
+            Some(Doa3Chest { piece, groups, spring: None, frame: 0 })
+        });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -955,6 +962,7 @@ impl App {
         };
         match doa3::eval_motion(data, &motion.tracks, self.anim_time) {
             Ok(values) => {
+                let doa2u_pose = pose.doa2u_style.is_some();
                 let nodes = match pose.doa2u_style {
                     Some(style) => doa2u::solve_pose(&values, &pose.skeleton, style),
                     None => doa3::solve_pose(&values, &pose.skeleton),
@@ -962,7 +970,8 @@ impl App {
                 let clock = self.game_clock as u64;
                 let (motion_id, motion_frame) = (motion.id, self.anim_time as u16);
                 if let Some(chest) = self.doa3_pose.as_mut().and_then(|p| p.chest.as_mut()) {
-                    let spring = chest.spring.get_or_insert_with(|| ChestSpring::new(&nodes[0]));
+                    let parameters = if doa2u_pose { doa2u::CHEST_SPRING } else { ChestSpring::DOA3 };
+                    let spring = chest.spring.get_or_insert_with(|| ChestSpring::with_parameters(&nodes[0], parameters));
                     // Holding the pose between 60 Hz frames, as the game does.
                     while chest.frame < clock {
                         spring.step(&nodes[0]);

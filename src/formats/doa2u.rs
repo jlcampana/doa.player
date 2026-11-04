@@ -19,7 +19,9 @@ use anyhow::{bail, Context, Result};
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-use super::doa3::{parse_sparse_joint_skins, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
+use super::doa3::{
+    parse_sparse_joint_skins, ChestMorphGroup, ChestSpringParameters, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST,
+};
 use super::doa3_chains::{parse_chain_records, parse_overlay_records, Overlay, SoftChain};
 use super::doa3_cloth::{parse_cloth_records, SoftCloth};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
@@ -302,6 +304,66 @@ pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec
 pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
     let (base, offsets) = soft_body_offsets(cat, 3)?;
     Ok(parse_overlay_records(cat, base, &offsets, object_count))
+}
+
+/// Characters with the chest spring in the viewer: Tina, Helena and Lei Fang.
+/// Fixed in code, by choice: adult characters only.
+const CHEST_SPRING_IDS: [usize; 3] = [1, 7, 12];
+
+/// `sub_0005ADA0`, with the table at 0x64C894. The rest value is half of the 0.3
+/// there. Measured on Helena and Lei Fang: see the notes.
+pub const CHEST_SPRING: ChestSpringParameters =
+    ChestSpringParameters { stiffness: 0.075, damping: 0.9, drive: 30.0, rest: 0.15 };
+
+/// Reads the chest's shapes, for the characters that have the spring: the object
+/// and its groups. This is entry 4 of the `apv` section at CAT word 3 (`sub_0005D610`):
+/// +0 targets, +4 object, +8 groups, +0x10 table of two pointers per target, +0x14
+/// vertex lists. Targets 0, 1 and 2 are the base and the two extreme shapes, three
+/// floats per group, with offsets from the section. A list holds vertex byte
+/// offsets, where the low bit means another follows.
+pub fn chest_morph(cat: &[u8], character_id: usize) -> Result<Option<(usize, Vec<ChestMorphGroup>)>> {
+    if !CHEST_SPRING_IDS.contains(&character_id) {
+        return Ok(None);
+    }
+    let base = read_u32(cat, 0xC)? as usize;
+    if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? < 5 {
+        return Ok(None);
+    }
+    let entry = base + read_u32(cat, base + 8 + 4 * 4)? as usize;
+    if read_u32(cat, entry)? < 3 {
+        return Ok(None);
+    }
+    let object = read_u32(cat, entry + 4)? as usize;
+    let count = read_u32(cat, entry + 8)? as usize;
+    let table = base + read_u32(cat, entry + 0x10)? as usize;
+    let mut list = base + read_u32(cat, entry + 0x14)? as usize;
+    let shape = |target: usize| -> Result<usize> { Ok(base + read_u32(cat, table + target * 8)? as usize) };
+    let (first, positive, negative) = (shape(0)?, shape(1)?, shape(2)?);
+    let vector = |at: usize, group: usize| -> Result<Vec3> {
+        let bytes = slice(cat, at + group * 12, 12)?;
+        let value = |i: usize| f32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        Ok(Vec3::new(value(0), value(4), value(8)))
+    };
+    let mut groups = Vec::with_capacity(count);
+    for group in 0..count {
+        let mut vertices = Vec::new();
+        loop {
+            let value = read_u32(cat, list)?;
+            list += 4;
+            vertices.push(((value & !1) / 32) as u16);
+            if value & 1 == 0 {
+                break;
+            }
+        }
+        let rest = vector(first, group)?;
+        groups.push(ChestMorphGroup {
+            vertices,
+            base: rest,
+            positive: vector(positive, group)? - rest,
+            negative: vector(negative, group)? - rest,
+        });
+    }
+    Ok(Some((object, groups)))
 }
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
