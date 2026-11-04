@@ -33,6 +33,9 @@ const FLAG_KEEP_WIDTH: u8 = 0x10;
 const FLAG_CAP: u8 = 0x40;
 /// Vertices are written with their own offset from the particle.
 const FLAG_OFFSET_VERTICES: u8 = 0x80;
+/// DOA2U: columns may start on a vertex of the object.
+const FLAG_VERTEX_ROOTS: u8 = 0x08;
+const VERTEX_BYTES: usize = 32;
 /// Bits the game reads but that no real record uses. Records with them were
 /// not ported, and in practice these are false sections.
 const UNSUPPORTED_FLAGS: u8 = 0x29;
@@ -220,6 +223,15 @@ pub struct SoftCloth {
     vertices: ClothVertices,
     particles: Vec<ClothParticle>,
     ready: bool,
+    /// DOA2U adds the wind to the pull, so it also feeds the velocity. DOA3 adds
+    /// it to the force.
+    wind_in_pull: bool,
+    /// Rows that stay a closed ring under `FLAG_RING_FIRST_ROW`: the top four bits
+    /// of the record's flags plus one in DOA2U. DOA3 keeps it to the first row.
+    ring_rows: usize,
+    /// DOA2U flag 0x08: columns rooted on a vertex of the object, by index. These
+    /// can be vertices that another sheet writes, which chains the sheets.
+    vertex_roots: Vec<Option<usize>>,
 }
 
 /// Reads every cloth record in a CAT that moves vertices.
@@ -237,7 +249,37 @@ pub fn parse_cloth(cat: &[u8]) -> Vec<SoftCloth> {
 /// known to be real, so the limits of `plausible_record` do not apply. DOA2U has
 /// sheets of 17 columns and flag 0x08. Records that cannot be read are left out.
 pub fn parse_cloth_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftCloth> {
-    offsets.iter().filter_map(|&offset| parse_record(cat, base, base + offset)).collect()
+    offsets
+        .iter()
+        .filter_map(|&offset| {
+            let at = base + offset;
+            let mut cloth = parse_record(cat, base, at)?;
+            let all_flags = read_u32(cat, at + 8)?;
+            let high_flags = (all_flags >> 8) as u8;
+            cloth.wind_in_pull = true;
+            cloth.ring_rows = (all_flags >> 28) as usize + 1;
+            // Flags 0x180 both write vertices with their own offsets (`sub_00050A50`).
+            if high_flags & 1 != 0 && cloth.flags & FLAG_OFFSET_VERTICES == 0 {
+                let list_at = at_pointer(cat, base, at, 0x44)?;
+                if let Some(offsets) = at_pointer(cat, base, at, 0x58) {
+                    let caps = cloth.columns * cloth.rows;
+                    cloth.vertices = ClothVertices::Offset(parse_offset_vertices(cat, list_at, offsets, caps)?);
+                }
+            }
+            if cloth.flags & FLAG_VERTEX_ROOTS != 0 {
+                let list = at_pointer(cat, base, at, 0x50)?;
+                cloth.vertex_roots = (0..cloth.columns)
+                    .map(|c| read_u32(cat, list + c * 4).map(|v| (v != u32::MAX).then_some(v as usize / VERTEX_BYTES)))
+                    .collect::<Option<_>>()?;
+            }
+            Some(cloth)
+        })
+        .collect()
+}
+
+fn at_pointer(cat: &[u8], base: usize, at: usize, offset: usize) -> Option<usize> {
+    let value = read_u32(cat, at + offset)? as usize;
+    (value != 0).then_some(base + value)
 }
 
 fn floats(cat: &[u8], at: usize, count: usize) -> Option<Vec<f32>> {
@@ -363,6 +405,9 @@ fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftCloth> {
         vertices,
         particles: vec![ClothParticle::default(); columns * (rows + 1)],
         ready: false,
+        wind_in_pull: false,
+        ring_rows: 1,
+        vertex_roots: Vec::new(),
     })
 }
 
@@ -412,6 +457,20 @@ pub(super) fn parse_offset_vertices(cat: &[u8], mut at: usize, mut offsets: usiz
 }
 
 impl SoftCloth {
+    /// Moves the roots of DOA2U's flag 0x08 onto the object's current vertices, in
+    /// the bone's space. Call it before `step`, after any sheet that writes them.
+    pub fn follow_vertices(&mut self, vertex: impl Fn(usize) -> Option<Vec3>) {
+        for (root, source) in self.roots.iter_mut().zip(&self.vertex_roots) {
+            if let Some(position) = source.and_then(&vertex) {
+                *root = position;
+            }
+        }
+    }
+
+    pub fn has_vertex_roots(&self) -> bool {
+        !self.vertex_roots.is_empty()
+    }
+
     /// Whether any column starts on the front of the torso.
     pub fn is_on_torso_front(&self) -> bool {
         self.bone == 0 && self.roots.iter().any(|root| root.z > 0.0)
@@ -447,14 +506,17 @@ impl SoftCloth {
                 let at = self.index(c, row);
                 let particle = self.particles[at];
                 let length = self.column_lengths[c];
-                let pull = particle.position - points[c];
+                let pull = particle.position - points[c] + if self.wind_in_pull { wind } else { Vec3::ZERO };
                 let mut velocity = (particle.velocity + pull - particle.last_pull) * self.damping;
                 velocity.y -= self.gravity;
 
                 let mut force = pull * self.pull + velocity + directions[c];
                 directions[c] *= self.bend;
                 let target = if row == 0 { directions[c] } else { self.particles[at - 1].segment };
-                force += (target - particle.segment) * stiffness[c] + wind;
+                force += (target - particle.segment) * stiffness[c];
+                if !self.wind_in_pull {
+                    force += wind;
+                }
                 let size = force.length();
                 if size > self.max_force {
                     force *= self.max_force / size;
@@ -523,7 +585,7 @@ impl SoftCloth {
     fn row_shape(&self, row: usize) -> (usize, bool) {
         if self.flags & FLAG_RING_FIRST_ROW == 0 {
             (self.columns, self.is_ring)
-        } else if row == 0 {
+        } else if row < self.ring_rows {
             (self.columns - 1, true)
         } else {
             (self.columns, false)
@@ -647,7 +709,7 @@ impl SoftCloth {
             self.particles[at].segment = segments[c];
             points[c] += segments[c];
         }
-        if columns < self.columns && row == 0 {
+        if columns < self.columns {
             // The ring's last column repeats its first one.
             let (first, last) = (self.index(0, row), self.index(columns, row));
             self.particles[last].position = self.particles[first].position;
@@ -801,6 +863,114 @@ mod tests {
 
     fn afs() -> Option<Vec<u8>> {
         std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/doa3/loadfile.afs")).ok()
+    }
+
+    /// One step of DOA2U cloth against particles read from the game. DOA2U_PAIRS is
+    /// an export of consecutive frames, and DOA2U_RECORDS lists "fighter costume".
+    #[test]
+    #[ignore]
+    fn doa2u_single_steps() {
+        use crate::formats::doa2u::{decrypt_cat, soft_body_offsets};
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut costumes = std::collections::HashMap::new();
+        for pair in std::env::var("DOA2U_RECORDS").expect("DOA2U_RECORDS").split(',') {
+            let (fighter, stem) = pair.split_once(' ').unwrap();
+            let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+            decrypt_cat(&mut cat).unwrap();
+            let (base, offsets) = soft_body_offsets(&cat, 2).unwrap();
+            costumes.insert(fighter.to_string(), parse_cloth_records(&cat, base, &offsets));
+        }
+        let text = std::fs::read_to_string(std::env::var("DOA2U_PAIRS").expect("DOA2U_PAIRS")).unwrap();
+        let particles = |v: &[f32]| -> Vec<ClothParticle> {
+            v.chunks_exact(16)
+                .map(|p| ClothParticle {
+                    position: Vec3::new(p[0], p[1], p[2]),
+                    segment: Vec3::new(p[4], p[5], p[6]),
+                    velocity: Vec3::new(p[8], p[9], p[10]),
+                    last_pull: Vec3::new(p[12], p[13], p[14]),
+                })
+                .collect()
+        };
+        let mut records = Vec::new();
+        let mut nodes: std::collections::HashMap<String, Vec<Mat4>> = Default::default();
+        let mut before: Vec<ClothParticle> = Vec::new();
+        let (mut head, mut ring) = (0usize, Vec::<f32>::new());
+        let mut object = Vec::<f32>::new();
+        let use_wind = std::env::var("DOA2U_NO_WIND").is_err();
+        let mut totals: std::collections::BTreeMap<usize, Vec<(f32, f32, f32)>> = Default::default();
+        let mut roots: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let kind = words.next().unwrap();
+            let rest: Vec<&str> = words.collect();
+            match kind {
+                "rec" => records.push((rest[0].to_string(), rest[1].parse::<usize>().unwrap())),
+                "vertices" => object = rest.iter().map(|v| v.parse().unwrap()).collect(),
+                "wind" => {
+                    head = rest[0].parse().unwrap();
+                    ring = rest[1..].iter().map(|v| v.parse().unwrap()).collect();
+                }
+                "matrices" => {
+                    let m: Vec<f32> = rest[1..].iter().map(|v| v.parse().unwrap()).collect();
+                    let game = |i: usize| Mat4::from_cols_slice(&m[i * 16..i * 16 + 16]);
+                    let mut list = vec![Mat4::IDENTITY; 23];
+                    for (i, node) in list.iter_mut().enumerate().take(15) {
+                        *node = game(i);
+                    }
+                    list[19] = game(24);
+                    list[20] = game(25);
+                    nodes.insert(rest[0].to_string(), list);
+                }
+                "before" => before = particles(&rest[1..].iter().map(|v| v.parse().unwrap()).collect::<Vec<f32>>()),
+                "after" => {
+                    let k: usize = rest[0].parse().unwrap();
+                    let after = particles(&rest[1..].iter().map(|v| v.parse().unwrap()).collect::<Vec<f32>>());
+                    let (fighter, record) = &records[k];
+                    let Some(cloth) = costumes.get_mut(fighter).and_then(|c| c.get_mut(*record)) else { continue };
+                    cloth.ready = true;
+                    if !object.is_empty() {
+                        cloth.follow_vertices(|v| object.get(v * 8..v * 8 + 3).map(|p| Vec3::new(p[0], p[1], p[2])));
+                    }
+                    cloth.particles_mut().copy_from_slice(&before);
+                    // The phase starts at 0 for each fighter and adds 3, modulo 8, per record.
+                    let phase = (record * 3) & 7;
+                    let index = (head as i64 - phase as i64 - 1).rem_euclid(64) as usize * 4;
+                    let wind = Vec3::new(ring[index], ring[index + 1], ring[index + 2]);
+                    cloth.step(&nodes[fighter], if use_wind { wind } else { Vec3::ZERO });
+                    // Reads can catch particles and matrices a frame apart. Row 0 sits
+                    // on the bone, so a mismatch there shows such a pair.
+                    let rows = cloth.rows + 1;
+                    let root_error = (0..cloth.columns)
+                        .map(|c| (cloth.particles()[c * rows].position - after[c * rows].position).length())
+                        .fold(0.0, f32::max);
+                    roots.entry(k).or_insert_with(Vec::new).push(root_error);
+                    if root_error < 0.0005 {
+                        let error = |list: &[ClothParticle]| list.iter().zip(&after).map(|(a, b)| (a.segment - b.segment).length()).sum::<f32>() / after.len() as f32;
+                        let worst = cloth.particles().iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0, f32::max);
+                        let total = totals.entry(k).or_insert_with(Vec::new);
+                        total.push((error(cloth.particles()), error(&before), worst));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (k, list) in &mut roots {
+            list.sort_by(f32::total_cmp);
+            let mut samples = totals.remove(k).unwrap_or_default();
+            let count = samples.len();
+            let median = |values: &mut Vec<f32>| {
+                values.sort_by(f32::total_cmp);
+                values.get(values.len() / 2).copied().unwrap_or(f32::NAN) * 1000.0
+            };
+            let mut ours: Vec<f32> = samples.iter().map(|s| s.0).collect();
+            let mut still: Vec<f32> = samples.iter().map(|s| s.1).collect();
+            let mut worst: Vec<f32> = samples.drain(..).map(|s| s.2).collect();
+            println!(
+                "record {k} {:?}: {count} of {} pairs usable, median row 0 error {:.2} mm; segment error {:.2} mm, without stepping {:.2} mm, worst position {:.2} mm",
+                records[*k], list.len(), list[list.len() / 2] * 1000.0, median(&mut ours), median(&mut still), median(&mut worst)
+            );
+        }
     }
 
     #[test]

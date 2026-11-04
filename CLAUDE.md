@@ -45,17 +45,13 @@ Limit set by Claude and told to the user: no chest spring or body soft bodies fo
 
 `list_costume_objects` lists a costume's objects and materials. `joint_pieces_match_captured_vertices` compares joint pieces with a capture.
 
-## Next: cloth in DOA2U
+## Cloth in DOA2U
 
-Not in the viewer yet. Known:
+In the viewer since this point, for kind 2 soft bodies, except Kasumi, Ayane and Hitomi (`NO_SOFT_CLOTH_IDS`). Details and measurements: `docs/doa2u-notes.md`.
 
-- CAT word 2 is a list of soft bodies, like DOA3's sections: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, `sub_00057370`). `soft_body_offsets` reads it. DOA3's `find_sections` rejects it, because kind 1 records differ.
-- Kind 2 records have the header of DOA3's cloth. `tin16`'s skirt is object 3 (17 columns, 6 rows), `hel00`'s coat is object 1 (three sheets, flags 0x80 and 0x88), and `lei00` has one on object 1.
-- Running DOA3's cloth over captured matrices (`cloth_follows_captured_vertices`, median error against the game): `hel00` 11 cm, against 18.5 cm for the file's still shape; `tin16` 16 cm, worse than the still shape's 8 cm. So DOA3's simulation is not this game's. Giving it DOA3 style limb frames changed nothing.
-- This compares a free-running simulation over reads that miss frames, with no wind, so it is only a rough measure. An exact check needs the particles from memory, as DOA3's `matches_captured_frames` does. State is at `0x80B7A8`; byte +2 counted 12 for `tin16`'s 12 kind 1 records.
-- Next: read `sub_00051110` and `sub_00051F20`, the likely cloth updaters. They test flags 2, 4, 8 and 0x10. Which kind each one runs is not confirmed. Then find the particles in memory and compare single steps.
+Next: kind 1 (hair and chains), kind 3, and kinds 4, 5, 7 and 12. Explain the remaining error on sheets with shapes; the stage's floor height is the first suspect, not checked. Compare the viewer's result in motion with the game.
 
-The capture is `target/captures/tin16_hel00.pkl` (not tracked; `cargo clean` deletes it), made with `tools/re/doa2u_capture_objects.py`.
+Reads of the game catch sheets half written. Use `tools/re/doa2u_cloth_pairs.py`, which waits for quiet. Captures in `target/captures/` are not tracked, and `cargo clean` deletes them.
 
 ## Development notes
 

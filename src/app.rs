@@ -547,10 +547,14 @@ impl App {
             })
             .collect();
         let rigid_count = inputs.len();
+        let cloth = doa2u::soft_cloth(&cat, &model, id)?;
         let rigid_objects: Vec<usize> =
             drawn.iter().map(|placed| placed.object).filter(|&o| o < model.pieces.len()).collect();
+        let mut drawn_nodes: Vec<(usize, usize)> =
+            drawn.iter().filter(|p| p.object < model.pieces.len()).map(|p| (p.object, p.node)).collect();
         for skin in &skins {
             let Some(piece) = model.pieces.get(skin.object) else { continue };
+            drawn_nodes.push((skin.object, skin.node));
             let welds = skin
                 .welds
                 .iter()
@@ -587,12 +591,17 @@ impl App {
             self.camera.frame_character(1.8);
             self.framed_character = Some(char_idx);
         }
+        // Soft bodies write into the first piece that draws their object.
+        let mut chain_pieces: Vec<Option<(usize, usize)>> = vec![None; model.pieces.len()];
+        for (input, (object, node)) in drawn_nodes.iter().enumerate() {
+            chain_pieces[*object].get_or_insert((input, *node));
+        }
         let chains = Doa3Chains {
             chains: Vec::new(),
-            cloth: Vec::new(),
+            cloth,
             tubes: Vec::new(),
             springs: Vec::new(),
-            pieces: Vec::new(),
+            pieces: chain_pieces,
             frame: 0,
             wind: Wind::new(),
             hands: Vec::new(),
@@ -922,8 +931,18 @@ impl App {
                         for (i, chain) in soft.chains.iter_mut().enumerate() {
                             chain.step(&nodes, soft.wind.force(i));
                         }
+                        // DOA2U sheets can start on vertices that an earlier sheet writes.
+                        let chained = soft.cloth.iter().any(SoftCloth::has_vertex_roots);
+                        let mut written = std::collections::HashMap::new();
                         for (i, sheet) in soft.cloth.iter_mut().enumerate() {
+                            let object = sheet.object;
+                            sheet.follow_vertices(|vertex| written.get(&(object, vertex)).copied());
                             sheet.step(&nodes, soft.wind.force(i));
+                            if chained {
+                                for (vertex, position) in sheet.vertex_positions(&nodes) {
+                                    written.insert((object, vertex), position);
+                                }
+                            }
                         }
                         for tube in &mut soft.tubes {
                             tube.step(&nodes, &soft.wind);

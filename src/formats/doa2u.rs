@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
 
 use super::doa3::{parse_sparse_joint_skins, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
+use super::doa3_cloth::{parse_cloth_records, SoftCloth};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
 const XPR_MAGIC: u32 = 0x3052_5058;
@@ -250,6 +251,26 @@ pub fn soft_body_offsets(cat: &[u8], wanted: u32) -> Result<(usize, Vec<usize>)>
         }
     }
     Ok((base, offsets))
+}
+
+/// Characters whose body has no soft bodies in the viewer, by choice: Kasumi,
+/// Ayane and Hitomi. Fixed in code, and not a limit of the game or its files.
+const NO_SOFT_CLOTH_IDS: [usize; 3] = [5, 13, 21];
+
+/// The costume's cloth: kind 2 in the soft body list. Roots on vertices start
+/// on the file's shape, and `SoftCloth::follow_vertices` keeps them up to date.
+pub fn soft_cloth(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<SoftCloth>> {
+    if NO_SOFT_CLOTH_IDS.contains(&character_id) {
+        return Ok(Vec::new());
+    }
+    let (base, offsets) = soft_body_offsets(cat, 2)?;
+    let mut cloth = parse_cloth_records(cat, base, &offsets);
+    cloth.retain(|sheet| sheet.object < model.pieces.len());
+    for sheet in &mut cloth {
+        let vertices = &model.pieces[sheet.object].vertices;
+        sheet.follow_vertices(|v| vertices.get(v).map(|vertex| Vec3::from_array(vertex.position)));
+    }
+    Ok(cloth)
 }
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
@@ -831,7 +852,6 @@ mod tests {
     #[test]
     #[ignore]
     fn cloth_follows_captured_vertices() {
-        use crate::formats::doa3_cloth::parse_cloth_records;
         let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
         let id = std::env::var("DOA2U_CLOTH_ID").expect("DOA2U_CLOTH_ID");
         let id: Vec<&str> = id.split_whitespace().collect();
