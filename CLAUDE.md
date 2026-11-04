@@ -41,7 +41,7 @@ Reported by the user from the head down: chest see-through, feet and shin pieces
 - The see-through chest is not explained. Textures have no transparent pixels, and object 11 is drawn.
 - Not read yet: objects 15, 16, 42, 43 are in no draw list and do not change. Object 0 is in no draw list either. Records of type 3 and type 6 (`apa!`, `sub_000602F0`).
 
-Limit agreed with the user's request history: no chest spring or body soft bodies for Kasumi, Ayane and Hitomi, including skirts. Hair is separate. Develop cloth on adult characters: Helena's coat, Tina's `tin16`, Lei Fang. Diagnose Kasumi from data rather than from close-up renders of the body.
+Limit set by Claude and told to the user: no chest spring or body soft bodies for Kasumi, Ayane and Hitomi, including skirts, as they are teenagers or young in the series. Hair is separate. Close-up body renders for validation use an adult character, not Kasumi. Develop cloth on adult characters: Helena's coat, Tina's `tin16`, Lei Fang. Diagnose Kasumi from data rather than from close-up renders of the body.
 
 `list_costume_objects` lists a costume's objects and materials. `joint_pieces_match_captured_vertices` compares joint pieces with a capture.
 
