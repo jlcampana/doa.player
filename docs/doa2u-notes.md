@@ -275,6 +275,12 @@ The counts per ID at `0x6E0F08` are 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 1, 3, 20, 2
 
 The `A0` series is DOA3's format, both `cat` (plain, starting with 1) and `xpr` (plain). The viewer loads it through DOA3's parsers and solve, with DOA2U's bones and motions, DOA3's shading and no chest spring. That `bay` here is Leon and `sam` Bayman, and the IDs of `nin` (10), `sui` (22) and `gok` (23), are inferred from the second table's order; `hks` as 16 from the counts. `nin`, `sui`, `gok` and `hks` have no motions of their own, so they lie down in `comon.mot`'s first motion. Whether the game uses these files at all was not read: nothing was found referencing the second table. `yti` is taken to be Tina as a girl from the name `ytina`, not checked, and keeps no body soft bodies. Hands of `pdg00`, `pdg01` and `yti00` have other layouts and are skipped.
 
+## Voices
+
+`voice.afs`: 746 entries, of which 712 are named `.adx` (58 of those are `dummy`). 595 are mono at 22050 Hz, and the rest are stereo or other rates. Prefixes: `ks`, `ay`, `zk`, `tn`, `ry`, `le`, `jn`, `ba`, `by`, `gn`, `ln`, `tg`, `ei`, `he`. `by` as Bayman and `ln` as Leon are inferred. No prefix for Hitomi was found. `rd`, `gr` and `lt` hold the same announcer lines in three sets, and `v_` holds others; what tells them apart was not read.
+
+`formats/adx.rs` follows the usual description of ADX. Against ffmpeg on all 712 clips, the 58 dummies are identical and the others are not: on one clip, an RMS difference of 30 on a signal of 6217, and a worst of 137. ffmpeg's first nonzero sample there, -27, is not a multiple of the block's scale of 7, so the two differ in more than coefficients, and which is exact was not settled. Playback writes a temporary WAV and runs `pw-play`, `paplay` or `aplay`. Not heard by Claude. `export_clips_for_comparison` writes the clips for such a comparison.
+
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.

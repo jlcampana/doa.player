@@ -2,6 +2,7 @@ mod app;
 mod formats;
 mod renderer;
 mod ui;
+mod voices;
 
 use app::App;
 use renderer::RenderContext;
@@ -157,6 +158,7 @@ impl ApplicationHandler for Handler {
 struct UiActions {
     load_char: Option<(usize, usize)>,
     selected_anim: Option<usize>,
+    play_voice: Option<usize>,
 }
 
 fn render_frame(app: &mut App, window: &Window) {
@@ -169,6 +171,18 @@ fn render_frame(app: &mut App, window: &Window) {
     let characters: &[app::CharacterEntry] = match app.char_panel.selected_source {
         app::GameSource::Doa2U => &app.doa2u_characters,
         app::GameSource::Doa3  => &app.doa3_characters,
+    };
+    // DOA2U's clips have names. DOA3's do not, and which is whose is unknown there.
+    let voice_clips = if app.char_panel.selected_source == app::GameSource::Doa2U {
+        let selected = app.char_panel.selected_char_idx.and_then(|i| app.doa2u_characters.get(i)).map(|c| c.display_name.clone());
+        let character = if app.voice_panel.show_others { None } else { selected };
+        if app.voice_panel.show_others || character.is_some() {
+            app.voices.clips(app::DOA2U_VOICE_PATH, character.as_deref())
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
     };
     let has_bounce = app.has_chest_spring();
     let is_lit = app.mesh.is_lit();
@@ -184,12 +198,19 @@ fn render_frame(app: &mut App, window: &Window) {
             &mut app.bg_panel,
             has_bounce,
             is_lit,
+            &mut app.voice_panel,
+            &voice_clips,
             &app.status_msg,
             &mut actions,
         );
     });
 
     // Apply actions after UI is built
+    if let Some(entry) = actions.play_voice {
+        if let Err(e) = app.voices.play(app::DOA2U_VOICE_PATH, entry) {
+            app.status_msg = format!("Could not play the clip: {e:#}");
+        }
+    }
     if let Some((ci, costume)) = actions.load_char {
         app.load_character(ci, costume);
     }
@@ -321,6 +342,8 @@ fn build_ui(
     bg_panel: &mut ui::BgSelectPanel,
     has_bounce: bool,
     is_lit: bool,
+    voice_panel: &mut ui::VoicePanel,
+    voice_clips: &[voices::Clip],
     status_msg: &str,
     actions: &mut UiActions,
 ) {
@@ -333,6 +356,7 @@ fn build_ui(
     });
 
     bg_panel.show(ctx, backgrounds, has_bounce, is_lit);
+    voice_panel.show(ctx, voice_clips, &mut |entry| actions.play_voice = Some(entry));
 
     egui::TopBottomPanel::bottom("status")
         .frame(egui::Frame::none().fill(egui::Color32::from_rgb(30, 30, 30)))

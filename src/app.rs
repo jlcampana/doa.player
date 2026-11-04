@@ -65,6 +65,8 @@ const DOA2U_HDD_PATH: &str =
     "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datahdd.afs";
 const DOA2U_HDD2_PATH: &str =
     "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datahdd2.afs";
+pub const DOA2U_VOICE_PATH: &str =
+    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/voice.afs";
 const DOA2U_DVD_PATH: &str =
     "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datadvd.afs";
 const DOA3_LOAD_PATH: &str = "doa3/loadfile.afs";
@@ -313,6 +315,8 @@ pub struct App {
     // Archives (lazily loaded)
     pub hdd_archive: Option<AfsArchive>,
     pub hdd2_archive: Option<AfsArchive>,
+    pub voices: crate::voices::VoicePlayer,
+    pub voice_panel: crate::ui::VoicePanel,
     pub dvd_archive: Option<AfsArchive>,
     pub loadfile_archive: Option<AfsArchive>,
     pub doa3_xbe: Option<Xbe>,
@@ -476,6 +480,8 @@ impl App {
             background_options,
             hdd_archive,
             hdd2_archive,
+            voices: Default::default(),
+            voice_panel: crate::ui::VoicePanel::new(),
             dvd_archive,
             loadfile_archive,
             doa3_xbe,

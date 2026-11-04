@@ -49,7 +49,7 @@ Git does not track these files, so a deleted file can only come back from your c
 
 ## Possible later work
 
-Voices could be played once the viewer itself is finished. `voice.afs` holds standard ADX, which is simple to decode. What is missing is which clip belongs to which character and move. That has not been researched; the move scripts in each character's `.bin` are the first place to look.
+The viewer plays DOA2U's voices from the Voices window: `voice.afs` in that game has file names, whose prefixes say whose clip it is. DOA3's `voice.afs` has no names, so it is not listed yet. Which clip belongs to which move has not been researched; the move scripts in each character's `.bin` are the first place to look.
 
 ## More documentation
 

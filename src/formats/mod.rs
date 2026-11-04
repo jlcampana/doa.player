@@ -1,3 +1,4 @@
+pub mod adx;
 pub mod afs;
 pub mod xpr;
 pub mod catalog;

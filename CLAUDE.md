@@ -89,7 +89,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: last of all, by user request.
-5. After the viewer is finished: try playing the voices (`voice.afs`, see `README.md`). The user raised this as a possibility.
+5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
 
 ## Development principles
 
