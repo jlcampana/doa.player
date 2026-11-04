@@ -176,6 +176,16 @@ Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
 
 Against captured skirts of `lei00` and `lei04`, largest component error per vertex, over 60 reads: median 0.04 and 0.06 with this, 0.56 with the file's normals, which is what the viewer had. p90 0.47 and 0.39. So it is far closer and not exact, and the rest is not explained: reads may catch a sheet between its positions and its normals, which was not separated.
 
+### What changes normals
+
+`tools/re/doa2u_normal_check.py` lists it per object. Measured on `lei00`, `lei03`, `lei04`, `tin09`, `tin16`, `hel00`, `hel08` and `kas00`:
+
+- Hands: the shape tables, in the viewer, with 0 of 749 normals differing on `kas00`. Before this the viewer put them on the wrong vertices.
+- Joint pieces: computed by the viewer. On `hel08`, median error under 0.01 and worst 0.03 per piece, from `joint_pieces_match_captured_vertices` with `tools/re/doa2u_joint_export.py`. Except the shoulders, objects 3 and 17, with a median of 0.04 and 0.06 and a worst of 0.13, where positions are also off.
+- Sheets with kind 251: see that section. Sheets without it, and copies of kind 250, change no normals in the game either.
+- Chains: **not done**. On `hel08` object 32, the ponytail, 198 normals change, 180 of them on vertices that move. The game writes chain vertices in `sub_00050510`, which builds its own frames, and `sub_00050100` runs before it. Neither was read through. The viewer leaves these normals as in the file.
+- The face (`apv` 2 and 3) and chest (`apv` 4) have a normal count of 0, so they have no normal tables.
+
 ### Other kinds
 
 The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.

@@ -49,11 +49,13 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Next steps, in order
 
-1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye, and the feet and shins of `kas00` look right against a game screenshot, by eye. The ones worth comparing are those with material flags 8 and 9, which are not culled and unverified: `zac01`, `tin09`, `lei03`. No need to check every costume. Objects `hel08` 31 and `kas00` 15 and 43 are soft body variants the viewer does not select (see the notes); `hel08` 35 to 38 are probably kind 8, and `kas00` 42 is unread.
-   The hair of `hel08` is pale with the game's lighting, as in a screenshot of the game, by eye. The olive patches came from the viewer's old shading or material handling; which of the two was not separated.
-2. **Remaining soft body error.** Skirts and coats of `tin16`, `hel00`, `lei00` and `lei04` match in single steps, once the test has the stage's ground in `DOA2U_FLOOR`. Not yet: the head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm) and the cuffs of `lei04` (worst 7 mm). Chains differ by 1 to 5 mm on `tin16` 7, 8 and 9 and `hel00` 3, 5 and 8. The boot no longer shows through the cape of `tin09` in the viewer. `--load` takes a list index, not a file number: `tin16` is 15, and a bad index shows a white box.
-3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
-4. Lighting is in for DOA2U, with a selector of stage lights (see the notes). Compared by eye on `hel08` and `kas00` only. To do: lights of more stages, and the remaining material modes. DOA3's lighting is left for later: the user can only control one game at a time with the controller, so do it in a session with only DOA3 running. Blink and mouth are in, with DOA3's timing. Hands are in: shapes match the game, scripts were not compared with it frame by frame.
+1. **Chain normals.** The hair's normals stay as in the file, and the game changes them. See "What changes normals" in the notes: read `sub_00050100` and `sub_00050510`.
+2. **Rest of the lighting.** Lights of more stages, by asking the user what each looks like (`tools/re/doa2u_lights.py 8`). Rename "Area 8" and "Area 48" when they come up, and check whether the Stage byte hints help. Remaining material modes (`zac04`, `aya18`), four stage materials (`hel10`), drawing in the game's order, fog, lightning, point lights with a fighter position.
+3. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix. Clicking to orbit recenters the view on the point, and the user has not said whether that suits them.
+4. **Remaining soft body error.** Head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm), the cuffs of `lei04` (worst 7 mm), chains on `tin16` 7, 8, 9 and `hel00` 3, 5, 8 (1 to 5 mm), and shoulders (up to 2.6 cm). Wind was 0 in the cloth captures, so it is untested.
+5. **Other soft body kinds:** 4, 5, 7, 8, 9, 12 and 14. They need those costumes in a match. Kind 0xFE variants are read but only variant 0 is shown; the selector byte at `0x877CA0` and `sub_0005B050` were not followed.
+6. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. Pose 0's character substitution was not found.
+7. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
 
 ## Tools for this work
 
