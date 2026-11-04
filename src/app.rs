@@ -319,6 +319,8 @@ pub struct App {
 
 /// What is needed to pose the loaded DOA3 character.
 pub struct Doa3Pose {
+    /// Set for DOA2U costumes, which have their own solve.
+    pub doa2u_twist: Option<doa2u::ForearmTwist>,
     pub skeleton: [glam::Vec3; 17],
     pub motion: Option<Doa3Motion>,
     pub chest: Option<Doa3Chest>,
@@ -509,6 +511,7 @@ impl App {
         let textures = parse_xpr_textures(&xpr)?;
         let skeleton = doa2u::skeleton(xbe, id)?;
         let drawn = doa2u::parse_drawn_objects(&cat, &skeleton)?;
+        let twist = doa2u::forearm_twist(&cat)?;
 
         let table = u32::from_le_bytes(cat.get(0x10..0x14).context("truncated CAT")?.try_into()?) as usize;
         let skins = doa3::parse_sparse_joint_skins(&cat, table);
@@ -596,7 +599,7 @@ impl App {
             hand_events: Default::default(),
             character: id,
         };
-        self.doa3_pose = Some(Doa3Pose { skeleton, motion: None, chest: None, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_twist: Some(twist), skeleton, motion: None, chest: None, chains });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -839,7 +842,7 @@ impl App {
             hand_events,
             character: roster.id,
         };
-        self.doa3_pose = Some(Doa3Pose { skeleton, motion: None, chest, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_twist: None, skeleton, motion: None, chest, chains });
         self.game_clock = 0.0;
         let motion_index = config
             .motion
@@ -887,7 +890,10 @@ impl App {
         };
         match doa3::eval_motion(data, &motion.tracks, self.anim_time) {
             Ok(values) => {
-                let nodes = doa3::solve_pose(&values, &pose.skeleton);
+                let nodes = match pose.doa2u_twist {
+                    Some(twist) => doa2u::solve_pose(&values, &pose.skeleton, twist),
+                    None => doa3::solve_pose(&values, &pose.skeleton),
+                };
                 let clock = self.game_clock as u64;
                 let (motion_id, motion_frame) = (motion.id, self.anim_time as u16);
                 if let Some(chest) = self.doa3_pose.as_mut().and_then(|p| p.chest.as_mut()) {

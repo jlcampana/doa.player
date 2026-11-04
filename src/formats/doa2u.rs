@@ -17,9 +17,9 @@
 
 use anyhow::{bail, Context, Result};
 
-use glam::Vec3;
+use glam::{Mat3, Mat4, Quat, Vec3};
 
-use super::doa3::Xbe;
+use super::doa3::{Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
 const XPR_MAGIC: u32 = 0x3052_5058;
@@ -198,6 +198,162 @@ fn weighted_slot(slot: u8, skeleton: &[Vec3; 17]) -> Option<(usize, Bend)> {
     Some((node, Bend { parent, offset: skeleton[offset] }))
 }
 
+// ─── Pose ─────────────────────────────────────────────────────────────────────
+
+const TRACK_COUNT: usize = 44;
+
+/// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
+/// `sub_000E9430`). Each `*_turn` is three quarter turn counts for X, Y and Z.
+struct Limb {
+    upper: usize,
+    mid: usize,
+    end: usize,
+    parent: usize,
+    origin: usize,
+    first_track: usize,
+    length_axis: usize,
+    /// The solve runs with bones along Z. These give the frames the meshes use:
+    /// arm bones along X, and leg bones along -Y.
+    upper_turn: [f32; 3],
+    mid_turn: [f32; 3],
+    negate: bool,
+}
+
+const LIMBS: [Limb; 4] = [
+    Limb { upper: 14, mid: 10, end: 11, parent: 0, origin: 14, first_track: 12, length_axis: 0, upper_turn: [0.0, 1.0, 0.0], mid_turn: [0.0, -1.0, 0.0], negate: true },
+    Limb { upper: 8, mid: 4, end: 5, parent: 0, origin: 8, first_track: 20, length_axis: 0, upper_turn: [0.0, -1.0, 0.0], mid_turn: [0.0, 1.0, 0.0], negate: false },
+    Limb { upper: 12, mid: 13, end: 9, parent: 2, origin: 12, first_track: 28, length_axis: 1, upper_turn: [-1.0, 0.0, 1.0], mid_turn: [1.0, 0.0, 1.0], negate: true },
+    Limb { upper: 6, mid: 7, end: 3, parent: 2, origin: 6, first_track: 36, length_axis: 1, upper_turn: [-1.0, 0.0, -1.0], mid_turn: [1.0, 0.0, -1.0], negate: false },
+];
+
+/// Below this cosine the solve's angle stays at a quarter turn (0x43E374). It
+/// is also added to the squared distance to the target.
+const SOLVE_EPSILON: f32 = 0.00097;
+
+/// How a costume turns the forearm's end towards the hand, read from the CAT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForearmTwist {
+    /// The hand's frame, turned so that its X meets the forearm's. Measured
+    /// against the running game: see `pose_matches_captured_frames`.
+    AlignHand,
+    /// The forearm's frame rolled by the hand's direction (`atan2`). Follows
+    /// the code; no costume using it has been compared with the game yet.
+    RollForearm,
+}
+
+/// The record of type -1 in the CAT's first section holds a version. From 2 on,
+/// `sub_0005B9F0` selects the hand aligned twist; a CAT without it starts at -1.
+pub fn forearm_twist(cat: &[u8]) -> Result<ForearmTwist> {
+    let base = read_u32(cat, 4)? as usize;
+    let mut record = base;
+    let mut version = -1i32;
+    loop {
+        let value = read_u32(cat, record)?;
+        match read_u32(cat, record + 4)? {
+            0 => break,
+            0xFFFF_FFFF => version = value as i32,
+            _ => {}
+        }
+        record += 8;
+    }
+    Ok(if version >= 2 { ForearmTwist::AlignHand } else { ForearmTwist::RollForearm })
+}
+
+fn euler(angles: &[f32]) -> Mat4 {
+    Mat4::from_rotation_z(angles[2]) * Mat4::from_rotation_y(angles[1]) * Mat4::from_rotation_x(angles[0])
+}
+
+fn quarter_turns(turns: [f32; 3]) -> Mat4 {
+    euler(&turns.map(|t| t * std::f32::consts::FRAC_PI_2))
+}
+
+/// `acos`, limited to a quarter turn as the solve does.
+fn solve_angle(cosine: f32) -> f32 {
+    if cosine >= 1.0 {
+        0.0
+    } else if cosine < SOLVE_EPSILON {
+        std::f32::consts::FRAC_PI_2
+    } else {
+        cosine.acos()
+    }
+}
+
+/// Builds the node matrices in the game's left handed space, relative to the
+/// fighter's root: `sub_000E9430`, `sub_000EB880`. Not ported: the head's
+/// `sub_000EDBF0`, feet following a sloped floor, and upper arms set by CAT
+/// records of type 10 (`0x850710`). The root is taken as having no turn.
+fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: ForearmTwist) -> [Mat4; NODE_COUNT] {
+    let mut nodes = [Mat4::IDENTITY; NODE_COUNT];
+    nodes[2] = Mat4::from_translation(Vec3::new(0.0, tracks[1], 0.0)) * euler(&tracks[3..6]);
+    nodes[0] = nodes[2] * Mat4::from_translation(skeleton[0]) * euler(&tracks[6..9]);
+    nodes[1] = nodes[0] * Mat4::from_translation(skeleton[1]) * euler(&tracks[9..12]);
+
+    for limb in &LIMBS {
+        let values = &tracks[limb.first_track..limb.first_track + 8];
+        let target = Vec3::new(values[0], values[1], values[2]);
+        let (pole_a, pole_b) = (values[6], values[7]);
+        let upper_length = skeleton[limb.mid][limb.length_axis].abs();
+        let lower_length = skeleton[limb.end][limb.length_axis].abs();
+
+        let origin = nodes[limb.parent].transform_point3(skeleton[limb.origin]);
+        let to_target = target - origin;
+        let squared = to_target.length_squared() + SOLVE_EPSILON;
+        let distance = squared.sqrt();
+        let z = to_target / distance;
+
+        let cosine = |near: f32, far: f32| (squared + near * near - far * far) / (near * distance * 2.0);
+        let mut upper_angle = solve_angle(cosine(upper_length, lower_length));
+        let mut lower_angle = solve_angle(cosine(lower_length, upper_length));
+        if limb.negate {
+            upper_angle = -upper_angle;
+            lower_angle = -lower_angle;
+        }
+
+        let pole = Vec3::new(pole_b.sin() * pole_a.cos(), -pole_a.sin(), pole_b.cos() * pole_a.cos());
+        let y = (pole - z * pole.dot(z)).normalize_or_zero();
+        let x = y.cross(z);
+
+        let upper = Mat4::from_translation(origin) * Mat4::from_mat3(Mat3::from_cols(x, y, z)) * Mat4::from_rotation_y(upper_angle);
+        let mid = upper
+            * Mat4::from_translation(Vec3::new(0.0, 0.0, upper_length))
+            * Mat4::from_rotation_y(std::f32::consts::PI - lower_angle - upper_angle);
+        let end = mid.transform_point3(Vec3::new(0.0, 0.0, -lower_length));
+
+        nodes[limb.upper] = upper * quarter_turns(limb.upper_turn);
+        nodes[limb.mid] = mid * quarter_turns(limb.mid_turn);
+        nodes[limb.end] = Mat4::from_translation(end) * euler(&values[3..6]);
+    }
+
+    for (out, mid, end, sign) in [(NODE_TWIST[1], 10, 11, -1.0f32), (NODE_TWIST[0], 4, 5, 1.0)] {
+        nodes[out] = match twist {
+            ForearmTwist::AlignHand => {
+                let turn = Quat::from_rotation_arc(
+                    nodes[end].x_axis.truncate().normalize(),
+                    nodes[mid].x_axis.truncate().normalize(),
+                );
+                let mut matrix = Mat4::from_quat(turn) * Mat4::from_mat3(Mat3::from_mat4(nodes[end]));
+                matrix.w_axis = nodes[mid].w_axis;
+                matrix
+            }
+            ForearmTwist::RollForearm => {
+                let hand_z = nodes[mid].inverse().transform_vector3(nodes[end].z_axis.truncate());
+                nodes[mid] * Mat4::from_rotation_z((sign * hand_z.y).atan2(sign * hand_z.x))
+            }
+        };
+    }
+
+    for (eye, offset) in NODE_EYES.into_iter().zip([skeleton[15], skeleton[16]]) {
+        nodes[eye] = nodes[1] * Mat4::from_translation(offset);
+    }
+    nodes
+}
+
+/// Builds the node matrices for a frame, with the viewer's Z flip applied.
+pub fn solve_pose(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: ForearmTwist) -> [Mat4; NODE_COUNT] {
+    let flip_z = Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0));
+    solve_game_space(tracks, skeleton, twist).map(|node| flip_z * node)
+}
+
 /// Reads the objects of a decrypted XPR.
 pub fn parse_model(data: &[u8]) -> Result<Model> {
     if slice(data, 0x14, 4)? != b"MDL\0" {
@@ -342,6 +498,53 @@ mod tests {
     }
 
     /// Run with `DOA2U_DISC=<dir with the .afs files> cargo test -- --ignored --nocapture`.
+    /// Frames read from the running game by `tools/re/doa2u_live.py capture`:
+    /// IDs 0 and 24, in a CPU match. Blocks of tracks, bones and the 32 matrices.
+    #[test]
+    fn pose_matches_captured_frames() {
+        let numbers = |line: &str| line.split_whitespace().skip(1).map(|v| v.parse::<f32>().unwrap()).collect::<Vec<_>>();
+        let lines: Vec<&str> = include_str!("doa2u_pose_capture.txt").lines().collect();
+        let (mut worst_arm, mut worst_leg, mut worst_hand, mut worst_twist) = (0f32, 0f32, 0f32, 0f32);
+        for frame in lines.chunks(4) {
+            let tracks: [f32; TRACK_COUNT] = numbers(frame[1]).try_into().unwrap();
+            let bones = numbers(frame[2]);
+            let mut skeleton = [Vec3::ZERO; 17];
+            let row = |i: usize| Vec3::new(bones[i * 4], bones[i * 4 + 1], bones[i * 4 + 2]);
+            for (i, bone) in skeleton.iter_mut().enumerate().take(15) {
+                *bone = row(i);
+            }
+            skeleton[15] = row(17);
+            skeleton[16] = row(21);
+            let matrices = numbers(frame[3]);
+            let game = |i: usize| Mat4::from_cols_slice(&matrices[i * 16..i * 16 + 16]);
+
+            // The root: its turn from matrix 15, on the floor under the pelvis.
+            let mut root = game(15);
+            root.w_axis.y -= tracks[1];
+            let nodes = solve_game_space(&tracks, &skeleton, ForearmTwist::AlignHand);
+            let error = |ours: Mat4, theirs: Mat4| {
+                (root * ours).to_cols_array().iter().zip(theirs.to_cols_array()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max)
+            };
+            for node in [14, 10, 8, 4] {
+                worst_arm = worst_arm.max(error(nodes[node], game(node)));
+            }
+            for node in [12, 13, 6, 7] {
+                worst_leg = worst_leg.max(error(nodes[node], game(node)));
+            }
+            for node in [11, 5] {
+                worst_hand = worst_hand.max(error(nodes[node], game(node)));
+            }
+            for (node, slot) in [(NODE_TWIST[0], 24), (NODE_TWIST[1], 25)] {
+                worst_twist = worst_twist.max(error(nodes[node], game(slot)));
+            }
+        }
+        println!("worst: arms {worst_arm}, legs {worst_leg}, hands {worst_hand}, twists {worst_twist}");
+        assert!(worst_arm < 0.02, "arms {worst_arm}");
+        assert!(worst_leg < 0.005, "legs {worst_leg}");
+        assert!(worst_hand < 0.01, "hands {worst_hand}");
+        assert!(worst_twist < 0.01, "twists {worst_twist}");
+    }
+
     #[test]
     #[ignore]
     fn every_encrypted_costume_parses() {
