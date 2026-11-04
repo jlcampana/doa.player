@@ -67,6 +67,8 @@ pub struct MaterialLook {
     pub layer: Option<usize>,
     pub base_reflects: bool,
     pub layer_reflects: bool,
+    /// Stage 0 selects the texture alone, with no diffuse. Specular is still added.
+    pub unlit: bool,
 }
 
 impl ModelMaterial {

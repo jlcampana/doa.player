@@ -710,6 +710,7 @@ fn draw_bind_group(
         words[16..20].copy_from_slice(&[1.0, on(look.specular_on), on(look.alpha_from_texture), on(has_layer)]);
         words[20] = on(look.base_reflects);
         words[21] = on(look.layer_reflects);
+        words[22] = on(look.unlit);
     }
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Material UB"),
@@ -811,7 +812,7 @@ struct Material {
     emissive: vec4<f32>,
     /// x: the game's lighting, y: specular, z: alpha from the texture, w: has a layer.
     flags: vec4<f32>,
-    /// x: base reflects, y: layer reflects.
+    /// x: base reflects, y: layer reflects, z: no diffuse.
     coords: vec4<f32>,
 }
 @group(1) @binding(0) var color_texture: texture_2d<f32>;
@@ -950,6 +951,9 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
             let lit_here = light_at(bumped);
             diffuse_light = lit_here[0];
             specular_light = lit_here[1];
+        }
+        if material.coords.z > 0.5 {
+            diffuse_light = vec3<f32>(1.0);
         }
         let lit = clamp(color * diffuse_light + specular_light, vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(from_stored(lit), alpha);

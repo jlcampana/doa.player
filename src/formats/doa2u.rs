@@ -946,6 +946,7 @@ fn wound_for_viewer(mut triangles: Vec<u32>) -> Vec<u32> {
 ///
 /// Modes seen: 0 is texture times diffuse with the material's alpha, 1 takes alpha from the
 /// texture too, and 3, 4, 5 on three stages blend stage 1 over stage 0 by stage 1's alpha.
+/// Modes 2 and 3 alone select the texture with no diffuse, going by the table.
 fn material_look(data: &[u8], block: usize, flags: u32, layers: usize) -> Result<MaterialLook> {
     let float = |at: usize| -> Result<f32> { Ok(f32::from_bits(read_u32(data, block + at)?)) };
     let triple = |at: usize| -> Result<[f32; 3]> { Ok([float(at)?, float(at + 4)?, float(at + 8)?]) };
@@ -964,6 +965,7 @@ fn material_look(data: &[u8], block: usize, flags: u32, layers: usize) -> Result
         layer: if layers >= 3 && mode == 3 { Some(stage(1, 0)? as usize) } else { None },
         base_reflects: reflects(0)?,
         layer_reflects: reflects(1)?,
+        unlit: layers > 0 && layers < 3 && (mode == 2 || mode == 3),
     })
 }
 
@@ -1129,6 +1131,9 @@ mod tests {
         let plain = material_look(&block, 0, 1, 1).unwrap();
         assert!(!plain.specular_on && !plain.no_depth_write && !plain.alpha_from_texture);
         assert_eq!(plain.layer, None);
+        assert!(!plain.unlit && !look.unlit);
+        put(&mut block, 0x78, 3);
+        assert!(material_look(&block, 0, 1, 1).unwrap().unlit);
     }
 
     #[test]
