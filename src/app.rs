@@ -509,10 +509,18 @@ impl App {
         doa2u::decrypt_xpr(&mut xpr)?;
         doa2u::decrypt_cat(&mut cat)?;
 
-        let model = doa2u::parse_model(&xpr)?;
+        let mut model = doa2u::parse_model(&xpr)?;
         let textures = parse_xpr_textures(&xpr)?;
         let skeleton = doa2u::skeleton(xbe, id)?;
         let drawn = doa2u::parse_drawn_objects(&cat, &skeleton)?;
+        let extras = doa2u::extra_objects(&cat, model.pieces.len())?;
+        for extra in &extras {
+            let matrix = extra.prop.matrix();
+            for vertex in &mut model.pieces[extra.prop.object].vertices {
+                vertex.position = matrix.transform_point3(vertex.position.into()).into();
+                vertex.normal = matrix.transform_vector3(vertex.normal.into()).into();
+            }
+        }
         let style = doa2u::pose_style(&cat)?;
 
         let skins = doa2u::joint_skins(&cat)?;
@@ -605,6 +613,24 @@ impl App {
                     translucent: false,
                 });
             }
+        }
+        for extra in &extras {
+            if chain_pieces[extra.prop.object].is_some() {
+                continue;
+            }
+            let piece = &model.pieces[extra.prop.object];
+            log::info!("Object {} on bone {}, translucent: {}", extra.prop.object, extra.prop.bone, extra.translucent);
+            chain_pieces[extra.prop.object] = Some((inputs.len(), extra.prop.bone));
+            inputs.push(PieceInput {
+                node: extra.prop.bone,
+                vertices: &piece.vertices,
+                draws: draws_of(piece, texture_count),
+                parent: extra.prop.bone,
+                skin: None,
+                bend: None,
+                welds: Vec::new(),
+                translucent: extra.translucent,
+            });
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();

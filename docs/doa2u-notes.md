@@ -125,9 +125,13 @@ One step against the game's particles, 40 pairs per record, wind included (`doa2
 
 Detached objects, marked `0xFFFF` in a chain's target, are only drawn through the chain, and the viewer does this as in DOA3.
 
+### Extra objects, kind 3
+
+The layout of DOA3's section 3: +0 object, +2 mode, +3 bone, +4 offset, +0x14 angles. Mode 1 is solid and mode 2 translucent. Mode 0 records exist, such as `1f 00 00 0b` on `hel08`, and are left out. Seen: `1e 00 02 01`, object 30 translucent on the head, on `hel08`, `hel00`, `aya00` and `kor00`. `10 00 01 02`, object 16 solid on bone 2, on `kas00`. Only the layout and these bytes were read; `sub_0004E920` and the draw were not compared with the game.
+
 ### Other kinds
 
-The switch in `sub_00057370` installs kinds 1, 2, 4, 5, 7 and 12 (table at `0x57448`). `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched.
+The switch in `sub_00057370` installs kinds 1, 2, 4, 5, 7 and 12 (table at `0x57448`). `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. The switch's table sends kind 3 to no installer; the game must read those records elsewhere, which was not looked for.
 
 ## Holes in some costumes
 

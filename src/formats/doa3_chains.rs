@@ -493,32 +493,39 @@ pub fn parse_overlays(cat: &[u8], object_count: usize) -> Vec<Overlay> {
     sections
         .iter()
         .filter(|(kind, _)| *kind == OVERLAY_SECTION)
-        .filter_map(|&(_, offset)| {
-            let record = cat.get(base + offset..base + offset + OVERLAY_RECORD_SIZE)?;
-            let id = read_u16(record, 0)?;
-            let (mode, bone) = (record[2], record[3]);
-            let object = (id & !OBJECT_CLASS_MASK) as usize;
-            let offset = read_vec3(record, 4)?;
-            let valid = id & OBJECT_CLASS_MASK == 0
-                && (mode == OVERLAY_SOLID || mode == OVERLAY_TRANSLUCENT)
-                && bone <= MAX_BONE
-                && object < object_count
-                && offset.abs().max_element() < MAX_PROP_OFFSET;
-            valid.then(|| Overlay {
-                prop: WornProp {
-                    bone: bone as usize,
-                    object,
-                    offset,
-                    turn: [
-                        read_u16(record, 0x14).unwrap_or(0),
-                        read_u16(record, 0x16).unwrap_or(0),
-                        read_u16(record, 0x18).unwrap_or(0),
-                    ],
-                },
-                translucent: mode == OVERLAY_TRANSLUCENT,
-            })
-        })
+        .filter_map(|&(_, offset)| parse_overlay(cat, base + offset, object_count))
         .collect()
+}
+
+/// Reads extra objects at offsets from `base`, for DOA2U, whose list is read elsewhere.
+pub fn parse_overlay_records(cat: &[u8], base: usize, offsets: &[usize], object_count: usize) -> Vec<Overlay> {
+    offsets.iter().filter_map(|&offset| parse_overlay(cat, base + offset, object_count)).collect()
+}
+
+fn parse_overlay(cat: &[u8], at: usize, object_count: usize) -> Option<Overlay> {
+    let record = cat.get(at..at + OVERLAY_RECORD_SIZE)?;
+    let id = read_u16(record, 0)?;
+    let (mode, bone) = (record[2], record[3]);
+    let object = (id & !OBJECT_CLASS_MASK) as usize;
+    let offset = read_vec3(record, 4)?;
+    let valid = id & OBJECT_CLASS_MASK == 0
+        && (mode == OVERLAY_SOLID || mode == OVERLAY_TRANSLUCENT)
+        && bone <= MAX_BONE
+        && object < object_count
+        && offset.abs().max_element() < MAX_PROP_OFFSET;
+    valid.then(|| Overlay {
+        prop: WornProp {
+            bone: bone as usize,
+            object,
+            offset,
+            turn: [
+                read_u16(record, 0x14).unwrap_or(0),
+                read_u16(record, 0x16).unwrap_or(0),
+                read_u16(record, 0x18).unwrap_or(0),
+            ],
+        },
+        translucent: mode == OVERLAY_TRANSLUCENT,
+    })
 }
 
 /// Reads every chain in a CAT that moves vertices.

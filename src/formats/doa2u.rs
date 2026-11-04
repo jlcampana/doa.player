@@ -20,7 +20,7 @@ use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
 
 use super::doa3::{parse_sparse_joint_skins, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
-use super::doa3_chains::{parse_chain_records, SoftChain};
+use super::doa3_chains::{parse_chain_records, parse_overlay_records, Overlay, SoftChain};
 use super::doa3_cloth::{parse_cloth_records, SoftCloth};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
@@ -295,6 +295,13 @@ pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec
         chains.retain(|chain| chain.bone == 1);
     }
     Ok(chains)
+}
+
+/// Extra objects on a bone: kind 3 in the soft body list, with the layout of
+/// DOA3's section 3. They are translucent hair layers and carried items.
+pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
+    let (base, offsets) = soft_body_offsets(cat, 3)?;
+    Ok(parse_overlay_records(cat, base, &offsets, object_count))
 }
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from

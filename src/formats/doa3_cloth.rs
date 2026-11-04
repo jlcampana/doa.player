@@ -897,6 +897,7 @@ mod tests {
         let mut before: Vec<ClothParticle> = Vec::new();
         let (mut head, mut ring) = (0usize, Vec::<f32>::new());
         let mut object = Vec::<f32>::new();
+        let mut vertex_errors: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
         let use_wind = std::env::var("DOA2U_NO_WIND").is_err();
         let mut totals: std::collections::BTreeMap<usize, Vec<(f32, f32, f32)>> = Default::default();
         let mut roots: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
@@ -938,6 +939,19 @@ mod tests {
                     let index = (head as i64 - phase as i64 - 1).rem_euclid(64) as usize * 4;
                     let wind = Vec3::new(ring[index], ring[index + 1], ring[index + 2]);
                     cloth.step(&nodes[fighter], if use_wind { wind } else { Vec3::ZERO });
+                    // The vertices this sheet writes, from the game's own particles.
+                    let stepped: Vec<ClothParticle> = cloth.particles().to_vec();
+                    cloth.particles_mut().copy_from_slice(&after);
+                    if !object.is_empty() {
+                        for (vertex, position) in cloth.vertex_positions(&nodes[fighter]) {
+                            if let Some(p) = object.get(vertex * 8..vertex * 8 + 3) {
+                                vertex_errors.entry(k).or_default().push((position - Vec3::new(p[0], p[1], p[2])).length());
+                            } else {
+                                vertex_errors.entry(k).or_default().push(f32::INFINITY);
+                            }
+                        }
+                    }
+                    cloth.particles_mut().copy_from_slice(&stepped);
                     // Reads can catch particles and matrices a frame apart. Row 0 sits
                     // on the bone, so a mismatch there shows such a pair.
                     let rows = cloth.rows + 1;
@@ -954,6 +968,13 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+        for (k, list) in &mut vertex_errors {
+            list.sort_by(f32::total_cmp);
+            println!(
+                "vertices of record {k}: {} samples, median {:.2} mm, 95% {:.2} mm, worst {:.2} mm",
+                list.len(), list[list.len() / 2] * 1000.0, list[list.len() * 95 / 100] * 1000.0, list[list.len() - 1] * 1000.0
+            );
         }
         for (k, list) in &mut roots {
             list.sort_by(f32::total_cmp);

@@ -43,7 +43,7 @@ def main():
             first = u32(g, table + 0x14) & 0x0FFFFFFF
             size = (rows + 1) * 0x40 * columns
             vertices = None
-            if record[0xC] & 8:
+            if True:
                 objects = struct.unpack('<I', g.r(0x850738 + 0x44 * f, 4))[0]
                 pointer = u32(g, objects + record[4] * 4)
                 data = u32(g, u32(g, pointer + 0x24) + 4) & 0x0FFFFFFF
