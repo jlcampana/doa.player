@@ -54,3 +54,10 @@ Voices could be played once the viewer itself is finished. `voice.afs` holds sta
 - `docs/doa3-internals.md`: how DOA3 works inside.
 - `docs/doa2u-notes.md`: DOA2U formats, cipher and pose.
 - `docs/viewer-mode-feasibility.md`: reading the memory of the running game.
+
+## Disclaimer
+
+This is an unofficial fan-made project developed for educational and preservation purposes.
+Dead or Alive, its characters, artwork, models, textures and other related assets are the property of their respective copyright holders, including Koei Tecmo.
+This project is not affiliated with, endorsed by, or sponsored by Koei Tecmo.
+No original game assets are distributed with this project.
