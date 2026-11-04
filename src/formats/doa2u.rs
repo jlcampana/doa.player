@@ -386,17 +386,32 @@ pub fn normal_rebuilds(cat: &[u8]) -> Result<Vec<NormalRebuild>> {
     let (base, offsets) = soft_body_offsets(cat, 251)?;
     let mut rebuilds = Vec::new();
     for offset in offsets {
-        if let Ok(rebuild) = read_normal_rebuild(cat, base, base + offset) {
+        let at = base + offset;
+        let object = u16::from_le_bytes(slice(cat, at, 2)?.try_into()?) as usize;
+        if let Ok(rebuild) = read_normal_rebuild(cat, base, object, base + read_u32(cat, at + 4)? as usize) {
+            rebuilds.push(rebuild);
+        }
+    }
+    // A chain can name the same data at +0x5C (+0x60 at run time, `sub_00050510`), for
+    // the object of its target. It also applies when the chain moves that object.
+    let (_, chains) = soft_body_offsets(cat, 1)?;
+    for offset in chains {
+        let at = base + offset;
+        let data = read_u32(cat, at + 0x5C)? as usize;
+        if data == 0 {
+            continue;
+        }
+        let head = base + read_u32(cat, at + 0x4C)? as usize;
+        let object = u16::from_le_bytes(slice(cat, head + 2, 2)?.try_into()?) as usize & 0x0FFF;
+        if let Ok(rebuild) = read_normal_rebuild(cat, base, object, base + data) {
             rebuilds.push(rebuild);
         }
     }
     Ok(rebuilds)
 }
 
-fn read_normal_rebuild(cat: &[u8], base: usize, at: usize) -> Result<NormalRebuild> {
+fn read_normal_rebuild(cat: &[u8], base: usize, object: usize, data: usize) -> Result<NormalRebuild> {
     let u16_at = |at: usize| -> Result<usize> { Ok(u16::from_le_bytes(slice(cat, at, 2)?.try_into()?) as usize) };
-    let object = u16_at(at)?;
-    let data = base + read_u32(cat, at + 4)? as usize;
     let count = u16_at(data)?;
     let word = |i: usize| -> Result<usize> { Ok(read_u32(cat, data + i * 4)? as usize) };
     let list = base + word(1)?;

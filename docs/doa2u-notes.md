@@ -183,7 +183,7 @@ Against captured skirts of `lei00` and `lei04`, largest component error per vert
 - Hands: the shape tables, in the viewer, with 0 of 749 normals differing on `kas00`. Before this the viewer put them on the wrong vertices.
 - Joint pieces: computed by the viewer. On `hel08`, median error under 0.01 and worst 0.03 per piece, from `joint_pieces_match_captured_vertices` with `tools/re/doa2u_joint_export.py`. Except the shoulders, objects 3 and 17, with a median of 0.04 and 0.06 and a worst of 0.13, where positions are also off.
 - Sheets with kind 251: see that section. Sheets without it, and copies of kind 250, change no normals in the game either.
-- Chains: **not done**. On `hel08` object 32, the ponytail, 198 normals change, 180 of them on vertices that move. The game writes chain vertices in `sub_00050510`, which builds its own frames, and `sub_00050100` runs before it. Neither was read through. The viewer leaves these normals as in the file.
+- Chains: a chain's +0x5C (+0x60 at run time) names the same data as kind 251, and `sub_00050510` runs `sub_0004FD00` with it after writing the vertices. On `hel08` only the ponytail has it. `normal_rebuilds` reads these too.
 - The face (`apv` 2 and 3) and chest (`apv` 4) have a normal count of 0, so they have no normal tables.
 
 ### Other kinds
