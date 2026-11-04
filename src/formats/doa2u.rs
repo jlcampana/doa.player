@@ -24,6 +24,7 @@ use super::doa3::{
 };
 use super::doa3_chains::{parse_chain_records, parse_overlay_records, Overlay, SoftChain};
 use super::doa3_cloth::{parse_cloth_records, SoftCloth};
+use super::doa3_morphs::{FaceMorph, FaceShapes};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
 const XPR_MAGIC: u32 = 0x3052_5058;
@@ -364,6 +365,66 @@ pub fn chest_morph(cat: &[u8], character_id: usize) -> Result<Option<(usize, Vec
         });
     }
     Ok(Some((object, groups)))
+}
+
+/// Reads the shapes of an `apv` entry at CAT word 3: the vertices and floats of
+/// each group for the targets asked for. See `chest_morph` for the layout.
+fn apv_shapes(cat: &[u8], entry_index: usize, targets: &[usize]) -> Result<Option<(usize, Vec<Vec<usize>>, Vec<Vec<[f32; 3]>>)>> {
+    let base = read_u32(cat, 0xC)? as usize;
+    if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? as usize <= entry_index {
+        return Ok(None);
+    }
+    let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;
+    let target_count = read_u32(cat, entry)? as usize;
+    if targets.iter().any(|&t| t >= target_count) {
+        return Ok(None);
+    }
+    let object = (read_u32(cat, entry + 4)? & 0xFF) as usize;
+    let count = read_u32(cat, entry + 8)? as usize;
+    let table = base + read_u32(cat, entry + 0x10)? as usize;
+    let mut list = base + read_u32(cat, entry + 0x14)? as usize;
+    let mut vertices = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut group = Vec::new();
+        loop {
+            let value = read_u32(cat, list)?;
+            list += 4;
+            group.push(((value & !1) / 32) as usize);
+            if value & 1 == 0 {
+                break;
+            }
+        }
+        vertices.push(group);
+    }
+    let shapes = targets
+        .iter()
+        .map(|&target| {
+            let at = base + read_u32(cat, table + target * 8)? as usize;
+            (0..count)
+                .map(|group| {
+                    let bytes = slice(cat, at + group * 12, 12)?;
+                    let value = |i: usize| f32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+                    Ok([value(0), value(4), value(8)])
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some((object, vertices, shapes)))
+}
+
+/// Eyes and mouth: entries 2 and 3 of `apv`, on the head's object. Target 0 is the
+/// base and target 1 the shape seen moving in a match. Their timing is DOA3's.
+pub fn face(cat: &[u8]) -> Result<Option<FaceMorph>> {
+    let section = |entry: usize| -> Result<Option<(usize, FaceShapes)>> {
+        Ok(apv_shapes(cat, entry, &[0, 1])?.map(|(object, vertices, mut shapes)| {
+            let target = shapes.pop().unwrap_or_default();
+            let base = shapes.pop().unwrap_or_default();
+            (object, FaceShapes { vertices, base, target })
+        }))
+    };
+    let (Some((object, mouth))) = section(3)? else { return Ok(None) };
+    let eyes = section(2)?.filter(|(eye_object, _)| *eye_object == object).map(|(_, shapes)| shapes);
+    Ok(Some(FaceMorph::from_shapes(object, eyes, mouth)))
 }
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from

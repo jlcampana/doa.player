@@ -288,6 +288,13 @@ fn pulse(frame: u64, period: u64, rise: u64, fall: u64) -> f32 {
     }
 }
 
+/// Absolute shapes of one face section.
+pub struct FaceShapes {
+    pub vertices: Vec<Vec<usize>>,
+    pub base: Vec<[f32; 3]>,
+    pub target: Vec<[f32; 3]>,
+}
+
 /// The blinking eyes and moving mouth of a head.
 #[derive(Debug, Clone)]
 pub struct FaceMorph {
@@ -314,6 +321,29 @@ pub fn parse_face(cat: &[u8], rigid: &[(usize, usize)]) -> Option<FaceMorph> {
 }
 
 impl FaceMorph {
+    /// Builds a face from absolute shapes, as DOA2U stores them: per section the
+    /// vertices and base of each group, and the shape it blends to.
+    pub fn from_shapes(object: usize, eyes: Option<FaceShapes>, mouth: FaceShapes) -> Self {
+        let section = |shapes: FaceShapes| {
+            let offsets: Vec<[f32; 3]> = shapes
+                .base
+                .iter()
+                .zip(&shapes.target)
+                .map(|(base, target)| [target[0] - base[0], target[1] - base[1], target[2] - base[2]])
+                .collect();
+            MorphSection {
+                groups: shapes
+                    .vertices
+                    .into_iter()
+                    .zip(shapes.base)
+                    .map(|(vertices, value)| BaseGroup { vertices, value })
+                    .collect(),
+                targets: vec![offsets; FACE_TARGET.iter().max().map_or(1, |t| t + 1)],
+            }
+        };
+        Self { object, eyes: eyes.map(section), mouth: section(mouth) }
+    }
+
     /// Vertex positions at a game frame. Verified: with the game's own weights
     /// these sections give its vertices with error 0.
     pub fn positions(&self, frame: u64) -> impl Iterator<Item = (&[usize], [f32; 3])> {

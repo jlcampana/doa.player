@@ -662,7 +662,7 @@ impl App {
             frame: 0,
             wind: Wind::new(),
             hands: Vec::new(),
-            face: None,
+            face: doa2u::face(&cat)?,
             hand_events: Default::default(),
             character: id,
         };

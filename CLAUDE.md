@@ -49,9 +49,10 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 ## Next steps, in order
 
 1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye. Feet and shin pieces of `kas00` were also reported as wrong; compare them in the game. Objects in no draw list are still unread, such as `hel08` 31 and 35 to 38 and `kas00` 15, 42 and 43.
+   Also compare the hair of `hel08` with the game. In the viewer the top of the head has olive patches, and it is pale in the game; the translucent layer (kind 3) or the lighting may be the cause. Not checked.
 2. **Remaining soft body error.** The `tin16` skirt, the first sheet of `hel00`'s coat, and chain records 11 and 19 of the last capture (`tin16` 11, `hel00` 7). The stage's floor height is the first suspect, not checked.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
-4. Faces (eyes and mouth exist in DOA3, not in DOA2U), hands and lighting.
+4. Hands (`apv` entries 0 and 1, and move scripts) and lighting. Blink and mouth are in, with DOA3's timing.
 
 ## Tools for this work
 
@@ -79,7 +80,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Backlog
 
-1. DOA2U: faces, hands, translucent layers, stages, other soft body kinds.
+1. DOA2U: hands, stages, other soft body kinds.
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: last of all, by user request.

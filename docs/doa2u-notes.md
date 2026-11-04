@@ -147,6 +147,12 @@ Measured:
 - Vertices against `base + (target - base) * |x|`, best `x` fitted per read: on `hel08` the worst residual was 0.00000 and on `lei00` a median of 0.00000 and a maximum of 2.4 mm. The base equals the file's shape on both.
 - `tin` costumes and the viewer's spring running over time were not compared.
 
+## Faces and hands
+
+Entries of the `apv` section at CAT word 3: 0 and 1 the hands (object ORed with 0x80000000 on the second), 2 the eyelids and 3 the mouth, on the head's object, and 4 the chest where it exists. The layout is under "Chest spring". Fitting all targets to captured vertices of `hel08`, 30 reads, gave a residual of 0.00000 on both face sections, with target 1 reaching a weight of 1 and no other target used in that capture.
+
+The viewer plays blinks and mouth movement with DOA3's timing. The real timing and the other mouth targets were not read. Hands are not ported.
+
 ## Winding and back faces
 
 The viewer showed the inner side of materials that hide back faces, because DOA2U's triangles were wound against its renderer. `doa2u.rs` now reverses them. Found by comparing with a game screenshot of `hel08`: the skirt is white outside and purple inside, and the viewer had it the other way round, which looked like missing triangles at the waist.
@@ -158,6 +164,6 @@ Material +0xC: 1 hides back faces. 0 does not. 5, 8 and 9 also occur, and are no
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
-- Soft bodies other than kinds 1 and 2, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
+- Soft bodies of kinds other than 1, 2 and 3, hand morphs, and the costumes in `datadvd.afs`.
 - Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
