@@ -1,0 +1,45 @@
+[package]
+name = "doa_player"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "doa_player"
+path = "src/main.rs"
+
+[dependencies]
+# Window management
+winit = { version = "0.30", features = ["rwh_06"] }
+
+# GPU rendering
+wgpu = { version = "22", features = ["wgsl"] }
+
+# GUI
+egui = "0.29"
+egui-winit = "0.29"
+egui-wgpu = "0.29"
+
+# Math
+glam = "0.29"
+
+# Binary parsing
+byteorder = "1.5"
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# Async runtime (required by wgpu)
+pollster = "0.3"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+anyhow = "1"
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
