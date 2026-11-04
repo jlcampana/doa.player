@@ -178,6 +178,31 @@ Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
 
 The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.
 
+## Lighting
+
+The game uses D3D's fixed function lighting (port: `recomp-runtime/d3d_draw_shader.cpp`). `tools/re/doa2u_lights.py` lists the lights it enables. Device at `0x355500`: active light records at +0x7AC, 8 slots; ambient at `0x35542C`; transforms at +0xC60, 0x40 each, with TEXTURE0 as state 2.
+
+Reading those while the object at `0xEA6694` was a fighter's, on the desert stage: 4 directional lights and ambient `0xFF5E5E5E`, in 36490 of 36546 reads. The stage's own objects use other lights and ambients (`0xFF4C493F`, `0xFFAAAAAA`). Each light's specular is 0.3 of its diffuse. `sub_00285EC0` sets them, through the matrix at `0x877EB0`.
+
+Formula, per vertex, with l toward the light: `rgb = emissive + ambient * material ambient + sum(material diffuse * light diffuse * max(0, n.l))`, clamped. `specular = sum(material specular * light specular * pow(n.h, power))` with an infinite viewer, for n.l > 0, clamped. Final color is texture times rgb, plus specular.
+
+Material blocks are read by `material_look`, as `sub_00286C00` and `sub_00286D30` apply them:
+
+- +0xC: low two bits select the cull mode through `0x7B0278` (0 none, 1 and 2 opposite windings). Bit 2 turns fog off. Bit 3 turns depth writes off. So 5 and 9 do hide back faces, which the viewer got wrong before.
+- +0x20: `D3DMATERIAL8`. +0x64: stages. +0x68: bit 1 turns specular on; bit 0 was always set and was not read further.
+- Stages, 16 bytes each: texture, then at +8 a mode for the table at `0x7AFFC8`, whose pairs of indices point at `(op, arg, arg)` in `0x7B0078`. +0xF selects coordinates through `0x7B018C`; 1 is a camera space reflection. Modes 0 and 1 are texture times diffuse, with alpha from the material or also from the texture. Modes 3, 4, 5 on three stages blend stage 1 over stage 0 by stage 1's alpha, then multiply by diffuse.
+- Texture matrices during fighter draws: TEXTURE0 is 0.5, -0.5 with offset 0.5, TEXTURE1 is the identity, in all 49791 reads.
+
+Colors in the game have no gamma step. The viewer's textures and window are sRGB, so its shader converts to stored values and back.
+
+Compared with the game: `hel08` and `kas00` by eye against one screenshot, in other poses and angles. Not measured by pixel. Differences to expect:
+
+- Only the desert stage's lights are in the viewer. The other stage read had different lights, and they are not selectable. Fighters face a fixed way, so the light falls differently from any given moment in play.
+- Modes other than 0, 1 and 3, 4, 5 are drawn as the plain case: 2, 3 alone and any more on a costume (`zac04`, `aya18`). Four stage materials on `hel10` use only the first two stages.
+- The game draws in list order, with all materials blended. The viewer draws flag 8 and kind 3 materials last, and discards texels under 0.1 of alpha, which the game was not seen to do.
+- Kind 251 normals are not rebuilt, so moving cloth keeps its file normals.
+- No fog, shadows, or stage reflection. Stage reflection targets (`sub_0026D610`) were not read.
+
 ## Hands
 
 `apv` entries 0 and 1 (`doa2u::hands`). Entry 1's object has the high bit set, which means its shapes are the other hand's with X negated. Each entry has 11 to 20 targets by costume, and the table's two pointers per target are the shape and its normals (lengths of 1 checked on `lei04`).
@@ -225,4 +250,3 @@ Material +0xC: 1 hides back faces. 0 does not. 4, 5, 8 and 9 also occur, and are
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
 - Soft bodies of kinds other than 1, 2, 3 and 250, and the costumes in `datadvd.afs`.
 - Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.
-- The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.

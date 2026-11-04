@@ -530,11 +530,11 @@ impl App {
         let skins = doa2u::joint_skins(&cat)?;
 
         let texture_count = textures.len();
-        fn draws_of(piece: &crate::formats::model::ModelPiece, texture_count: usize) -> Vec<(&[u32], Option<usize>, bool)> {
+        fn draws_of(piece: &crate::formats::model::ModelPiece, texture_count: usize) -> Vec<(&[u32], Option<usize>, bool, Option<crate::formats::model::MaterialLook>)> {
             piece
                 .materials
                 .iter()
-                .map(|m| (m.indices.as_slice(), m.base_texture(texture_count), m.cull_back))
+                .map(|m| (m.indices.as_slice(), m.base_texture(texture_count), m.cull_back, m.look))
                 .collect()
         }
         let mut inputs: Vec<PieceInput> = drawn
@@ -636,8 +636,9 @@ impl App {
                 translucent: extra.translucent,
             });
         }
-        let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _)| t.len() / 3).sum();
+        let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
+        self.mesh.set_lights(Some(crate::renderer::mesh::DOA2U_DESERT_LIGHTS));
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         for chain in &chains {
@@ -762,7 +763,7 @@ impl App {
                 let draws = piece
                     .materials
                     .iter()
-                    .map(|m| (m.indices.as_slice(), m.base_texture(textures.len()), m.cull_back))
+                    .map(|m| (m.indices.as_slice(), m.base_texture(textures.len()), m.cull_back, m.look))
                     .collect::<Vec<_>>();
                 (piece.vertices.as_slice(), draws)
             })
@@ -874,8 +875,9 @@ impl App {
                 bend: None,
             });
         }
-        let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _)| t.len() / 3).sum();
+        let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
+        self.mesh.set_lights(None);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         for chain in &chains {
             for target in chain.targets.iter().filter(|t| t.detached) {

@@ -46,6 +46,27 @@ pub struct ModelMaterial {
     /// Only the front of each triangle is drawn. The lining of a skirt relies
     /// on this to stay hidden from outside.
     pub cull_back: bool,
+    /// How the game lights this material. Only DOA2U reads it so far.
+    pub look: Option<MaterialLook>,
+}
+
+/// A material as the game draws it: `D3DMATERIAL8` plus its texture stages.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialLook {
+    pub diffuse: [f32; 4],
+    pub ambient: [f32; 3],
+    pub specular: [f32; 3],
+    pub emissive: [f32; 3],
+    pub power: f32,
+    pub specular_on: bool,
+    /// Flag 8: does not write depth.
+    pub no_depth_write: bool,
+    /// Stage 0 takes alpha from the texture. Otherwise it is the material's.
+    pub alpha_from_texture: bool,
+    /// A texture blended over the base by its own alpha, with its stage's coordinates.
+    pub layer: Option<usize>,
+    pub base_reflects: bool,
+    pub layer_reflects: bool,
 }
 
 impl ModelMaterial {
@@ -125,7 +146,7 @@ fn parse_object(data: &[u8], record: usize) -> Result<ModelPiece> {
     let materials = parse_materials(data, record + 0x60, index_offset, &strip).unwrap_or_else(|e| {
         log::debug!("Object at {record:#x} uses one material: {e:#}");
         let texture = read_u32(data, record + 0xCC).map_or(usize::MAX, |t| t as usize);
-        vec![ModelMaterial { indices: strip_to_triangles(&strip), textures: vec![texture], cull_back: false }]
+        vec![ModelMaterial { indices: strip_to_triangles(&strip), textures: vec![texture], cull_back: false, look: None }]
     });
     Ok(ModelPiece { vertices, materials })
 }
@@ -181,7 +202,7 @@ fn parse_materials(data: &[u8], first_block: usize, end: usize, strip: &[u32]) -
         .map(|(i, (first, textures, cull_back))| {
             // Blocks are not always in strip order: an earlier next block gives nothing.
             let end = starts.get(i + 1).map_or(strip.len(), |next| (*next).min(strip.len())).max(first);
-            ModelMaterial { indices: strip_to_triangles(&strip[first..end]), textures, cull_back }
+            ModelMaterial { indices: strip_to_triangles(&strip[first..end]), textures, cull_back, look: None }
         })
         .collect())
 }

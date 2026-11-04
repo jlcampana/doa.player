@@ -50,10 +50,10 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 ## Next steps, in order
 
 1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye, and the feet and shins of `kas00` look right against a game screenshot, by eye. The ones worth comparing are those with material flags 8 and 9, which are not culled and unverified: `zac01`, `tin09`, `lei03`. No need to check every costume. Objects `hel08` 31 and `kas00` 15 and 43 are soft body variants the viewer does not select (see the notes); `hel08` 35 to 38 are probably kind 8, and `kas00` 42 is unread.
-   Also compare the hair of `hel08` with the game. In the viewer the top of the head has olive patches, and it is pale in the game; the translucent layer (kind 3) or the lighting may be the cause. Seen again from the front and side after the later fixes, still not compared with the game on that costume.
+   The hair of `hel08` is pale with the game's lighting, as in a screenshot of the game, by eye. The olive patches came from the viewer's old shading or material handling; which of the two was not separated.
 2. **Remaining soft body error.** Skirts and coats of `tin16`, `hel00`, `lei00` and `lei04` match in single steps, once the test has the stage's ground in `DOA2U_FLOOR`. Not yet: the head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm) and the cuffs of `lei04` (worst 7 mm). Chains differ by 1 to 5 mm on `tin16` 7, 8 and 9 and `hel00` 3, 5 and 8. The boot no longer shows through the cape of `tin09` in the viewer. `--load` takes a list index, not a file number: `tin16` is 15, and a bad index shows a white box.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
-4. Lighting. Blink and mouth are in, with DOA3's timing. Hands are in (see the notes): shapes match the game, scripts were not compared with it frame by frame.
+4. Lighting is in for DOA2U, with the desert stage's lights (see the notes). Compared by eye on `hel08` and `kas00` only. To do: lights of other stages and a way to pick them, the remaining material modes, and kind 251 normals. Blink and mouth are in, with DOA3's timing. Hands are in: shapes match the game, scripts were not compared with it frame by frame.
 
 ## Tools for this work
 
@@ -61,6 +61,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 - `tools/re/doa2u_capture_objects.py`: records the objects the game rewrites.
 - `tools/re/doa2u_cloth_pairs.py`, `tools/re/doa2u_chain_pairs.py`: consecutive particle frames. They wait for quiet, because reads otherwise catch sheets half written.
 - `tools/re/doa2u_copy_check.py`: checks kind 250 copies against a capture.
+- `tools/re/doa2u_lights.py`: lists the D3D lights the game enables.
 - `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping.
 - Ignored tests: `list_costume_objects`, `joint_pieces_match_captured_vertices`, `captured_tracks_are_found_in_motions`, `cloth_follows_captured_vertices`, `doa2u_single_steps`, `doa2u_chain_single_steps`. Each reads its inputs from environment variables, named in its comment.
 - Captures are in `target/captures/`, not tracked. `cargo clean` deletes them, and the tools above recreate them.
@@ -69,13 +70,12 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 - Improve close-up framing for body renders. Use Kasumi as the reference character during validation.
 - Investigate additional costume availability in DOA2U by exploring `datadvd.afs` alongside the currently supported `datahdd2.afs` archives.
-- Lighting: try to recreate the game's lighting so that colors look similar to the game. DOA2U materials hold color and shininess values that the viewer does not use yet.
+- Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
 
 ## Unverified in DOA2U
 
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
-- Back-face flag: OBJ material +0xC also holds 5, 8 and 9, which are not culled.
 - Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.

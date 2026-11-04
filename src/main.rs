@@ -213,7 +213,7 @@ fn render_frame(app: &mut App, window: &Window) {
 
     let vp = app.camera.view_proj();
     app.grid.update(&app.ctx.queue, &vp);
-    app.mesh.update(&app.ctx.queue, &vp, app.bg_panel.anime_shading);
+    app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading);
     app.wireframe.update_camera(&app.ctx.queue, &vp);
 
     let mut encoder = app.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

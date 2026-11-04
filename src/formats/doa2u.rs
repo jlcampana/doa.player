@@ -25,7 +25,7 @@ use super::doa3::{
 use super::doa3_chains::{parse_chain_records, parse_overlay_records, Overlay, SoftChain};
 use super::doa3_cloth::{parse_cloth_records, SoftCloth};
 use super::doa3_morphs::{FaceMorph, FaceShapes};
-use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
+use super::model::{read_u32, slice, strip_to_triangles, MaterialLook, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
 const XPR_MAGIC: u32 = 0x3052_5058;
 const CAT_MAGIC: u32 = 0x20;
@@ -758,6 +758,35 @@ fn wound_for_viewer(mut triangles: Vec<u32>) -> Vec<u32> {
     triangles
 }
 
+/// Reads a material block as `sub_00286C00` and `sub_00286D30` apply it. +0xC: the low two
+/// bits are the cull mode, bit 2 turns fog off, bit 3 turns depth writes off. +0x20 is a
+/// `D3DMATERIAL8`. +0x68: bit 1 turns specular on. +0x70 holds 16 bytes per stage: texture,
+/// then at +8 a mode for the table at `0x7AFFC8`, and at +0xF how to get coordinates, where
+/// 1 is a camera space reflection.
+///
+/// Modes seen: 0 is texture times diffuse with the material's alpha, 1 takes alpha from the
+/// texture too, and 3, 4, 5 on three stages blend stage 1 over stage 0 by stage 1's alpha.
+fn material_look(data: &[u8], block: usize, flags: u32, layers: usize) -> Result<MaterialLook> {
+    let float = |at: usize| -> Result<f32> { Ok(f32::from_bits(read_u32(data, block + at)?)) };
+    let triple = |at: usize| -> Result<[f32; 3]> { Ok([float(at)?, float(at + 4)?, float(at + 8)?]) };
+    let stage = |i: usize, at: usize| read_u32(data, block + 0x70 + i * 16 + at);
+    let reflects = |i: usize| -> Result<bool> { Ok(i < layers && stage(i, 0xC)? >> 24 == 1) };
+    let mode = if layers > 0 { stage(0, 8)? } else { 0 };
+    Ok(MaterialLook {
+        diffuse: [float(0x20)?, float(0x24)?, float(0x28)?, float(0x2C)?],
+        ambient: triple(0x30)?,
+        specular: triple(0x40)?,
+        emissive: triple(0x50)?,
+        power: float(0x60)?,
+        specular_on: read_u32(data, block + 0x68)? & 2 != 0,
+        no_depth_write: flags & 8 != 0,
+        alpha_from_texture: layers > 0 && mode % 2 == 1,
+        layer: if layers >= 3 && mode == 3 { Some(stage(1, 0)? as usize) } else { None },
+        base_reflects: reflects(0)?,
+        layer_reflects: reflects(1)?,
+    })
+}
+
 fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f32>>)> {
     if slice(data, record, 4)? != b"OBJ\0" {
         bail!("missing OBJ magic");
@@ -818,16 +847,18 @@ fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f3
         if first + triangles + 2 > strip.len() {
             bail!("batch {first}+{triangles} of {} indices at {block:#x}", strip.len());
         }
-        blocks.push((first, first + triangles + 2, textures, read_u32(data, block + 0xC)? == 1));
+        let flags = read_u32(data, block + 0xC)?;
+        blocks.push((first, first + triangles + 2, textures, flags & 3 == 1, material_look(data, block, flags, layers)?));
         block += size;
     }
 
     let materials = blocks
         .into_iter()
-        .map(|(first, end, textures, cull_back)| ModelMaterial {
+        .map(|(first, end, textures, cull_back, look)| ModelMaterial {
             indices: wound_for_viewer(strip_to_triangles(&strip[first..end])),
             textures,
             cull_back,
+            look: Some(look),
         })
         .collect();
     Ok((ModelPiece { vertices, materials }, weights))
@@ -877,6 +908,31 @@ mod tests {
         for (id, list) in ids {
             println!("{id}: {:?}", list.iter().map(|e| (e.frame, e.hand, e.pose, e.time)).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn material_blocks_read_as_the_game_applies_them() {
+        let mut block = vec![0u8; 0x80 + 3 * 16];
+        let put = |block: &mut Vec<u8>, at: usize, value: u32| block[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        put(&mut block, 0x20, 0.5f32.to_bits());
+        put(&mut block, 0x60, 10f32.to_bits());
+        put(&mut block, 0x68, 3);
+        // Stage 0, mesh coordinates, mode 3. Stage 1, texture 7, reflection coordinates.
+        put(&mut block, 0x78, 3);
+        put(&mut block, 0x7C, 0x400);
+        put(&mut block, 0x80, 7);
+        put(&mut block, 0x8C, 0x0100_0400);
+        let look = material_look(&block, 0, 9, 3).unwrap();
+        assert_eq!(look.diffuse[0], 0.5);
+        assert_eq!(look.power, 10.0);
+        assert!(look.specular_on && look.no_depth_write && look.alpha_from_texture);
+        assert_eq!(look.layer, Some(7));
+        assert!(!look.base_reflects && look.layer_reflects);
+        put(&mut block, 0x68, 1);
+        put(&mut block, 0x78, 0);
+        let plain = material_look(&block, 0, 1, 1).unwrap();
+        assert!(!plain.specular_on && !plain.no_depth_write && !plain.alpha_from_texture);
+        assert_eq!(plain.layer, None);
     }
 
     #[test]
