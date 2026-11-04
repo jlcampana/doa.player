@@ -45,6 +45,12 @@ Limit agreed with the user's request history: no chest spring or body soft bodie
 
 `list_costume_objects` lists a costume's objects and materials. `joint_pieces_match_captured_vertices` compares joint pieces with a capture.
 
+## Next: cloth in DOA2U
+
+Captured `tin16` against `hel00` with `tools/re/doa2u_capture_objects.py`, in `target/captures/tin16_hel00.pkl` (not tracked; `cargo clean` deletes it). `hel00` objects 1, 30, 32, 40 and 41 move up to 1.3 m from the file's shape, and `tin16` objects 3 and 32 up to 0.47 m. Which part of the costume each one is has not been checked, nor have these been separated from hair.
+
+The simulation code is not read yet. Candidates: `sub_00060360` (CAT word 2) and the functions around `0x852F40` and `0x8509A0` (`sub_0005F950`, `sub_0005FBC0`, `sub_0005FCF0`, `sub_0005FE10`). CAT word 3 starts with the magic `apv` and type 6 with `apa`; they may be morphs. Do not assume this matches DOA3's cloth (`doa3_cloth.rs`).
+
 ## Development notes
 
 - Investigate the chest spring implementation in DOA2U.
