@@ -135,7 +135,7 @@ if __name__ == '__main__':
     if g.off is None:
         sys.exit(1)
     if len(sys.argv) > 2 and sys.argv[1] == 'capture':
-        capture(g, sys.argv[2])
+        capture(g, sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 12)
         sys.exit()
     for f in range(2):
         b = 0x850738 + 0x44 * f

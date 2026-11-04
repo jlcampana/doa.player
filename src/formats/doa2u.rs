@@ -545,6 +545,57 @@ mod tests {
         assert!(worst_twist < 0.01, "twists {worst_twist}");
     }
 
+    /// Looks for captured poses in the character's `.mot` files, to check that
+    /// the viewer's motion tracks are the game's. DOA2U_CAPTURE is a file from
+    /// `doa2u_live.py capture`, DOA2U_CAPTURE_ID the fighter's ID and DOA2U_MOTS
+    /// a comma separated list of files. A fighter blending between motions finds no match.
+    #[test]
+    #[ignore]
+    fn captured_tracks_are_found_in_motions() {
+        use crate::formats::doa3::{eval_motion, list_motions, motion_length};
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd.afs")).unwrap();
+        let text = std::fs::read_to_string(std::env::var("DOA2U_CAPTURE").expect("DOA2U_CAPTURE")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let wanted = format!("frame {}", std::env::var("DOA2U_CAPTURE_ID").expect("DOA2U_CAPTURE_ID"));
+        let files = std::env::var("DOA2U_MOTS").expect("DOA2U_MOTS");
+        let files: Vec<&str> = files.split(',').collect();
+        let motions: Vec<(&str, usize, _, Vec<[f32; TRACK_COUNT]>)> = files
+            .iter()
+            .flat_map(|&name| {
+                let data = archive.entries().iter().position(|e| e.name == name).and_then(|i| archive.get_by_index(i)).unwrap();
+                list_motions(data).into_iter().map(move |(id, tracks)| {
+                    let frames = (0..=motion_length(data, &tracks)).map(|f| eval_motion(data, &tracks, f as f32).unwrap()).collect();
+                    (name, id, tracks, frames)
+                })
+            })
+            .collect();
+        println!("{} motions", motions.len());
+        let mut errors = Vec::new();
+        for frame in lines.chunks(4).filter(|f| f[0] == wanted) {
+            let game: Vec<f32> = frame[1].split_whitespace().skip(1).map(|v| v.parse().unwrap()).collect();
+            let difference = |ours: &[f32; TRACK_COUNT]| {
+                let wrap = |d: f32| (d + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let mut worst = (ours[1] - game[1]).abs();
+                for i in 3..TRACK_COUNT {
+                    let position = i >= 12 && (i - 12) % 8 < 3;
+                    let d = ours[i] - game[i];
+                    worst = worst.max(if position { d.abs() } else { wrap(d).abs() });
+                }
+                worst
+            };
+            let best = motions
+                .iter()
+                .flat_map(|(name, id, _, frames)| frames.iter().enumerate().map(move |(f, v)| (difference(v), *name, *id, f)))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .unwrap();
+            println!("{best:?}");
+            errors.push(best.0);
+        }
+        errors.sort_by(f32::total_cmp);
+        println!("best match, median {} of {}", errors[errors.len() / 2], errors.len());
+    }
+
     #[test]
     #[ignore]
     fn every_encrypted_costume_parses() {
