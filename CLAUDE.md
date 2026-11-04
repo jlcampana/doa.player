@@ -48,7 +48,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Next steps, in order
 
-1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye. Feet and shin pieces of `kas00` were also reported as wrong; compare them in the game. Objects in no draw list are still unread, such as `hel08` 31 and 35 to 38 and `kas00` 15, 42 and 43.
+1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye, and the feet and shins of `kas00` look right against a game screenshot, by eye. The ones worth comparing are those with material flags 8 and 9, which are not culled and unverified: `zac01`, `tin09`, `lei03`. No need to check every costume. Objects `hel08` 31 and `kas00` 15 and 43 are soft body variants the viewer does not select (see the notes); `hel08` 35 to 38 are probably kind 8, and `kas00` 42 is unread.
    Also compare the hair of `hel08` with the game. In the viewer the top of the head has olive patches, and it is pale in the game; the translucent layer (kind 3) or the lighting may be the cause. Not checked.
 2. **Remaining soft body error.** The `tin16` skirt, the first sheet of `hel00`'s coat, and chain records 11 and 19 of the last capture (`tin16` 11, `hel00` 7). The stage's floor height is the first suspect, not checked.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.

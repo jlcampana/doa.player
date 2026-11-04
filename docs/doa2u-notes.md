@@ -82,7 +82,11 @@ Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon a
 
 ## Soft bodies
 
-CAT word 2 is a list of 8-byte entries: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, installed by `sub_00057370`). DOA3's section scan rejects it, as kind 1 records differ, so `soft_body_offsets` reads it. Kinds 0xFA and 0xFE also appear, and bodies after them are still installed.
+CAT word 2 is a list of 8-byte entries: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, installed by `sub_00057370`). DOA3's section scan rejects it, as kind 1 records differ, so `soft_body_offsets` reads it. Kinds 0xFA and 0xFB also appear, and bodies after them are still installed.
+
+Kind 0xFE means another variant of the record before it, not another body. `sub_000587F0` gathers a record and its 0xFE followers into a group: up to 16 groups at state +0xF718, stride 0x24, byte +0xB is the count. A group holds the kind, the body's index and up to 8 record pointers, with -1 in unused ones. `sub_0005A740` compares the byte at `0x877CA0 + fighter` with the last value (state +1) and, when it changed, calls `sub_0004FC40` to reload every group with that variant. `sub_0005B050` writes the byte, with values from 0 to at least 3; what chooses them was not read.
+
+`soft_body_offsets` skips 0xFE, so the viewer always shows variant 0. Read from the game on `kas00` and `kas01`: 6 and 3 groups, and the byte stayed 0 for 20 s in training, with no moves being done. Other values were not seen, so what the variants look like in play is inferred from the records.
 
 State per fighter is at `0x80B7A8`, stride `0xF994`, and `sub_0005A740` runs it. Bytes +2, +3, +4, +5, +9 and +0xA count bodies of each kind. Bit 2 of byte +0 selects `sub_00051110` for cloth on a first frame; `sub_00051F20` is the normal update.
 
@@ -127,11 +131,11 @@ Detached objects, marked `0xFFFF` in a chain's target, are only drawn through th
 
 ### Extra objects, kind 3
 
-The layout of DOA3's section 3: +0 object, +2 mode, +3 bone, +4 offset, +0x14 angles. Mode 1 is solid and mode 2 translucent. Mode 0 records exist, such as `1f 00 00 0b` on `hel08`, and are left out. Seen: `1e 00 02 01`, object 30 translucent on the head, on `hel08`, `hel00`, `aya00` and `kor00`. `10 00 01 02`, object 16 solid on bone 2, on `kas00`. Only the layout and these bytes were read; `sub_0004E920` and the draw were not compared with the game.
+The layout of DOA3's section 3: +0 object, +2 mode, +3 bone, +4 offset, +0x14 angles. Mode 1 is solid and mode 2 translucent. Mode 0 records exist, such as `1f 00 00 0b` on `hel08`, and are left out. That one is variant 0 of a group whose variant 1 is `1f 00 01 0b`, the same object solid on bone 11, so object 31 is hidden by default. `kas00` has variants `10 00 01 02`, `2b 00 01 0b` and `0f 00 01 0b`: object 16 on bone 2 by default, or objects 43 and 15 on bone 11. The user's screenshot of `kas00` shows the sword sheathed at the waist with empty hands, which fits variant 0; that objects 15 and 43 are the sword in the hand is inferred from their shape and bone. Seen: `1e 00 02 01`, object 30 translucent on the head, on `hel08`, `hel00`, `aya00` and `kor00`. `10 00 01 02`, object 16 solid on bone 2, on `kas00`. Only the layout and these bytes were read; `sub_0004E920` and the draw were not compared with the game.
 
 ### Other kinds
 
-The switch in `sub_00057370` installs kinds 1, 2, 4, 5, 7 and 12 (table at `0x57448`). `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. The switch's table sends kind 3 to no installer; the game must read those records elsewhere, which was not looked for.
+The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.
 
 ## Chest spring
 
@@ -159,7 +163,7 @@ The viewer showed the inner side of materials that hide back faces, because DOA2
 
 An earlier check here concluded the flag and winding were right, since winding agrees with the stored normals. That compared the two with each other and not with the renderer's front face, so it could not see this. Compared with the game: `hel08` only, by eye. Other costumes changed too and look right, including the torso of `kas00`, which the user had reported as see-through, but they were not compared.
 
-Material +0xC: 1 hides back faces. 0 does not. 5, 8 and 9 also occur, and are not culled, which is unverified.
+Material +0xC: 1 hides back faces. 0 does not. 4, 5, 8 and 9 also occur, and are not culled, which is unverified. Across the character costumes in `datahdd2.afs`: 0 on 40274 materials, 1 on 1651, 8 on 1305 in 124 costumes (17 on `tin09`), 9 on 134 in 16 costumes (80 on `zac01`, 40 on `zac05`, 1 on `lei03` and many Helena costumes), 5 on 12 in Kasumi's costumes only, 4 on 5.
 
 ## Not done
 
