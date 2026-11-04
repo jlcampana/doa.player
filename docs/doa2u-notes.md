@@ -178,6 +178,20 @@ Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
 
 The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.
 
+## Hands
+
+`apv` entries 0 and 1 (`doa2u::hands`). Entry 1's object has the high bit set, which means its shapes are the other hand's with X negated. Each entry has 11 to 20 targets by costume, and the table's two pointers per target are the shape and its normals (lengths of 1 checked on `lei04`).
+
+A pose is the target of the same number. The move scripts in the character's `.bin` use DOA3's format (`parse_hand_events`). State per fighter is at `0x852F40`, stride 0xE0, one block per hand at +0 and +0x70: +0x14 and +0x18 point at the table entries being blended, +0x20 and +0x24 are their weights, +0x40 the script's time, +0x60 the pose.
+
+Measured:
+
+- Vertices of both hands on `lei00`, `lei04` and `lei03` read 0.00 from a target when no blend is running, on 60 reads each.
+- Weights stepped by 1/11 and 1/5, matching script times 10 and 4 with DOA3's `1 / (time + 1)`.
+- 78 of 96 scripted motions of `leifang.bin` and 87 of 108 of `zack.bin` are in the character's main `.mot`. The rest were not looked for in the other files.
+
+Not measured: what a motion ID in the game is at a given moment, so no script was compared with the game's pose at a frame. The default times for -1 are DOA3's. A new pose during a blend starts from the old target, which is a guess. The viewer opens the hand on motions with no script, and the game probably keeps the last pose. DOA3's per-character substitution of pose 0 (`character_pose`) was not found in DOA2U and is not applied. Costumes with poses past their target count skip them, such as pose 16 in `tina.bin` on `tin09`.
+
 ## Chest spring
 
 Only for Tina, Helena and Lei Fang in the viewer, fixed in code (`CHEST_SPRING_IDS`). Kasumi, Ayane and Hitomi have the data in the game, and the viewer does not use it for them.
@@ -209,6 +223,6 @@ Material +0xC: 1 hides back faces. 0 does not. 4, 5, 8 and 9 also occur, and are
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
-- Soft bodies of kinds other than 1, 2 and 3, hand morphs, and the costumes in `datadvd.afs`.
+- Soft bodies of kinds other than 1, 2, 3 and 250, and the costumes in `datadvd.afs`.
 - Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.

@@ -345,6 +345,8 @@ pub struct Doa3Chains {
     /// Hand poses of each motion, by motion ID.
     pub hand_events: HashMap<u16, Vec<HandEvent>>,
     pub character: usize,
+    /// DOA2U's hands, right one first.
+    pub pose_hands: Vec<doa3_morphs::PoseHand>,
     /// DOA2U: objects whose positions follow another object.
     pub copies: Vec<doa2u::VertexCopy>,
 }
@@ -665,8 +667,10 @@ impl App {
             wind: Wind::new(),
             hands: Vec::new(),
             face: doa2u::face(&cat)?,
-            hand_events: Default::default(),
+            // The scripts use DOA3's format. The motions are looked up by ID.
+            hand_events: self.hdd_archive.as_ref().and_then(|a| a.get_by_name(&format!("{bin_id}.bin"))).map(doa3_morphs::parse_hand_events).unwrap_or_default(),
             character: id,
+            pose_hands: doa2u::hands(&cat)?,
             copies: doa2u::vertex_copies(&cat, &xpr)?,
         };
         let chest = chest_morph.and_then(|(object, groups)| {
@@ -916,6 +920,7 @@ impl App {
             face,
             hand_events,
             character: roster.id,
+            pose_hands: Vec::new(),
             copies: Vec::new(),
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains });
@@ -1029,6 +1034,14 @@ impl App {
                             let rate = event.map_or(1.0 / 26.0, HandEvent::rate);
                             hand.step(doa3_morphs::character_pose(soft.character, pose), rate);
                         }
+                        for (index, hand) in soft.pose_hands.iter_mut().enumerate() {
+                            let script_hand = index ^ 1;
+                            let event = events.and_then(|list| {
+                                list.iter().rev().find(|e| e.targets(script_hand) && e.frame <= motion_frame)
+                            });
+                            let pose = event.map_or(0, |e| e.pose);
+                            hand.step(pose as usize, event.map_or(1.0 / 26.0, HandEvent::rate));
+                        }
                     }
                     if let Some(face) = &soft.face {
                         if let Some(&Some((piece, _))) = soft.pieces.get(face.object) {
@@ -1041,6 +1054,19 @@ impl App {
                         }
                     }
                     for hand in &soft.hands {
+                        let Some(&Some((piece, _))) = soft.pieces.get(hand.object) else { continue };
+                        self.mesh.set_rest_positions(
+                            piece,
+                            hand.positions().flat_map(|(vertices, value)| {
+                                vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))
+                            }),
+                        );
+                        self.mesh.set_rest_normals(
+                            piece,
+                            hand.normals().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, value))),
+                        );
+                    }
+                    for hand in &soft.pose_hands {
                         let Some(&Some((piece, _))) = soft.pieces.get(hand.object) else { continue };
                         self.mesh.set_rest_positions(
                             piece,

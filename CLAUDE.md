@@ -33,6 +33,7 @@ BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|
 Measured against the running game; see `docs/doa2u-notes.md` for numbers and code addresses.
 
 - Pose: limbs, hands, forearm twists, upper arms and motion tracks. `doa2u::solve_pose`.
+- Hand shapes: `doa2u::hands`, from `apv` entries 0 and 1, driven by the move scripts in `.bin`.
 - Joint pieces: measured on `kas00` only. Shoulders are off by up to 2.6 cm, unexplained.
 - Cloth (kind 2), chains (kind 1, hair), extra objects (kind 3) and vertex copies (kind 250) are in the viewer. Single steps match the game on most sheets and chains, not all; see the table in the notes. Wind was 0 in those captures.
 - Chest spring: Tina, Helena and Lei Fang only. Measured on Helena and Lei Fang.
@@ -52,7 +53,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
    Also compare the hair of `hel08` with the game. In the viewer the top of the head has olive patches, and it is pale in the game; the translucent layer (kind 3) or the lighting may be the cause. Seen again from the front and side after the later fixes, still not compared with the game on that costume.
 2. **Remaining soft body error.** Skirts and coats of `tin16`, `hel00`, `lei00` and `lei04` match in single steps, once the test has the stage's ground in `DOA2U_FLOOR`. Not yet: the head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm) and the cuffs of `lei04` (worst 7 mm). Chains differ by 1 to 5 mm on `tin16` 7, 8 and 9 and `hel00` 3, 5 and 8. The boot no longer shows through the cape of `tin09` in the viewer. `--load` takes a list index, not a file number: `tin16` is 15, and a bad index shows a white box.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
-4. Hands (`apv` entries 0 and 1, and move scripts) and lighting. Blink and mouth are in, with DOA3's timing.
+4. Lighting. Blink and mouth are in, with DOA3's timing. Hands are in (see the notes): shapes match the game, scripts were not compared with it frame by frame.
 
 ## Tools for this work
 
@@ -81,7 +82,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Backlog
 
-1. DOA2U: hands, stages, other soft body kinds.
+1. DOA2U: stages, other soft body kinds.
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: last of all, by user request.

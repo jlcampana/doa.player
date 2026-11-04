@@ -369,6 +369,60 @@ pub fn vertex_copies(cat: &[u8], xpr: &[u8]) -> Result<Vec<VertexCopy>> {
     Ok(copies)
 }
 
+/// The hands, `apv` entries 0 and 1, in the order the viewer's script mapping expects:
+/// the one on node 5 first. A high bit on the object means the file's shapes are the other
+/// hand's, with X negated (measured: error 0 on `lei04`). The table has two pointers per
+/// target: the shape and its normals.
+pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
+    let base = read_u32(cat, 0xC)? as usize;
+    if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? < 2 {
+        return Ok(Vec::new());
+    }
+    let mut hands = Vec::with_capacity(2);
+    for entry_index in [1, 0] {
+        let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;
+        let targets = read_u32(cat, entry)? as usize;
+        let raw_object = read_u32(cat, entry + 4)?;
+        let count = read_u32(cat, entry + 8)? as usize;
+        let table = base + read_u32(cat, entry + 0x10)? as usize;
+        let mut list = base + read_u32(cat, entry + 0x14)? as usize;
+        let mirror = raw_object & 0x8000_0000 != 0;
+        let mut vertices = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut group = Vec::new();
+            loop {
+                let value = read_u32(cat, list)?;
+                list += 4;
+                group.push(((value & !1) / 32) as usize);
+                if value & 1 == 0 {
+                    break;
+                }
+            }
+            vertices.push(group);
+        }
+        let read_list = |at: usize| -> Result<Vec<[f32; 3]>> {
+            (0..count)
+                .map(|group| {
+                    let bytes = slice(cat, at + group * 12, 12)?;
+                    let value = |i: usize| f32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+                    Ok([if mirror { -value(0) } else { value(0) }, value(4), value(8)])
+                })
+                .collect()
+        };
+        let mut shapes = Vec::with_capacity(targets);
+        let mut normals = Vec::with_capacity(targets);
+        for target in 0..targets {
+            shapes.push(read_list(base + read_u32(cat, table + target * 8)? as usize)?);
+            normals.push(read_list(base + read_u32(cat, table + target * 8 + 4)? as usize)?);
+        }
+        if shapes.is_empty() {
+            continue;
+        }
+        hands.push(crate::formats::doa3_morphs::PoseHand::new((raw_object & 0xFF) as usize, vertices, shapes, normals));
+    }
+    Ok(hands)
+}
+
 /// Characters with the chest spring in the viewer: Tina, Helena and Lei Fang.
 /// Fixed in code, by choice: adult characters only.
 const CHEST_SPRING_IDS: [usize; 3] = [1, 7, 12];
@@ -801,6 +855,28 @@ mod tests {
         xpr[0x2C] = 0x40;
         let copies = vertex_copies(&cat, &xpr).unwrap();
         assert_eq!(copies, vec![VertexCopy { from: 1, to: 0, links: vec![(2, 1), (2, 3), (0, 1)] }]);
+    }
+
+    /// Lists a character's hand poses by motion. DOA2U_BIN is a file stem, such as zack.
+    #[test]
+    #[ignore]
+    fn list_hand_events() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let stem = std::env::var("DOA2U_BIN").expect("DOA2U_BIN");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd.afs")).unwrap();
+        let events = crate::formats::doa3_morphs::parse_hand_events(archive.get_by_name(&format!("{stem}.bin")).unwrap());
+        let short = &stem[..stem.len().min(6)];
+        let motions: Vec<usize> = archive
+            .get_by_name(&format!("{short}.mot"))
+            .map(|data| crate::formats::doa3::list_motions(data).into_iter().map(|(id, _)| id).collect())
+            .unwrap_or_default();
+        let found = events.keys().filter(|id| motions.contains(&(**id as usize))).count();
+        println!("{} motions with poses, {found} of them in {short}.mot, which has {}", events.len(), motions.len());
+        let mut ids: Vec<_> = events.iter().collect();
+        ids.sort_by_key(|(id, _)| **id);
+        for (id, list) in ids {
+            println!("{id}: {:?}", list.iter().map(|e| (e.frame, e.hand, e.pose, e.time)).collect::<Vec<_>>());
+        }
     }
 
     #[test]
