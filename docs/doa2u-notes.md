@@ -170,6 +170,10 @@ Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
 - A fold's length runs along the axis not in `axes` (`length_axis`). Legs run along Y. DOA3's port had Z fixed.
 - The tip collision of flag 4 does not restore the segment's length.
 
+### Kind 251
+
+`sub_0004FD00`, up to 4 records, runs just before kind 250 and appears to rebuild normals of the sheets' objects from triangle lists; only its start was read. So the viewer's lit cloth keeps its file normals, which matters for the lighting work. It does not move particles.
+
 ### Other kinds
 
 The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.
