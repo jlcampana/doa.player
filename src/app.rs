@@ -638,7 +638,7 @@ impl App {
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
-        self.mesh.set_lights(Some(crate::renderer::mesh::DOA2U_DESERT_LIGHTS));
+        self.mesh.set_lights(Some(crate::renderer::mesh::DOA2U_LIGHTS[self.bg_panel.lights].1));
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         for chain in &chains {

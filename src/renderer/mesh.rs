@@ -44,16 +44,34 @@ pub struct SceneLights {
     pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
 }
 
-/// Read from the game on the desert stage. Ambient is `0xFF5E5E5E`.
-pub const DOA2U_DESERT_LIGHTS: SceneLights = SceneLights {
-    ambient: [94.0 / 255.0; 3],
-    lights: [
-        ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45], [0.18, 0.144, 0.135]),
-        ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53], [0.234, 0.186, 0.159]),
-        ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28], [0.057, 0.042, 0.084]),
-        ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12], [0.078, 0.072, 0.036]),
-    ],
-};
+/// A stage's lights: ambient, then direction and diffuse. Specular is 0.3 of diffuse in
+/// all that were read.
+const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLights {
+    let mut out = [([0.0; 3], [0.0; 3], [0.0; 3]); 4];
+    let mut i = 0;
+    while i < 4 {
+        let c = lights[i].1;
+        out[i] = (lights[i].0, c, [c[0] * 0.3, c[1] * 0.3, c[2] * 0.3]);
+        i += 1;
+    }
+    SceneLights { ambient: [ambient as f32 / 255.0; 3], lights: out }
+}
+
+/// Lights read from the game while it draws fighters, by stage. See `doa2u_lights.py`.
+pub const DOA2U_LIGHTS: [(&str, SceneLights); 2] = [
+    ("Desert", stage_lights(0x5E, [
+        ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
+        ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
+        ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28]),
+        ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12]),
+    ])),
+    ("Stage 8", stage_lights(0x3F, [
+        ([0.451, -0.29, -0.844], [0.78, 0.57, 0.42]),
+        ([-0.677, -0.29, -0.677], [0.62, 0.41, 0.28]),
+        ([0.36, 0.337, 0.87], [0.36, 0.22, 0.37]),
+        ([-0.878, 0.098, 0.469], [0.2, 0.16, 0.38]),
+    ])),
+];
 
 struct LoadedModel {
     /// Vertices in bone space. Posed copies are uploaded every frame.
@@ -284,6 +302,11 @@ impl MeshRenderer {
     /// The lights for models whose materials have a look. None keeps the viewer's own shading.
     pub fn set_lights(&mut self, lights: Option<SceneLights>) {
         self.lights = lights;
+    }
+
+    /// Whether the current model uses the game's lighting.
+    pub fn is_lit(&self) -> bool {
+        self.lights.is_some()
     }
 
     pub fn update(&self, queue: &wgpu::Queue, view_proj: &glam::Mat4, view: &glam::Mat4, anime_shading: bool) {

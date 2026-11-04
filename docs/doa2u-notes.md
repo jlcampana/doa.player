@@ -182,7 +182,7 @@ The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 1
 
 The game uses D3D's fixed function lighting (port: `recomp-runtime/d3d_draw_shader.cpp`). `tools/re/doa2u_lights.py` lists the lights it enables. Device at `0x355500`: active light records at +0x7AC, 8 slots; ambient at `0x35542C`; transforms at +0xC60, 0x40 each, with TEXTURE0 as state 2.
 
-Reading those while the object at `0xEA6694` was a fighter's, on the desert stage: 4 directional lights and ambient `0xFF5E5E5E`, in 36490 of 36546 reads. The stage's own objects use other lights and ambients (`0xFF4C493F`, `0xFFAAAAAA`). Each light's specular is 0.3 of its diffuse. `sub_00285EC0` sets them, through the matrix at `0x877EB0`.
+Reading those while the object at `0xEA6694` was a fighter's, on the desert stage: 4 directional lights and ambient `0xFF5E5E5E`, in 36490 of 36546 reads. The stage with byte 8 at `0x87CFA4` has ambient `0xFF3F3F3F` and other lights. The stage's own objects use other lights and ambients (`0xFF4C493F`, `0xFFAAAAAA`). Each light's specular is 0.3 of its diffuse. `sub_00285EC0` sets them, through the matrix at `0x877EB0`.
 
 Formula, per vertex, with l toward the light: `rgb = emissive + ambient * material ambient + sum(material diffuse * light diffuse * max(0, n.l))`, clamped. `specular = sum(material specular * light specular * pow(n.h, power))` with an infinite viewer, for n.l > 0, clamped. Final color is texture times rgb, plus specular.
 
@@ -197,7 +197,7 @@ Colors in the game have no gamma step. The viewer's textures and window are sRGB
 
 Compared with the game: `hel08` and `kas00` by eye against one screenshot, in other poses and angles. Not measured by pixel. Differences to expect:
 
-- Only the desert stage's lights are in the viewer. The other stage read had different lights, and they are not selectable. Fighters face a fixed way, so the light falls differently from any given moment in play.
+- The viewer holds the lights of the stages read so far (`DOA2U_LIGHTS`, picked in the Background panel or with `--lights N`): the desert, and the stage whose byte at `0x87CFA4` is 8. To add one, run `tools/re/doa2u_lights.py 6` on that stage and take the most frequent set. The tool's filter is loose, since the drawn object stays set after a fighter: on stage 8 it also counted a set with a point light and ambient `0xFF6B5B51`, 436 reads against 9476, taken to be the stage's. Fighters face a fixed way in the viewer, so the light falls differently from any given moment in play.
 - Modes other than 0, 1 and 3, 4, 5 are drawn as the plain case: 2, 3 alone and any more on a costume (`zac04`, `aya18`). Four stage materials on `hel10` use only the first two stages.
 - The game draws in list order, with all materials blended. The viewer draws flag 8 and kind 3 materials last, and discards texels under 0.1 of alpha, which the game was not seen to do.
 - Kind 251 normals are not rebuilt, so moving cloth keeps its file normals.

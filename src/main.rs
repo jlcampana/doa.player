@@ -161,6 +161,7 @@ fn render_frame(app: &mut App, window: &Window) {
         app::GameSource::Doa3  => &app.doa3_characters,
     };
     let has_bounce = app.has_chest_spring();
+    let is_lit = app.mesh.is_lit();
     let bounce_before = app.bg_panel.bounce_scale;
     let egui_output = egui_ctx.run(raw_input, |ctx| {
         build_ui(
@@ -172,6 +173,7 @@ fn render_frame(app: &mut App, window: &Window) {
             &mut app.anim_panel,
             &mut app.bg_panel,
             has_bounce,
+            is_lit,
             &app.status_msg,
             &mut actions,
         );
@@ -213,6 +215,9 @@ fn render_frame(app: &mut App, window: &Window) {
 
     let vp = app.camera.view_proj();
     app.grid.update(&app.ctx.queue, &vp);
+    if app.mesh.is_lit() {
+        app.mesh.set_lights(Some(renderer::mesh::DOA2U_LIGHTS[app.bg_panel.lights].1));
+    }
     app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading);
     app.wireframe.update_camera(&app.ctx.queue, &vp);
 
@@ -296,6 +301,7 @@ fn build_ui(
     anim_panel: &mut ui::AnimPanel,
     bg_panel: &mut ui::BgSelectPanel,
     has_bounce: bool,
+    is_lit: bool,
     status_msg: &str,
     actions: &mut UiActions,
 ) {
@@ -307,7 +313,7 @@ fn build_ui(
         actions.selected_anim = Some(ai);
     });
 
-    bg_panel.show(ctx, backgrounds, has_bounce);
+    bg_panel.show(ctx, backgrounds, has_bounce, is_lit);
 
     egui::TopBottomPanel::bottom("status")
         .frame(egui::Frame::none().fill(egui::Color32::from_rgb(30, 30, 30)))
@@ -365,6 +371,9 @@ fn load_from_arguments(app: &mut App) {
     }
 
     app.bg_panel.anime_shading = args.iter().any(|a| a == "--anime");
+    if let Some(lights) = value_of("--lights") {
+        app.bg_panel.lights = lights.min(renderer::mesh::DOA2U_LIGHTS.len() - 1);
+    }
     app.anim_panel.wind = args.iter().any(|a| a == "--wind");
     let float = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok());
     if let Some(yaw) = float(2) {

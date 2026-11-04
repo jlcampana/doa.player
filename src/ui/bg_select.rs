@@ -5,14 +5,16 @@ pub struct BgSelectPanel {
     pub anime_shading: bool,
     /// Multiplies the chest spring's deformation; 1 is what the game does.
     pub bounce_scale: f32,
+    /// Index in `DOA2U_LIGHTS`.
+    pub lights: usize,
 }
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, anime_shading: false, bounce_scale: 1.0 }
+        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0 }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool) {
+    pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool) {
         egui::Window::new("Background")
             .default_pos([440.0, 10.0])
             .default_size([160.0, 220.0])
@@ -26,6 +28,15 @@ impl BgSelectPanel {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
+                if lit {
+                    ui.separator();
+                    ui.label("Stage lights:");
+                    for (i, (name, _)) in crate::renderer::mesh::DOA2U_LIGHTS.iter().enumerate() {
+                        if ui.selectable_label(self.lights == i, *name).clicked() {
+                            self.lights = i;
+                        }
+                    }
+                }
                 if has_bounce {
                     ui.add(egui::Slider::new(&mut self.bounce_scale, 0.0..=3.0).text("Bounce"));
                 }
