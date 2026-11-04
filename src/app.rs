@@ -122,10 +122,12 @@ fn doa2u_characters(costume_files: Option<&AfsArchive>) -> Vec<CharacterEntry> {
         ("lei", "leifang", "Lei Fang",        12, 20),
         ("jan", "janlee",  "Jann Lee",         2,  8),
         ("bas", "bass",    "Bass Armstrong",   9,  8),
-        ("bay", "bayman",  "Bayman",           8,  7),
+        // "sambo" is Bayman and "bayman" is Leon. Bayman's ID and files were
+        // measured in a running match. Leon's follow, and from the costume counts.
+        ("bay", "sambo",   "Bayman",          24,  6),
         ("gen", "genfu",   "Gen Fu",           6,  8),
-        ("leo", "sambo",   "Leon",            24,  6),
-        ("kor", "koryu",   "Kō Ryū",          21, 14),
+        ("leo", "bayman",  "Leon",             8,  7),
+        ("kor", "koryu",   "Hitomi",          21, 14),
         ("tng", "tengu",   "Tengu",           17,  3),
         ("ein", "karate",  "Ein",              3,  7),
         ("hel", "hika",    "Helena Douglas",   7, 13),
@@ -320,7 +322,7 @@ pub struct App {
 /// What is needed to pose the loaded DOA3 character.
 pub struct Doa3Pose {
     /// Set for DOA2U costumes, which have their own solve.
-    pub doa2u_twist: Option<doa2u::ForearmTwist>,
+    pub doa2u_style: Option<doa2u::PoseStyle>,
     pub skeleton: [glam::Vec3; 17],
     pub motion: Option<Doa3Motion>,
     pub chest: Option<Doa3Chest>,
@@ -511,7 +513,7 @@ impl App {
         let textures = parse_xpr_textures(&xpr)?;
         let skeleton = doa2u::skeleton(xbe, id)?;
         let drawn = doa2u::parse_drawn_objects(&cat, &skeleton)?;
-        let twist = doa2u::forearm_twist(&cat)?;
+        let style = doa2u::pose_style(&cat)?;
 
         let table = u32::from_le_bytes(cat.get(0x10..0x14).context("truncated CAT")?.try_into()?) as usize;
         let skins = doa3::parse_sparse_joint_skins(&cat, table);
@@ -599,7 +601,7 @@ impl App {
             hand_events: Default::default(),
             character: id,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_twist: Some(twist), skeleton, motion: None, chest: None, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest: None, chains });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -842,7 +844,7 @@ impl App {
             hand_events,
             character: roster.id,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_twist: None, skeleton, motion: None, chest, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains });
         self.game_clock = 0.0;
         let motion_index = config
             .motion
@@ -890,8 +892,8 @@ impl App {
         };
         match doa3::eval_motion(data, &motion.tracks, self.anim_time) {
             Ok(values) => {
-                let nodes = match pose.doa2u_twist {
-                    Some(twist) => doa2u::solve_pose(&values, &pose.skeleton, twist),
+                let nodes = match pose.doa2u_style {
+                    Some(style) => doa2u::solve_pose(&values, &pose.skeleton, style),
                     None => doa3::solve_pose(&values, &pose.skeleton),
                 };
                 let clock = self.game_clock as u64;

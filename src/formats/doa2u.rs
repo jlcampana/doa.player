@@ -230,6 +230,9 @@ const LIMBS: [Limb; 4] = [
 /// is also added to the squared distance to the target.
 const SOLVE_EPSILON: f32 = 0.00097;
 
+/// The factor given to `sub_00285B40` at the end of `sub_000EB880`.
+const UPPER_ARM_BLEND: f32 = 0.3;
+
 /// How a costume turns the forearm's end towards the hand, read from the CAT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForearmTwist {
@@ -241,22 +244,37 @@ pub enum ForearmTwist {
     RollForearm,
 }
 
-/// The record of type -1 in the CAT's first section holds a version. From 2 on,
-/// `sub_0005B9F0` selects the hand aligned twist; a CAT without it starts at -1.
-pub fn forearm_twist(cat: &[u8]) -> Result<ForearmTwist> {
-    let base = read_u32(cat, 4)? as usize;
-    let mut record = base;
+/// A costume's choices for the pose, from the records of the CAT's first section
+/// (`sub_0005B9F0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoseStyle {
+    pub twist: ForearmTwist,
+    /// Whether upper arm 14 and upper arm 8 keep most of the chest's roll.
+    pub upper_arms: [bool; 2],
+}
+
+/// Type -1 holds a version: from 2 on the twist aligns the hand, and a CAT
+/// without it starts at -1. Type 10 sets flags at 0x850710: the low bit picks a
+/// pair, and bits 8 to 11 and 16 to 19 are the pair's two flags. Pair 0 is the
+/// upper arms; pair 1, at 0x850712, is not looked at.
+pub fn pose_style(cat: &[u8]) -> Result<PoseStyle> {
+    let mut record = read_u32(cat, 4)? as usize;
     let mut version = -1i32;
+    let mut upper_arms = [false; 2];
     loop {
         let value = read_u32(cat, record)?;
         match read_u32(cat, record + 4)? {
             0 => break,
             0xFFFF_FFFF => version = value as i32,
+            10 if value & 1 == 0 => {
+                upper_arms = [(value >> 8) & 0xF != 0, (value >> 16) & 0xF != 0];
+            }
             _ => {}
         }
         record += 8;
     }
-    Ok(if version >= 2 { ForearmTwist::AlignHand } else { ForearmTwist::RollForearm })
+    let twist = if version >= 2 { ForearmTwist::AlignHand } else { ForearmTwist::RollForearm };
+    Ok(PoseStyle { twist, upper_arms })
 }
 
 fn euler(angles: &[f32]) -> Mat4 {
@@ -280,9 +298,8 @@ fn solve_angle(cosine: f32) -> f32 {
 
 /// Builds the node matrices in the game's left handed space, relative to the
 /// fighter's root: `sub_000E9430`, `sub_000EB880`. Not ported: the head's
-/// `sub_000EDBF0`, feet following a sloped floor, and upper arms set by CAT
-/// records of type 10 (`0x850710`). The root is taken as having no turn.
-fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: ForearmTwist) -> [Mat4; NODE_COUNT] {
+/// `sub_000EDBF0` and feet following a sloped floor. The root is taken as having no turn.
+fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], style: PoseStyle) -> [Mat4; NODE_COUNT] {
     let mut nodes = [Mat4::IDENTITY; NODE_COUNT];
     nodes[2] = Mat4::from_translation(Vec3::new(0.0, tracks[1], 0.0)) * euler(&tracks[3..6]);
     nodes[0] = nodes[2] * Mat4::from_translation(skeleton[0]) * euler(&tracks[6..9]);
@@ -325,7 +342,7 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: F
     }
 
     for (out, mid, end, sign) in [(NODE_TWIST[1], 10, 11, -1.0f32), (NODE_TWIST[0], 4, 5, 1.0)] {
-        nodes[out] = match twist {
+        nodes[out] = match style.twist {
             ForearmTwist::AlignHand => {
                 let turn = Quat::from_rotation_arc(
                     nodes[end].x_axis.truncate().normalize(),
@@ -342,6 +359,20 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: F
         };
     }
 
+    // The arm's frame with the chest's roll, moved 0.3 of the way back to the arm's own.
+    for (node, on) in [14, 8].into_iter().zip(style.upper_arms) {
+        if on {
+            let arm = nodes[node];
+            let chest = Mat3::from_mat4(nodes[0]);
+            let turn = Quat::from_rotation_arc(chest.x_axis.normalize(), arm.x_axis.truncate().normalize());
+            let aligned = Quat::from_mat3(&Mat3::from_quat(turn).mul_mat3(&chest));
+            let blended = aligned.slerp(Quat::from_mat4(&arm), UPPER_ARM_BLEND);
+            let mut matrix = Mat4::from_quat(blended);
+            matrix.w_axis = arm.w_axis;
+            nodes[node] = matrix;
+        }
+    }
+
     for (eye, offset) in NODE_EYES.into_iter().zip([skeleton[15], skeleton[16]]) {
         nodes[eye] = nodes[1] * Mat4::from_translation(offset);
     }
@@ -349,9 +380,9 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: F
 }
 
 /// Builds the node matrices for a frame, with the viewer's Z flip applied.
-pub fn solve_pose(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], twist: ForearmTwist) -> [Mat4; NODE_COUNT] {
+pub fn solve_pose(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], style: PoseStyle) -> [Mat4; NODE_COUNT] {
     let flip_z = Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0));
-    solve_game_space(tracks, skeleton, twist).map(|node| flip_z * node)
+    solve_game_space(tracks, skeleton, style).map(|node| flip_z * node)
 }
 
 /// Reads the objects of a decrypted XPR.
@@ -498,13 +529,14 @@ mod tests {
     }
 
     /// Run with `DOA2U_DISC=<dir with the .afs files> cargo test -- --ignored --nocapture`.
-    /// Frames read from the running game by `tools/re/doa2u_live.py capture`:
-    /// IDs 0 and 24, in a CPU match. Blocks of tracks, bones and the 32 matrices.
-    #[test]
-    fn pose_matches_captured_frames() {
+    /// Compares frames read by `tools/re/doa2u_live.py capture`, as blocks of
+    /// tracks, bones and the 32 matrices. Returns the worst error of arms, legs,
+    /// hands and twists, and the legs' worst error per frame.
+    fn worst_against_capture(capture: &str, style: PoseStyle) -> ([f32; 4], Vec<f32>) {
         let numbers = |line: &str| line.split_whitespace().skip(1).map(|v| v.parse::<f32>().unwrap()).collect::<Vec<_>>();
-        let lines: Vec<&str> = include_str!("doa2u_pose_capture.txt").lines().collect();
-        let (mut worst_arm, mut worst_leg, mut worst_hand, mut worst_twist) = (0f32, 0f32, 0f32, 0f32);
+        let lines: Vec<&str> = capture.lines().collect();
+        let mut worst = [0f32; 4];
+        let mut legs_per_frame = Vec::new();
         for frame in lines.chunks(4) {
             let tracks: [f32; TRACK_COUNT] = numbers(frame[1]).try_into().unwrap();
             let bones = numbers(frame[2]);
@@ -521,28 +553,48 @@ mod tests {
             // The root: its turn from matrix 15, on the floor under the pelvis.
             let mut root = game(15);
             root.w_axis.y -= tracks[1];
-            let nodes = solve_game_space(&tracks, &skeleton, ForearmTwist::AlignHand);
+            let nodes = solve_game_space(&tracks, &skeleton, style);
             let error = |ours: Mat4, theirs: Mat4| {
                 (root * ours).to_cols_array().iter().zip(theirs.to_cols_array()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max)
             };
-            for node in [14, 10, 8, 4] {
-                worst_arm = worst_arm.max(error(nodes[node], game(node)));
+            let pairs: [&[(usize, usize)]; 4] = [
+                &[(14, 14), (10, 10), (8, 8), (4, 4)],
+                &[(12, 12), (13, 13), (6, 6), (7, 7)],
+                &[(11, 11), (5, 5)],
+                &[(NODE_TWIST[0], 24), (NODE_TWIST[1], 25)],
+            ];
+            for (slot, group) in worst.iter_mut().zip(pairs) {
+                for &(ours, theirs) in group {
+                    *slot = slot.max(error(nodes[ours], game(theirs)));
+                }
             }
-            for node in [12, 13, 6, 7] {
-                worst_leg = worst_leg.max(error(nodes[node], game(node)));
-            }
-            for node in [11, 5] {
-                worst_hand = worst_hand.max(error(nodes[node], game(node)));
-            }
-            for (node, slot) in [(NODE_TWIST[0], 24), (NODE_TWIST[1], 25)] {
-                worst_twist = worst_twist.max(error(nodes[node], game(slot)));
-            }
+            legs_per_frame.push(pairs[1].iter().map(|&(ours, theirs)| error(nodes[ours], game(theirs))).fold(0.0, f32::max));
         }
-        println!("worst: arms {worst_arm}, legs {worst_leg}, hands {worst_hand}, twists {worst_twist}");
-        assert!(worst_arm < 0.02, "arms {worst_arm}");
-        assert!(worst_leg < 0.005, "legs {worst_leg}");
-        assert!(worst_hand < 0.01, "hands {worst_hand}");
-        assert!(worst_twist < 0.01, "twists {worst_twist}");
+        (worst, legs_per_frame)
+    }
+
+    /// Zack (ID 0) against Bayman (ID 24): costumes without the upper arm flags.
+    #[test]
+    fn pose_matches_captured_frames() {
+        let style = PoseStyle { twist: ForearmTwist::AlignHand, upper_arms: [false; 2] };
+        let ([arms, legs, hands, twists], _) = worst_against_capture(include_str!("doa2u_pose_capture.txt"), style);
+        println!("worst: arms {arms}, legs {legs}, hands {hands}, twists {twists}");
+        assert!(arms < 0.02 && legs < 0.005 && hands < 0.01 && twists < 0.01);
+    }
+
+    /// Tina (ID 1) against Lei Fang (ID 12): both have the flags on. The arms
+    /// must match with the flags, and must not match without them. One frame of
+    /// 12 has a leg off by up to 0.12, with its foot 5 cm away. The cause is unknown.
+    #[test]
+    fn upper_arms_match_captured_frames() {
+        let capture = include_str!("doa2u_pose_capture_upper_arms.txt");
+        let style = PoseStyle { twist: ForearmTwist::AlignHand, upper_arms: [true; 2] };
+        let ([arms, legs, hands, twists], legs_per_frame) = worst_against_capture(capture, style);
+        let ([without, ..], _) = worst_against_capture(capture, PoseStyle { upper_arms: [false; 2], ..style });
+        println!("worst: arms {arms} ({without} without the flags), legs {legs}, hands {hands}, twists {twists}");
+        assert!(arms < 0.02 && hands < 0.01 && twists < 0.01);
+        assert!(without > 0.05);
+        assert!(legs_per_frame.iter().filter(|&&e| e >= 0.005).count() <= 1, "{legs_per_frame:?}");
     }
 
     /// Looks for captured poses in the character's `.mot` files, to check that

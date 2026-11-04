@@ -57,11 +57,12 @@ The solve is DOA3's in outline, with these differences:
   - 2 or more (267 costumes): the hand's frame, turned so its X meets the forearm's, at the elbow.
   - Under 2 or absent (52 costumes): the forearm rolled by `atan2`, as in DOA3. Not compared with the game.
   - One file gives 119. It may not be a costume; not looked at.
+- Upper arms: CAT record type 10 (`0x10100` in 74 costumes) sets flags at `0x850710`. With them on, upper arms 14 and 8 take the chest's frame turned to the arm's X, moved 0.3 of the way back to the arm's own frame (`sub_00285B40`).
 - Matrices 28 and 29 are the hand ends of the twists. They are computed by the game and not by the viewer.
 
 ### Measurements
 
-Against frames of a CPU match, with both fighters (IDs 0 and 24):
+Against frames of a CPU match, Zack (ID 0) against Bayman (ID 24), costumes without the upper arm flags:
 
 | Check | Worst error |
 | --- | --- |
@@ -71,14 +72,15 @@ Against frames of a CPU match, with both fighters (IDs 0 and 24):
 | Twists: matrices 24, 25 | 0.003 |
 | `eval_motion` against the game's tracks | 0.0001 |
 
-The last line comes from `captured_tracks_are_found_in_motions`: 13 of 20 frames of Zack were found in `zack.mot` or `comon.mot`. Frames not found are taken to be blends between motions, which was not checked. A read can also catch the tracks one frame ahead of the matrices, so `doa2u_live.py capture` drops frames whose pelvis does not match its tracks.
+The last line comes from `captured_tracks_are_found_in_motions`: 13 of 20 frames of Zack were found in `zack.mot` or `comon.mot`. Frames not found are taken to be blends between motions, which was not checked. Tina (ID 1) against Lei Fang (ID 12), both with the upper arm flags on, 12 frames: arms 0.011, and 0.64 without the flags; hands 0.002; twists 0.003. Legs are within 0.002 except in one frame, where one leg is off by 0.12 and its foot by 5 cm. Foot rotations also differ, by up to 0.10, in 4 frames, with their positions right. A sloped floor would explain the rotations, but this was not checked, and the one bad frame is unexplained.
 
-Fighter ID 24 matched 13 frames in `sambo.mot` and 10 in `bayman.mot`; motion 184 was found only in `sambo.mot`. So that ID uses the file the viewer calls Leon.
+A read can also catch the tracks one frame ahead of the matrices, so `doa2u_live.py capture` drops frames whose pelvis does not match its tracks.
+
+Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon and `koryu` is Hitomi, per the user. The user selected Bayman, whose fighter had ID 24. It matched 13 frames in `sambo.mot` and 10 in `bayman.mot`, with motion 184 found only in `sambo.mot`, and the CAT in memory was `bay00` (97% of sampled bytes equal, the next costume outside Bayman's about 5%). Leon as ID 8 is inferred: the counts at `0x6E0F08` give 7 costumes to ID 8 and 6 to ID 24, and the files are 7 `leo` and 6 `bay`.
 
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
-- CAT record type 10 (`0x10100` in 74 costumes) sets flags at `0x850710` that blend upper arms 8 and 14 with the chest's frame (`sub_00285B40`, factor 0.3). Not ported, and both captured fighters have them off.
 - Hair, cloth, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
 - No chest spring: it is not ported for DOA2U.

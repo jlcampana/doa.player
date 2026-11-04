@@ -40,9 +40,9 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 ## Unverified in DOA2U
 
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Head, feet on slopes, drawing and joint pieces are not.
-- Character IDs in `app.rs` are inferred from tables. Measured: ID 0 uses `zack.mot`, ID 24 uses `sambo.mot`. The user reported that match as Zack against Bayman, so the name shown for ID 24 is still open.
+- Character IDs in `app.rs` are inferred from tables. Measured in a match: Zack is ID 0 with `zack.mot` and `zac00`; Bayman is ID 24 with `sambo.mot` and `bay00`; Tina is ID 1 and Lei Fang ID 12. Leon as ID 8 with `bayman.mot` follows from that and the costume counts; it is not measured.
 - Back-face flag: OBJ material +0xC also holds 5 and 8.
-- Not rendered yet: Ryu, Lei Fang, Kō Ryū, Tengu.
+- Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.
 
