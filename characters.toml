@@ -1,0 +1,37 @@
+# Default settings for each DOA3 character, by the name shown in the viewer.
+#
+# costume  = costume number shown when the character is selected
+# motion   = start of the motion's name in the list, for example "A 0040"
+# bouncing = false turns the chest spring off.
+
+[Tina]
+costume = 0
+bouncing = true
+
+[Helena]
+costume = 0
+bouncing = true
+
+["Lei Fang"]
+costume = 0
+bouncing = true
+
+[Christie]
+costume = 0
+bouncing = true
+
+[Kasumi]
+costume = 0
+bouncing = true
+
+[Ayane]
+costume = 0
+bouncing = true
+
+[Hitomi]
+costume = 0
+bouncing = true
+
+[K-1]
+costume = 0
+bouncing = true
