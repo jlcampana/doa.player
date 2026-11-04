@@ -347,6 +347,8 @@ pub struct Doa3Chains {
     pub character: usize,
     /// DOA2U's hands, right one first.
     pub pose_hands: Vec<doa3_morphs::PoseHand>,
+    /// DOA2U: objects whose normals are rebuilt as they move.
+    pub normal_rebuilds: Vec<doa2u::NormalRebuild>,
     /// DOA2U: objects whose positions follow another object.
     pub copies: Vec<doa2u::VertexCopy>,
 }
@@ -672,6 +674,7 @@ impl App {
             hand_events: self.hdd_archive.as_ref().and_then(|a| a.get_by_name(&format!("{bin_id}.bin"))).map(doa3_morphs::parse_hand_events).unwrap_or_default(),
             character: id,
             pose_hands: doa2u::hands(&cat)?,
+            normal_rebuilds: doa2u::normal_rebuilds(&cat)?,
             copies: doa2u::vertex_copies(&cat, &xpr)?,
         };
         let chest = chest_morph.and_then(|(object, groups)| {
@@ -923,6 +926,7 @@ impl App {
             hand_events,
             character: roster.id,
             pose_hands: Vec::new(),
+            normal_rebuilds: Vec::new(),
             copies: Vec::new(),
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains });
@@ -1127,6 +1131,11 @@ impl App {
                                 }),
                             );
                         }
+                    }
+                    for rebuild in &soft.normal_rebuilds {
+                        let Some(&Some((piece, _))) = soft.pieces.get(rebuild.object) else { continue };
+                        let normals = rebuild.normals(|vertex| self.mesh.rest_position(piece, vertex));
+                        self.mesh.set_rest_normals(piece, normals.into_iter());
                     }
                     for copy in &soft.copies {
                         let (Some(&Some((from, _))), Some(&Some((to, _)))) = (soft.pieces.get(copy.from), soft.pieces.get(copy.to)) else { continue };

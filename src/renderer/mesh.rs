@@ -508,6 +508,13 @@ impl MeshRenderer {
         }
     }
 
+    /// A vertex's rest position, in the space of its node.
+    pub fn rest_position(&self, piece: usize, vertex: usize) -> Option<glam::Vec3> {
+        let model = self.model.as_ref()?;
+        let range = model.pieces.get(piece)?.vertices.clone();
+        model.rest_vertices[range].get(vertex).map(|v| glam::Vec3::from(v.position))
+    }
+
     /// Replaces rest normals of a piece, in the space of its node.
     pub fn set_rest_normals(&mut self, piece: usize, normals: impl Iterator<Item = (usize, [f32; 3])>) {
         let Some(model) = &mut self.model else { return };

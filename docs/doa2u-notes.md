@@ -170,9 +170,11 @@ Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
 - A fold's length runs along the axis not in `axes` (`length_axis`). Legs run along Y. DOA3's port had Z fixed.
 - The tip collision of flag 4 does not restore the segment's length.
 
-### Kind 251
+### Normals, kind 251
 
-`sub_0004FD00`, up to 4 records, runs just before kind 250 and appears to rebuild normals of the sheets' objects from triangle lists; only its start was read. So the viewer's lit cloth keeps its file normals, which matters for the lighting work. It does not move particles.
+`sub_0004FD00`, up to 4 records, just before kind 250. It rebuilds an object's normals: positions per group, seeds from the file for faces across a seam, strips whose face normals add up on all three of a triangle's groups, then normalize and write each group's normal and, from +0x14, its negative. `normal_rebuilds` reads it, and the viewer runs it every frame on all costumes.
+
+Against captured skirts of `lei00` and `lei04`, largest component error per vertex, over 60 reads: median 0.04 and 0.06 with this, 0.56 with the file's normals, which is what the viewer had. p90 0.47 and 0.39. So it is far closer and not exact, and the rest is not explained: reads may catch a sheet between its positions and its normals, which was not separated.
 
 ### Other kinds
 
@@ -202,7 +204,7 @@ Compared with the game: `hel08` and `kas00` by eye against one screenshot, in ot
 - The storm stage has lightning, which the user saw while these reads changed. During a flash, the three lights are at 0.2 of their values, ambient is `0xFF233131`, and the fourth light is white at about (1.248, 1.336, 1.336), direction (0.677, -0.29, -0.677). It is 579 reads against 7296 in one sample. The viewer has only the lights between flashes.
 - Modes other than 0, 1 and 3, 4, 5 are drawn as the plain case: 2, 3 alone and any more on a costume (`zac04`, `aya18`). Four stage materials on `hel10` use only the first two stages.
 - The game draws in list order, with all materials blended. The viewer draws flag 8 and kind 3 materials last, and discards texels under 0.1 of alpha, which the game was not seen to do.
-- Kind 251 normals are not rebuilt, so moving cloth keeps its file normals.
+- Normals of sheets without kind 251 stay as in the file, as in the game (`hel00` 0 and 1 changed none).
 - No fog, shadows, or stage reflection. Stage reflection targets (`sub_0026D610`) were not read.
 
 ## Hands

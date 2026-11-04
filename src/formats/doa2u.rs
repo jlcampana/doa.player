@@ -307,6 +307,163 @@ pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
     Ok(parse_overlay_records(cat, base, &offsets, object_count))
 }
 
+/// Kind 251 in the soft body list (`sub_0004FD00`): rebuilds a moving object's normals from
+/// triangle strips. +0 of the record is the object and +4 the offset of the data: +0 the
+/// group count, +4 a position's byte offset per group, +8 seeds, +0xC strips, +0x10 where
+/// each group's normal goes, +0x14 where its negative goes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NormalRebuild {
+    pub object: usize,
+    positions: Vec<Option<usize>>,
+    /// Added to a group first: faces across a seam, from the file.
+    seeds: Vec<(usize, Vec3)>,
+    strips: Vec<NormalStrip>,
+    outputs: Vec<Vec<usize>>,
+    negated: Vec<Vec<usize>>,
+}
+
+/// Starts on two groups with a parity, or continues the last strip with a degenerate join.
+#[derive(Debug, Clone, PartialEq)]
+struct NormalStrip {
+    start: Option<(usize, usize, usize)>,
+    groups: Vec<usize>,
+}
+
+impl NormalRebuild {
+    /// Each vertex with its new normal, given the object's current positions.
+    pub fn normals(&self, position: impl Fn(usize) -> Option<Vec3>) -> Vec<(usize, [f32; 3])> {
+        let count = self.positions.len();
+        let points: Vec<Vec3> =
+            self.positions.iter().map(|p| p.and_then(&position).unwrap_or(Vec3::ZERO)).collect();
+        let mut sums = vec![Vec3::ZERO; count];
+        for &(group, seed) in &self.seeds {
+            sums[group] = seed;
+        }
+        let (mut edges, mut slots, mut current, mut parity) = ([Vec3::ZERO; 2], [0usize; 3], 1usize, 0usize);
+        for strip in &self.strips {
+            match strip.start {
+                Some((first_parity, a, b)) => {
+                    slots[0] = a;
+                    slots[1] = b;
+                    current = 1;
+                    edges[first_parity] = points[b] - points[a];
+                    parity = first_parity ^ 1;
+                }
+                None => {
+                    let next = (current + 1) % 3;
+                    slots[next] = slots[current];
+                    edges[parity] = Vec3::ZERO;
+                    parity ^= 1;
+                    current = next;
+                }
+            }
+            for &group in &strip.groups {
+                let next = (current + 1) % 3;
+                edges[parity] = points[group] - points[slots[current]];
+                slots[next] = group;
+                parity ^= 1;
+                current = next;
+                let normal = edges[0].cross(edges[1]);
+                for slot in slots {
+                    sums[slot] += normal;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (group, sum) in sums.iter().enumerate() {
+            let normal = sum.normalize_or_zero();
+            out.extend(self.outputs[group].iter().map(|&vertex| (vertex, normal.to_array())));
+            if let Some(list) = self.negated.get(group) {
+                out.extend(list.iter().map(|&vertex| (vertex, (-normal).to_array())));
+            }
+        }
+        out
+    }
+}
+
+/// Reads kind 251. Records that do not read cleanly are left out.
+pub fn normal_rebuilds(cat: &[u8]) -> Result<Vec<NormalRebuild>> {
+    let (base, offsets) = soft_body_offsets(cat, 251)?;
+    let mut rebuilds = Vec::new();
+    for offset in offsets {
+        if let Ok(rebuild) = read_normal_rebuild(cat, base, base + offset) {
+            rebuilds.push(rebuild);
+        }
+    }
+    Ok(rebuilds)
+}
+
+fn read_normal_rebuild(cat: &[u8], base: usize, at: usize) -> Result<NormalRebuild> {
+    let u16_at = |at: usize| -> Result<usize> { Ok(u16::from_le_bytes(slice(cat, at, 2)?.try_into()?) as usize) };
+    let object = u16_at(at)?;
+    let data = base + read_u32(cat, at + 4)? as usize;
+    let count = u16_at(data)?;
+    let word = |i: usize| -> Result<usize> { Ok(read_u32(cat, data + i * 4)? as usize) };
+    let list = base + word(1)?;
+    let positions = (0..count)
+        .map(|i| Ok(Some(read_u32(cat, list + i * 4)? as usize).filter(|&v| v != 0).map(|v| v / 32)))
+        .collect::<Result<Vec<_>>>()?;
+    let mut seeds = Vec::new();
+    if word(2)? != 0 {
+        let mut seed = base + word(2)?;
+        while u16_at(seed)? != 0xFFFF {
+            let group = u16_at(seed)?;
+            let float = |i: usize| -> Result<f32> { Ok(f32::from_bits(read_u32(cat, seed + 4 + i * 4)?)) };
+            if group >= count {
+                bail!("seed for group {group} of {count}");
+            }
+            seeds.push((group, Vec3::new(float(0)?, float(1)?, float(2)?)));
+            seed += 0x14;
+        }
+    }
+    let mut strips = Vec::new();
+    let mut cursor = base + word(3)?;
+    loop {
+        let length = read_u32(cat, cursor)? as usize;
+        cursor += 4;
+        if length == 0 {
+            break;
+        }
+        let first = read_u32(cat, cursor)?;
+        cursor += 4;
+        let start = if first == u32::MAX {
+            None
+        } else {
+            let (a, b) = (read_u32(cat, cursor)? as usize, read_u32(cat, cursor + 4)? as usize);
+            cursor += 8;
+            if first > 1 || a >= count || b >= count {
+                bail!("bad strip start at {cursor:#x}");
+            }
+            Some((first as usize, a, b))
+        };
+        let groups = (0..length)
+            .map(|i| Ok(read_u32(cat, cursor + i * 4)? as usize))
+            .collect::<Result<Vec<_>>>()?;
+        if groups.iter().any(|&g| g >= count) {
+            bail!("bad strip group at {cursor:#x}");
+        }
+        cursor += length * 4;
+        strips.push(NormalStrip { start, groups });
+    }
+    let read_outputs = |offset: usize| -> Result<Vec<Vec<usize>>> {
+        let mut cursor = base + offset;
+        let mut lists = Vec::with_capacity(count);
+        for _ in 0..count {
+            let length = read_u32(cat, cursor)? as usize;
+            cursor += 4;
+            let list = (0..length)
+                .map(|i| Ok(read_u32(cat, cursor + i * 4)? as usize / 32))
+                .collect::<Result<Vec<_>>>()?;
+            cursor += length * 4;
+            lists.push(list);
+        }
+        Ok(lists)
+    };
+    let outputs = read_outputs(word(4)?)?;
+    let negated = if word(5)? != 0 { read_outputs(word(5)?)? } else { Vec::new() };
+    Ok(NormalRebuild { object, positions, seeds, strips, outputs, negated })
+}
+
 /// Kind 250 in the soft body list: after the soft bodies run, positions of one object
 /// are copied to another, raw (`sub_0004E390`). It keeps translucent layers and low
 /// detail objects on the sheets that move them.
@@ -919,6 +1076,22 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_normals_face_the_way_the_strip_winds() {
+        let square = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)];
+        let rebuild = NormalRebuild {
+            object: 0,
+            positions: (0..4).map(Some).collect(),
+            seeds: vec![(3, Vec3::new(0.0, 0.0, 5.0))],
+            strips: vec![NormalStrip { start: Some((0, 0, 1)), groups: vec![2, 3] }],
+            outputs: (0..4).map(|i| vec![i]).collect(),
+            negated: vec![vec![9]],
+        };
+        let normals = rebuild.normals(|v| square.get(v).copied());
+        assert!(normals.iter().filter(|n| n.0 < 4).all(|n| n.1[2] == 1.0), "{normals:?}");
+        assert_eq!(normals.iter().find(|n| n.0 == 9).unwrap().1[2], -1.0);
+    }
+
+    #[test]
     fn material_blocks_read_as_the_game_applies_them() {
         let mut block = vec![0u8; 0x80 + 3 * 16];
         let put = |block: &mut Vec<u8>, at: usize, value: u32| block[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -1221,6 +1394,7 @@ mod tests {
         let text = std::fs::read_to_string(std::env::var("DOA2U_JOINTS").expect("DOA2U_JOINTS")).unwrap();
         let mut nodes = [Mat4::IDENTITY; NODE_COUNT];
         let mut errors: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
+        let mut normal_errors: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
         for line in text.lines() {
             let mut words = line.split_whitespace();
             let kind = words.next().unwrap();
@@ -1239,6 +1413,19 @@ mod tests {
                 let v: Vec<f32> = words.map(|v| v.parse().unwrap()).collect();
                 let Some(skin) = skins.iter().find(|s| s.object == object) else { continue };
                 let (own, parent) = (nodes[skin.node], nodes[skin.parent]);
+                if kind == "normals" {
+                    for vertex in &skin.vertices {
+                        let live = own.transform_vector3(Vec3::new(v[vertex.vertex * 3], v[vertex.vertex * 3 + 1], v[vertex.vertex * 3 + 2]));
+                        let ours = if vertex.weight >= 1.0 {
+                            parent.transform_vector3(vertex.normal)
+                        } else {
+                            let (rotation, _) = skin.blend.frame(&own, &parent, vertex.weight);
+                            rotation * vertex.normal
+                        };
+                        normal_errors.entry(object).or_default().push(ours.normalize_or_zero().distance(live));
+                    }
+                    continue;
+                }
                 for vertex in &skin.vertices {
                     let live = own.transform_point3(Vec3::new(v[vertex.vertex * 3], v[vertex.vertex * 3 + 1], v[vertex.vertex * 3 + 2]));
                     let ours = if vertex.weight >= 1.0 {
@@ -1255,6 +1442,10 @@ mod tests {
             list.sort_by(f32::total_cmp);
             let skin = skins.iter().find(|s| s.object == *object).unwrap();
             println!("object {object} node {} parent {}: {} samples, median {:.4}, worst {:.4}", skin.node, skin.parent, list.len(), list[list.len() / 2], list[list.len() - 1]);
+        }
+        for (object, list) in &mut normal_errors {
+            list.sort_by(f32::total_cmp);
+            println!("normals of object {object}: {} samples, median {:.4}, 95% {:.4}, worst {:.4}", list.len(), list[list.len() / 2], list[list.len() * 95 / 100], list[list.len() - 1]);
         }
     }
 
