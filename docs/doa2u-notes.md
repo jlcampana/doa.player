@@ -80,6 +80,59 @@ A read can also catch the tracks one frame ahead of the matrices, so `doa2u_live
 
 Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon and `koryu` is Hitomi, per the user. The user selected Bayman, whose fighter had ID 24. It matched 13 frames in `sambo.mot` and 10 in `bayman.mot`, with motion 184 found only in `sambo.mot`, and the CAT in memory was `bay00` (97% of sampled bytes equal, the next costume outside Bayman's about 5%). In a later match Leon had ID 8 with `leo00` in memory (98%), and Hitomi ID 21 with `kor00` (96%). Their poses were found in `bayman.mot` (6 of 36 frames) and in `koryu.mot` or `comon.mot` (8 of 24). The counts at `0x6E0F08` agree: 7 costumes for ID 8, 6 for ID 24.
 
+## Soft bodies
+
+CAT word 2 is a list of 8-byte entries: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, installed by `sub_00057370`). DOA3's section scan rejects it, as kind 1 records differ, so `soft_body_offsets` reads it. Kinds 0xFA and 0xFE also appear, and bodies after them are still installed.
+
+State per fighter is at `0x80B7A8`, stride `0xF994`, and `sub_0005A740` runs it. Bytes +2, +3, +4, +5, +9 and +0xA count bodies of each kind. Bit 2 of byte +0 selects `sub_00051110` for cloth on a first frame; `sub_00051F20` is the normal update.
+
+Reads catch the game mid-write: a sheet is written row by row, with gaps. `tools/re/doa2u_cloth_pairs.py` keeps a pair only after 7 ms of quiet. Early measurements without this were wrong, in both directions.
+
+### Cloth, kind 2
+
+State at +0x2090, stride `0x7C`. The file's record has DOA3's cloth layout (`doa3_cloth.rs`). At run time, flags move from +8 to +0xC and later fields shift by 4 (`sub_0004CAD0`). Particles match DOA3's: position, segment, velocity, last pull, 0x40 bytes each. Differences from DOA3:
+
+- Wind is added to the pull, so it also feeds the velocity. DOA3 adds it to the force. The ring is at `0xE5AA40`, 64 vec4, head at `0xE5AE44`, phase +3 modulo 8 per record (`sub_0026BB80`). A push from `0xE5AE48` also exists; it was not used in these checks.
+- `(flags >> 28) + 1` rows stay a closed ring under flag 2, not only the first. The ring's last column copies its first. Skirts rely on this.
+- Flag 8: a column may start on a vertex of the object, by byte offset in the list at +0x50, and -1 keeps the record's root. Those vertices can be written by an earlier sheet, which chains sheets together, as on Helena's coat.
+- Flags 0x180 both write vertices with their own offsets (`sub_00050A50`).
+- Sheets can have 17 columns or more; the game limits columns to 27 and rows to 23. The floor is the stage's height (`sub_00146920`); the viewer has no stage.
+
+One step against the game's particles, wind included, median over 60 pairs per record, from `doa2u_single_steps` on the last capture:
+
+| Sheet | Pairs used | Segment error | Without stepping | Worst position |
+| --- | --- | --- | --- | --- |
+| `tin16` skirt, 17 x 6, flags 0x20000102 | 60 of 60 | 2.01 mm | 5.49 mm | 43.51 mm |
+| `hel00` coat 1, 7 x 4, flags 0x180 | 60 of 60 | 3.49 mm | 5.30 mm | 18.85 mm |
+| `hel00` coat 2, 4 x 5, flags 0x188 | 58 of 60 | 1.03 mm | 6.37 mm | 14.46 mm |
+| `hel00` coat 3, 4 x 5, flags 0x188 | 60 of 60 | 0.00 mm | 5.39 mm | 0.01 mm |
+| `hel00` object 0, 4 x 1, flags 0x80 | 60 of 60 | 0.00 mm | 2.06 mm | 0.00 mm |
+| `hel00` object 0, 4 x 1, flags 0x80 | 60 of 60 | 0.00 mm | 2.45 mm | 0.00 mm |
+
+Repeated captures differ: the first coat sheet gave 0.00 mm in one and 3.49 mm in another, so some situation is not covered. The stage's floor is the first suspect, not checked. Which sheets have shape collisions was not checked either, so the wording of commit `a9cb787`, that sheets without collisions match exactly, is not verified.
+
+Other costumes were not measured, including Lei Fang's. The viewer's Wind option uses a stand-in, as in DOA3, and it is off by default.
+
+### Chains, kind 1
+
+Hair and similar. The file's record has DOA3's chain layout: count, bone, object, on, and fields from +4 (`sub_0004BED0`, which swaps bytes 2 and 3 at run time). State at +0x10 of the fighter's state, count in byte +2. `sub_000591A0` is the normal update and `sub_00058D30` the first frame. Differences from DOA3:
+
+- Wind is added to the pull, with its factor at +0x3C.
+- A chain can start on a vertex: +0x44 is a byte offset into the object at +2. The viewer sets this only at load, and the measured chains I checked have 0 there.
+- Bones from 0x80 are matrices from 24.
+
+One step against the game's particles, 40 pairs per record, wind included (`doa2u_chain_single_steps`): of the 21 records measured on `tin16` and `hel00`, 12 have a median segment error of 0.00 mm, and 7 more are at or under 0.68 mm. `tin16` chain 11 has 1.62 mm. `hel00` chain 7 has 4.97 mm, worse than the 4.15 mm of not stepping at all. Both are unexplained.
+
+Detached objects, marked `0xFFFF` in a chain's target, are only drawn through the chain, and the viewer does this as in DOA3.
+
+### Other kinds
+
+The switch in `sub_00057370` installs kinds 1, 2, 4, 5, 7 and 12 (table at `0x57448`). `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched.
+
+## Holes in some costumes
+
+Not solved. See "Next steps" in `CLAUDE.md`. Measured on `hel08` and `kas00`: triangle winding agrees with the stored normals on nearly every material, flag 0 or 1, so the back-face flag looks right: flag 1 hides back faces, and turning culling off shows linings from inside. Flags 5, 8 and 9 also occur, and are not culled.
+
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
