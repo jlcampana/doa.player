@@ -4,6 +4,8 @@ A native Linux viewer in Rust for the characters of Dead or Alive 3 and Dead or 
 
 It reads files from your own copy of the games. No game data is in this repository.
 
+![](./preview.png)
+
 ## Build and run
 
 ```bash
