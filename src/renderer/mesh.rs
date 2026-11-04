@@ -335,6 +335,19 @@ impl MeshRenderer {
         }
     }
 
+    /// Copies rest positions between pieces, as they are.
+    pub fn copy_rest_positions(&mut self, from: usize, to: usize, links: &[(usize, usize)]) {
+        let Some(model) = &mut self.model else { return };
+        let (Some(source), Some(target)) = (model.pieces.get(from).map(|p| p.vertices.clone()), model.pieces.get(to).map(|p| p.vertices.clone())) else {
+            return;
+        };
+        for &(a, b) in links {
+            if a < source.len() && b < target.len() {
+                model.rest_vertices[target.start + b].position = model.rest_vertices[source.start + a].position;
+            }
+        }
+    }
+
     /// Replaces rest normals of a piece, in the space of its node.
     pub fn set_rest_normals(&mut self, piece: usize, normals: impl Iterator<Item = (usize, [f32; 3])>) {
         let Some(model) = &mut self.model else { return };

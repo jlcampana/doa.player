@@ -64,7 +64,9 @@ impl CharSelectPanel {
 
                 let filter_lower = self.filter.to_lowercase();
 
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                // Each list scrolls on its own, so that long costume lists stay reachable.
+                let list_height = (ui.available_height() * 0.5).max(80.0);
+                egui::ScrollArea::vertical().id_salt("characters").max_height(list_height).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, entry) in characters.iter().enumerate() {
                         if !filter_lower.is_empty()
                             && !entry.display_name.to_lowercase().contains(&filter_lower)
@@ -87,13 +89,15 @@ impl CharSelectPanel {
                     if let Some(entry) = characters.get(char_idx) {
                         ui.separator();
                         ui.label("Costume:");
-                        for (ci, name) in entry.costumes.iter().enumerate() {
-                            let selected = self.selected_costume_idx == ci;
-                            if ui.selectable_label(selected, name).clicked() {
-                                self.selected_costume_idx = ci;
-                                on_char_selected(char_idx, ci);
+                        egui::ScrollArea::vertical().id_salt("costumes").auto_shrink([false, true]).show(ui, |ui| {
+                            for (ci, name) in entry.costumes.iter().enumerate() {
+                                let selected = self.selected_costume_idx == ci;
+                                if ui.selectable_label(selected, name).clicked() {
+                                    self.selected_costume_idx = ci;
+                                    on_char_selected(char_idx, ci);
+                                }
                             }
-                        }
+                        });
                     }
                 }
             });

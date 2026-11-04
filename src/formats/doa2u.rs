@@ -307,6 +307,68 @@ pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
     Ok(parse_overlay_records(cat, base, &offsets, object_count))
 }
 
+/// Kind 250 in the soft body list: after the soft bodies run, positions of one object
+/// are copied to another, raw (`sub_0004E390`). It keeps translucent layers and low
+/// detail objects on the sheets that move them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VertexCopy {
+    pub from: usize,
+    pub to: usize,
+    /// Source vertex and target vertex.
+    pub links: Vec<(usize, usize)>,
+}
+
+fn vertex_stride(xpr: &[u8], object: usize) -> Result<usize> {
+    let record = read_u32(xpr, 0x28 + object * 4)? as usize;
+    Ok(VERTEX_SIZE + read_u32(xpr, record + 4)? as usize * 4)
+}
+
+/// Reads kind 250 records. +0 is a condition, +2 the source, +4 the target, +8 the offset
+/// of a list: a source byte offset, then target byte offsets whose low bit means another
+/// follows, and so on until -1.
+pub fn vertex_copies(cat: &[u8], xpr: &[u8]) -> Result<Vec<VertexCopy>> {
+    let (base, offsets) = soft_body_offsets(cat, 250)?;
+    let object_count = read_u32(xpr, 0x24)? as usize;
+    let mut copies = Vec::new();
+    for offset in offsets {
+        let at = base + offset;
+        let u16_at = |at: usize| -> Result<u16> { Ok(u16::from_le_bytes(slice(cat, at, 2)?.try_into()?)) };
+        let condition = u16_at(at)?;
+        // The game skips 0 and odd values other than 0xFFFF.
+        if condition == 0 || (condition != 0xFFFF && condition & 1 != 0) {
+            continue;
+        }
+        let (from, to) = (u16_at(at + 2)? as usize, u16_at(at + 4)? as usize);
+        if from >= object_count || to >= object_count {
+            continue;
+        }
+        let (from_stride, to_stride) = (vertex_stride(xpr, from)?, vertex_stride(xpr, to)?);
+        let mut at = base + read_u32(cat, at + 8)? as usize;
+        let mut links = Vec::new();
+        loop {
+            let source = read_u32(cat, at)?;
+            if source == u32::MAX {
+                break;
+            }
+            at += 4;
+            loop {
+                let target = read_u32(cat, at)?;
+                at += 4;
+                if target == u32::MAX {
+                    at -= 4;
+                    break;
+                }
+                links.push((source as usize / from_stride, (target & !1) as usize / to_stride));
+                if target & 1 == 0 {
+                    break;
+                }
+            }
+        }
+        copies.push(VertexCopy { from, to, links });
+    }
+    Ok(copies)
+}
+
 /// Characters with the chest spring in the viewer: Tina, Helena and Lei Fang.
 /// Fixed in code, by choice: adult characters only.
 const CHEST_SPRING_IDS: [usize; 3] = [1, 7, 12];
@@ -720,6 +782,26 @@ fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertex_copies_read_links_as_the_game_does() {
+        let words = |values: &[u32]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        // The list at 0x20: kind 250 at offset 0x10 and an end. The record, then its links.
+        let mut cat = words(&[0, 0, 0x20, 0, 0, 0, 0, 0]);
+        cat.extend(words(&[250, 0x10, 0xFF, 0]));
+        cat.extend([0xFF, 0xFF, 1, 0, 0, 0, 0, 0]);
+        cat.extend(words(&[0x24, 0]));
+        cat.extend(words(&[0]));
+        // Vertex 2 goes to 1 and 3, vertex 0 goes to 1.
+        cat.extend(words(&[64, 33, 96, 0, 32, u32::MAX]));
+        // Two objects whose records, at 0x40, have no extra floats.
+        let mut xpr = vec![0u8; 0x60];
+        xpr[0x24] = 2;
+        xpr[0x28] = 0x40;
+        xpr[0x2C] = 0x40;
+        let copies = vertex_copies(&cat, &xpr).unwrap();
+        assert_eq!(copies, vec![VertexCopy { from: 1, to: 0, links: vec![(2, 1), (2, 3), (0, 1)] }]);
+    }
 
     #[test]
     fn triangles_are_wound_the_other_way() {

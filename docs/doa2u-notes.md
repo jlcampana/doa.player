@@ -132,6 +132,25 @@ Detached objects, marked `0xFFFF` in a chain's target, are only drawn through th
 
 The layout of DOA3's section 3: +0 object, +2 mode, +3 bone, +4 offset, +0x14 angles. Mode 1 is solid and mode 2 translucent. Mode 0 records exist, such as `1f 00 00 0b` on `hel08`, and are left out. That one is variant 0 of a group whose variant 1 is `1f 00 01 0b`, the same object solid on bone 11, so object 31 is hidden by default. `kas00` has variants `10 00 01 02`, `2b 00 01 0b` and `0f 00 01 0b`: object 16 on bone 2 by default, or objects 43 and 15 on bone 11. The user's screenshot of `kas00` shows the sword sheathed at the waist with empty hands, which fits variant 0; that objects 15 and 43 are the sword in the hand is inferred from their shape and bone. Seen: `1e 00 02 01`, object 30 translucent on the head, on `hel08`, `hel00`, `aya00` and `kor00`. `10 00 01 02`, object 16 solid on bone 2, on `kas00`. Only the layout and these bytes were read; `sub_0004E920` and the draw were not compared with the game.
 
+### Vertex copies, kind 250
+
+`sub_0004E390`, run at the end of `sub_0005A740` for up to 8 records: +0 a condition (0 and odd values other than 0xFFFF skip it), +2 source object, +4 target object, +8 offset of a list. The list has a source byte offset, then target byte offsets whose low bit means another follows, and -1 ends it. Positions are copied raw, 12 bytes. They keep translucent layers and low detail objects on the sheets that move them: on `tin09`, object 16 is the translucent fur on the cape, and without this it stayed at rest as a loose strip. `vertex_copies` reads them.
+
+Checked against captured vertices, with each copy read from the game's source and target objects:
+
+| Copy | Links | Mismatches over 0.01 mm |
+| --- | --- | --- |
+| `tin16` 3 to 32 | 306 | 0 of 9180 |
+| `tin09` 2 to 16 | 635 | 2450 of 38100, worst 30 mm |
+| `tin09` 2 to 31 | 403 | 0 of 24180 |
+| `lei03` 33 to 37 | 29 | 0 of 1740 |
+| `hel00` 1 to 41 | 117 | 99 of 3510, worst 24 mm |
+| `hel00` 32 to 40 | 108 | 0 of 3240 |
+
+The mismatches are taken to be reads that fell between the source's write and the copy, since the game does not stop for reads. That was not proven.
+
+The cape of `tin09` (object 2, 11 x 8, flags 0x180) in single steps, 8 pairs, ground anywhere from -10.2 to -9.95: segment error 1.50 mm, against 1.36 mm without stepping, worst position 14.77 mm. So stepping is no better than not stepping on this sheet, and this cape is not exact. Tina stood near y = -9 on this stage. All 476 vertices of object 2 in the cape's area are written by the viewer.
+
 ### Other kinds
 
 The switch in `sub_00057370` fixes the offsets of kinds 1, 2, 4, 5, 7, 12, 15, 16, 250 and 251 (table at `0x57448`). It does not move kind 3, whose record has no offsets. `sub_0005A740` also calls `sub_00059750` (byte +5), `sub_00053680` (byte +4), `sub_00059C90` (byte +9) and `sub_00057550` (byte +0xA). Not ported, and which kind each runs was not fully matched. `sub_000587F0` sets the bodies up, with its own switch at `0x58BE4` and `0x58BF4`; kinds it has no case for go to `sub_00054890` and count in byte +5. Kind 8 appears on Helena's costumes: `05 00 23 00` on `hel08` names bone 5 and object 35, and bytes in the record look like object 36 and more. So objects 35 to 38 are probably one jointed item, not checked.

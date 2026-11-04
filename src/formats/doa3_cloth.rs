@@ -964,6 +964,10 @@ mod tests {
                         .map(|c| (cloth.particles()[c * rows].position - after[c * rows].position).length())
                         .fold(0.0, f32::max);
                     roots.entry(k).or_insert_with(Vec::new).push(root_error);
+                    if std::env::var("DOA2U_WRITTEN").is_ok() {
+                        let list: Vec<String> = cloth.vertex_positions(&nodes[fighter]).iter().map(|(v, _)| v.to_string()).collect();
+                        println!("written {k} {}", list.join(" "));
+                    }
                     if std::env::var("DOA2U_PARTICLES").is_ok() {
                         // Particle by particle, to see where a sheet parts from the game.
                         println!("record {k}: {} x {}", cloth.columns, rows);

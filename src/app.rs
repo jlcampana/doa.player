@@ -345,6 +345,8 @@ pub struct Doa3Chains {
     /// Hand poses of each motion, by motion ID.
     pub hand_events: HashMap<u16, Vec<HandEvent>>,
     pub character: usize,
+    /// DOA2U: objects whose positions follow another object.
+    pub copies: Vec<doa2u::VertexCopy>,
 }
 
 pub struct Doa3Chest {
@@ -665,6 +667,7 @@ impl App {
             face: doa2u::face(&cat)?,
             hand_events: Default::default(),
             character: id,
+            copies: doa2u::vertex_copies(&cat, &xpr)?,
         };
         let chest = chest_morph.and_then(|(object, groups)| {
             let piece = chain_piece_of_chest?;
@@ -913,6 +916,7 @@ impl App {
             face,
             hand_events,
             character: roster.id,
+            copies: Vec::new(),
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains });
         self.game_clock = 0.0;
@@ -1095,6 +1099,10 @@ impl App {
                                 }),
                             );
                         }
+                    }
+                    for copy in &soft.copies {
+                        let (Some(&Some((from, _))), Some(&Some((to, _)))) = (soft.pieces.get(copy.from), soft.pieces.get(copy.to)) else { continue };
+                        self.mesh.copy_rest_positions(from, to, &copy.links);
                     }
                 }
                 self.mesh.apply_pose(&self.ctx.queue, &nodes);
