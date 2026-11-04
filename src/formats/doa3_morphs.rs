@@ -243,6 +243,7 @@ pub struct PoseHand {
     pub object: usize,
     pub vertices: Vec<Vec<usize>>,
     pub shapes: Vec<Vec<[f32; 3]>>,
+    pub normal_vertices: Vec<Vec<usize>>,
     pub normals: Vec<Vec<[f32; 3]>>,
     from: usize,
     to: usize,
@@ -251,8 +252,14 @@ pub struct PoseHand {
 }
 
 impl PoseHand {
-    pub fn new(object: usize, vertices: Vec<Vec<usize>>, shapes: Vec<Vec<[f32; 3]>>, normals: Vec<Vec<[f32; 3]>>) -> Self {
-        Self { object, vertices, shapes, normals, from: 0, to: 0, weight: 1.0 }
+    pub fn new(
+        object: usize,
+        vertices: Vec<Vec<usize>>,
+        shapes: Vec<Vec<[f32; 3]>>,
+        normal_vertices: Vec<Vec<usize>>,
+        normals: Vec<Vec<[f32; 3]>>,
+    ) -> Self {
+        Self { object, vertices, shapes, normal_vertices, normals, from: 0, to: 0, weight: 1.0 }
     }
 
     /// Advances one game frame. Poses the costume does not have are ignored.
@@ -265,20 +272,20 @@ impl PoseHand {
         self.weight = (self.weight + rate).min(1.0);
     }
 
-    fn blend<'a>(&'a self, list: &'a [Vec<[f32; 3]>]) -> impl Iterator<Item = (&'a [usize], [f32; 3])> + 'a {
+    fn blend<'a>(&'a self, groups: &'a [Vec<usize>], list: &'a [Vec<[f32; 3]>]) -> impl Iterator<Item = (&'a [usize], [f32; 3])> + 'a {
         let (from, to, weight) = (&list[self.from], &list[self.to], self.weight);
-        self.vertices.iter().enumerate().map(move |(i, group)| {
+        groups.iter().enumerate().map(move |(i, group)| {
             let mix = |axis: usize| from[i][axis] + (to[i][axis] - from[i][axis]) * weight;
             (group.as_slice(), [mix(0), mix(1), mix(2)])
         })
     }
 
     pub fn positions(&self) -> impl Iterator<Item = (&[usize], [f32; 3])> {
-        self.blend(&self.shapes)
+        self.blend(&self.vertices, &self.shapes)
     }
 
     pub fn normals(&self) -> impl Iterator<Item = (&[usize], [f32; 3])> {
-        self.blend(&self.normals)
+        self.blend(&self.normal_vertices, &self.normals)
     }
 }
 
@@ -580,7 +587,7 @@ mod tests {
     #[test]
     fn pose_hand_blends_from_the_last_pose() {
         let shape = |x: f32| vec![[x, 0.0, 0.0]];
-        let mut hand = PoseHand::new(3, vec![vec![7]], vec![shape(0.0), shape(1.0), shape(2.0)], vec![shape(0.0), shape(0.0), shape(0.0)]);
+        let mut hand = PoseHand::new(3, vec![vec![7]], vec![shape(0.0), shape(1.0), shape(2.0)], vec![vec![7]], vec![shape(0.0), shape(0.0), shape(0.0)]);
         let x = |hand: &PoseHand| hand.positions().next().unwrap().1[0];
         assert_eq!(x(&hand), 0.0);
         hand.step(2, 0.25);

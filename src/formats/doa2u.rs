@@ -385,22 +385,30 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
         let raw_object = read_u32(cat, entry + 4)?;
         let count = read_u32(cat, entry + 8)? as usize;
         let table = base + read_u32(cat, entry + 0x10)? as usize;
-        let mut list = base + read_u32(cat, entry + 0x14)? as usize;
+        let list = base + read_u32(cat, entry + 0x14)? as usize;
         let mirror = raw_object & 0x8000_0000 != 0;
-        let mut vertices = Vec::with_capacity(count);
-        for _ in 0..count {
-            let mut group = Vec::new();
-            loop {
-                let value = read_u32(cat, list)?;
-                list += 4;
-                group.push(((value & !1) / 32) as usize);
-                if value & 1 == 0 {
-                    break;
+        // Lists of byte offsets, to the position or to the normal 12 bytes after it. The
+        // low bit means another follows. Normals have their own groups and count.
+        let read_groups = |mut list: usize, count: usize| -> Result<Vec<Vec<usize>>> {
+            let mut groups = Vec::with_capacity(count);
+            for _ in 0..count {
+                let mut group = Vec::new();
+                loop {
+                    let value = read_u32(cat, list)?;
+                    list += 4;
+                    group.push(((value & !1) / 32) as usize);
+                    if value & 1 == 0 {
+                        break;
+                    }
                 }
+                groups.push(group);
             }
-            vertices.push(group);
-        }
-        let read_list = |at: usize| -> Result<Vec<[f32; 3]>> {
+            Ok(groups)
+        };
+        let vertices = read_groups(list, count)?;
+        let normal_count = read_u32(cat, entry + 0xC)? as usize;
+        let normal_vertices = read_groups(base + read_u32(cat, entry + 0x18)? as usize, normal_count)?;
+        let read_list = |at: usize, count: usize| -> Result<Vec<[f32; 3]>> {
             (0..count)
                 .map(|group| {
                     let bytes = slice(cat, at + group * 12, 12)?;
@@ -412,13 +420,13 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
         let mut shapes = Vec::with_capacity(targets);
         let mut normals = Vec::with_capacity(targets);
         for target in 0..targets {
-            shapes.push(read_list(base + read_u32(cat, table + target * 8)? as usize)?);
-            normals.push(read_list(base + read_u32(cat, table + target * 8 + 4)? as usize)?);
+            shapes.push(read_list(base + read_u32(cat, table + target * 8)? as usize, count)?);
+            normals.push(read_list(base + read_u32(cat, table + target * 8 + 4)? as usize, normal_count)?);
         }
         if shapes.is_empty() {
             continue;
         }
-        hands.push(crate::formats::doa3_morphs::PoseHand::new((raw_object & 0xFF) as usize, vertices, shapes, normals));
+        hands.push(crate::formats::doa3_morphs::PoseHand::new((raw_object & 0xFF) as usize, vertices, shapes, normal_vertices, normals));
     }
     Ok(hands)
 }

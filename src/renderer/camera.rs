@@ -55,9 +55,36 @@ impl Camera {
         );
     }
 
+    /// The ray through a window position, as origin and direction.
+    pub fn ray(&self, x: f32, y: f32, width: f32, height: f32) -> (Vec3, Vec3) {
+        let ndc = glam::Vec4::new(x / width * 2.0 - 1.0, 1.0 - y / height * 2.0, 1.0, 1.0);
+        let far = self.view_proj().inverse() * ndc;
+        let origin = self.position();
+        (origin, (far.truncate() / far.w - origin).normalize())
+    }
+
+    /// Radius per unit of distance of a number of pixels, for a window height.
+    pub fn pixel_spread(&self, pixels: f32, height: f32) -> f32 {
+        (self.fov_y * 0.5).tan() * 2.0 * pixels / height
+    }
+
+    /// Orbits around a new point from now on, keeping the camera where it is.
+    /// The view turns to face the point, so it recenters on it.
+    pub fn orbit_around(&mut self, point: Vec3) {
+        let offset = self.position() - point;
+        let distance = offset.length();
+        if distance < 1e-3 {
+            return;
+        }
+        self.target = point;
+        self.distance = distance;
+        self.yaw = offset.x.atan2(offset.z);
+        self.pitch = (offset.y / distance).asin();
+    }
+
     /// Handle scroll for zoom.
     pub fn zoom(&mut self, delta: f32) {
-        self.distance = (self.distance - delta * 0.3).clamp(0.5, 50.0);
+        self.distance = (self.distance - delta * 0.3 * (self.distance * 0.3).min(1.0)).clamp(0.1, 50.0);
     }
 
     /// Pan the target in camera-relative X/Y.
@@ -79,5 +106,28 @@ impl Camera {
         self.distance = h * 1.2;
         self.pitch = 0.1;
         self.yaw = std::f32::consts::FRAC_PI_4;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orbiting_around_a_point_keeps_the_camera_in_place() {
+        let mut camera = Camera::new(1.5);
+        let before = camera.position();
+        let point = Vec3::new(0.3, 1.4, -0.2);
+        camera.orbit_around(point);
+        assert!(camera.position().distance(before) < 1e-4);
+        assert_eq!(camera.target, point);
+    }
+
+    #[test]
+    fn the_ray_through_the_center_looks_at_the_target() {
+        let camera = Camera::new(1.5);
+        let (origin, direction) = camera.ray(300.0, 200.0, 600.0, 400.0);
+        let to_target = (camera.target - origin).normalize();
+        assert!(direction.distance(to_target) < 1e-4, "{direction} {to_target}");
     }
 }

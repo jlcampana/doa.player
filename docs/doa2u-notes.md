@@ -207,7 +207,7 @@ Compared with the game: `hel08` and `kas00` by eye against one screenshot, in ot
 
 ## Hands
 
-`apv` entries 0 and 1 (`doa2u::hands`). Entry 1's object has the high bit set, which means its shapes are the other hand's with X negated. Each entry has 11 to 20 targets by costume, and the table's two pointers per target are the shape and its normals (lengths of 1 checked on `lei04`).
+`apv` entries 0 and 1 (`doa2u::hands`). Entry 1's object has the high bit set, which means its shapes are the other hand's with X negated. Each entry has 11 to 20 targets by costume, and the table's two pointers per target are the shape and its normals. +8 and +0x14 are the positions' group count and list. +0xC and +0x18 are the normals' own, whose offsets point at the normal, 12 bytes into the vertex.
 
 A pose is the target of the same number. The move scripts in the character's `.bin` use DOA3's format (`parse_hand_events`). State per fighter is at `0x852F40`, stride 0xE0, one block per hand at +0 and +0x70: +0x14 and +0x18 point at the table entries being blended, +0x20 and +0x24 are their weights, +0x40 the script's time, +0x60 the pose.
 

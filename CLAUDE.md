@@ -62,6 +62,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 - `tools/re/doa2u_cloth_pairs.py`, `tools/re/doa2u_chain_pairs.py`: consecutive particle frames. They wait for quiet, because reads otherwise catch sheets half written.
 - `tools/re/doa2u_copy_check.py`: checks kind 250 copies against a capture.
 - `tools/re/doa2u_lights.py`: lists the D3D lights the game enables.
+- `tools/re/doa2u_normal_check.py`: per object in a capture, how many positions and normals the game changes.
 - `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping.
 - Ignored tests: `list_costume_objects`, `joint_pieces_match_captured_vertices`, `captured_tracks_are_found_in_motions`, `cloth_follows_captured_vertices`, `doa2u_single_steps`, `doa2u_chain_single_steps`. Each reads its inputs from environment variables, named in its comment.
 - Captures are in `target/captures/`, not tracked. `cargo clean` deletes them, and the tools above recreate them.

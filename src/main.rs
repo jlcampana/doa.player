@@ -94,7 +94,16 @@ impl ApplicationHandler for Handler {
             }
             WindowEvent::MouseInput { button, state, .. } if !egui_consumed => {
                 match (button, state) {
-                    (MouseButton::Left, ElementState::Pressed) => self.mouse_left_down = true,
+                    (MouseButton::Left, ElementState::Pressed) => {
+                        self.mouse_left_down = true;
+                        // Rotates around the point of the character under the cursor.
+                        let size = window.inner_size();
+                        let (width, height) = (size.width as f32, size.height as f32);
+                        let (origin, direction) = app.camera.ray(self.last_pos.0 as f32, self.last_pos.1 as f32, width, height);
+                        if let Some(point) = app.mesh.pick(origin, direction, app.camera.pixel_spread(6.0, height)) {
+                            app.camera.orbit_around(point);
+                        }
+                    }
                     (MouseButton::Left, ElementState::Released) => self.mouse_left_down = false,
                     (MouseButton::Right, ElementState::Pressed) => self.mouse_right_down = true,
                     (MouseButton::Right, ElementState::Released) => self.mouse_right_down = false,

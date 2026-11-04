@@ -59,7 +59,11 @@ const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLi
 
 /// Lights read from the game while it draws fighters, by stage. Names with a number are provisional: the number is the
 /// byte read at the time, which does not identify a stage. See `doa2u_lights.py`.
-pub const DOA2U_LIGHTS: [(&str, SceneLights); 8] = [
+const fn with_ambient(lights: SceneLights, rgb: [u8; 3]) -> SceneLights {
+    SceneLights { ambient: [rgb[0] as f32 / 255.0, rgb[1] as f32 / 255.0, rgb[2] as f32 / 255.0], lights: lights.lights }
+}
+
+pub const DOA2U_LIGHTS: [(&str, SceneLights); 10] = [
     ("Desert", stage_lights(0x5E, [
         ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
         ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
@@ -111,6 +115,19 @@ pub const DOA2U_LIGHTS: [(&str, SceneLights); 8] = [
         ([-0.335, 0.098, -0.937], [0.26, 0.28, 0.21]),
         ([0.97, -0.147, -0.193], [0.36, 0.6, 0.44]),
         ([0.415, 0.243, 0.877], [0.29, 0.24, 0.17]),
+    ])),
+    // Two more lights turn slowly in the game with no color, for the 30 s read.
+    ("Disco", with_ambient(stage_lights(0, [
+        ([0.904, 0.0, 0.428], [0.42, 0.33, 0.17]),
+        ([-0.884, 0.29, -0.366], [0.17, 0.35, 0.47]),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+    ]), [0x4C, 0x5E, 0x4C])),
+    ("Beach", stage_lights(0x5E, [
+        ([-0.539, -0.428, -0.726], [0.61, 0.53, 0.48]),
+        ([0.584, -0.195, -0.788], [0.74, 0.73, 0.63]),
+        ([-0.865, 0.29, 0.409], [0.2, 0.24, 0.41]),
+        ([0.668, -0.098, 0.737], [0.42, 0.4, 0.32]),
     ])),
 ];
 
@@ -343,6 +360,13 @@ impl MeshRenderer {
     /// The lights for models whose materials have a look. None keeps the viewer's own shading.
     pub fn set_lights(&mut self, lights: Option<SceneLights>) {
         self.lights = lights;
+    }
+
+    /// The first posed vertex along a ray, among those within `tolerance` of it, where
+    /// tolerance is a radius per unit of distance along the ray.
+    pub fn pick(&self, origin: glam::Vec3, direction: glam::Vec3, tolerance: f32) -> Option<glam::Vec3> {
+        let model = self.model.as_ref()?;
+        nearest_along_ray(model.posed_vertices.iter().map(|v| glam::Vec3::from(v.position)), origin, direction, tolerance)
     }
 
     /// Whether the current model uses the game's lighting.
@@ -580,6 +604,25 @@ impl MeshRenderer {
             }
         }
     }
+}
+
+fn nearest_along_ray(
+    points: impl Iterator<Item = glam::Vec3>,
+    origin: glam::Vec3,
+    direction: glam::Vec3,
+    tolerance: f32,
+) -> Option<glam::Vec3> {
+    let mut best: Option<(f32, glam::Vec3)> = None;
+    for point in points {
+        let along = (point - origin).dot(direction);
+        if along <= 0.0 || best.is_some_and(|(t, _)| along >= t) {
+            continue;
+        }
+        if (point - origin - direction * along).length() <= along * tolerance {
+            best = Some((along, point));
+        }
+    }
+    best.map(|(_, point)| point)
 }
 
 /// Floats in the uniform buffer. The material holds 6 vec4 in its own buffer.
@@ -825,3 +868,17 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    #[test]
+    fn picking_takes_the_nearest_point_on_the_ray() {
+        let points = [Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.01, -2.0), Vec3::new(1.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 3.0)];
+        let hit = nearest_along_ray(points.into_iter(), Vec3::ZERO, Vec3::NEG_Z, 0.01);
+        assert_eq!(hit, Some(points[1]));
+        assert_eq!(nearest_along_ray(points.into_iter(), Vec3::ZERO, Vec3::Y, 0.001), None);
+    }
+}
