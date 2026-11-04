@@ -82,5 +82,6 @@ Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon a
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
 - Hair, cloth, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
+- Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. Of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have a record of type 7 (`sub_00060880`), which is not read. Its purpose is unknown.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
 - No chest spring: it is not ported for DOA2U.
