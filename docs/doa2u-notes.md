@@ -31,7 +31,7 @@ The XPR has DOA3's outer layout. Records differ: see the top of `doa2u.rs`. Word
 CAT words 1 to 4 are section offsets:
 
 - Word 1: `(value, type)` records, read by `sub_0005B9F0`. Value is relative to the section. It ends at type 0.
-  - Type 1: the draw list, used here. Type 9 has the same form with low detail objects. Type -1 is a version, used for the forearm twist. Type 10 sets upper arm flags. Types 3, 5, 6, 7, 11, 12 and 18 are not read yet.
+  - Type 1: the draw list, used here. Type 9 has the same form with low detail objects. Type -1 is a version, used for the forearm twist. Type 10 sets upper arm flags. Types 3, 5, 6, 7, 11, 12 and 18 are not read yet. Type 6 starts with the magic `apa` and is read by `sub_000602F0`.
   - The switch is at `0x5BBAC`, indexed by type + 1. Slots at 0x80 and up in a draw list go through `0x64C930` (`sub_0005AF30`).
   - Draw list: three bytes per object, kind, slot, object. Kind 1 is one matrix (`sub_0005AF30`). Kind 2 blends matrices by vertex weight (`sub_0005B940`, table at `0x64C8B0`).
   - Slots below 0x80 are matrices. 0x80 and up go through the table at `0x64C9B0`: 128 and 129 are 24 and 25.
@@ -58,7 +58,7 @@ The solve is DOA3's in outline, with these differences:
   - Under 2 or absent (52 costumes): the forearm rolled by `atan2`, as in DOA3. Not compared with the game.
   - One file gives 119. It may not be a costume; not looked at.
 - Upper arms: CAT record type 10 (`0x10100` in 74 costumes) sets flags at `0x850710`. With them on, upper arms 14 and 8 take the chest's frame turned to the arm's X, moved 0.3 of the way back to the arm's own frame (`sub_00285B40`).
-- Matrices 28 and 29 are the hand ends of the twists. They are computed by the game and not by the viewer.
+- Matrices 28 and 29 are the hand ends of the twists: the rotation of 24 and 25 at the hand. Joint pieces of forearms use them as parents.
 
 ### Measurements
 
@@ -74,6 +74,8 @@ Against frames of a CPU match, Zack (ID 0) against Bayman (ID 24), costumes with
 
 The last line comes from `captured_tracks_are_found_in_motions`: 13 of 20 frames of Zack were found in `zack.mot` or `comon.mot`. Frames not found are taken to be blends between motions, which was not checked. Tina (ID 1) against Lei Fang (ID 12), both with the upper arm flags on, 12 frames: arms 0.011, and 0.64 without the flags; hands 0.002; twists 0.003. Legs are within 0.002 except in one frame, where one leg is off by 0.12 and its foot by 5 cm. Foot rotations also differ, by up to 0.10, in 4 frames, with their positions right. A sloped floor would explain the rotations, but this was not checked, and the one bad frame is unexplained.
 
+Joint pieces of `kas00`, with the game's matrices, against vertices read from the game over 8 frames: worst 7 mm, median under 1 mm, except the shoulders, objects 20 and 32, with a median of 1 cm and a worst of 2.6 cm. The cause is unknown.
+
 A read can also catch the tracks one frame ahead of the matrices, so `doa2u_live.py capture` drops frames whose pelvis does not match its tracks.
 
 Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon and `koryu` is Hitomi, per the user. The user selected Bayman, whose fighter had ID 24. It matched 13 frames in `sambo.mot` and 10 in `bayman.mot`, with motion 184 found only in `sambo.mot`, and the CAT in memory was `bay00` (97% of sampled bytes equal, the next costume outside Bayman's about 5%). In a later match Leon had ID 8 with `leo00` in memory (98%), and Hitomi ID 21 with `kor00` (96%). Their poses were found in `bayman.mot` (6 of 36 frames) and in `koryu.mot` or `comon.mot` (8 of 24). The counts at `0x6E0F08` agree: 7 costumes for ID 8, 6 for ID 24.
@@ -82,6 +84,6 @@ Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon a
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
 - Hair, cloth, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
-- Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. Of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have a record of type 7. `sub_00060880` reads it as up to 4 texture slots, so it holds no objects.
+- Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
 - No chest spring: it is not ported for DOA2U.

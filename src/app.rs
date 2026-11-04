@@ -515,8 +515,7 @@ impl App {
         let drawn = doa2u::parse_drawn_objects(&cat, &skeleton)?;
         let style = doa2u::pose_style(&cat)?;
 
-        let table = u32::from_le_bytes(cat.get(0x10..0x14).context("truncated CAT")?.try_into()?) as usize;
-        let skins = doa3::parse_sparse_joint_skins(&cat, table);
+        let skins = doa2u::joint_skins(&cat)?;
 
         let texture_count = textures.len();
         fn draws_of(piece: &crate::formats::model::ModelPiece, texture_count: usize) -> Vec<(&[u32], Option<usize>, bool)> {

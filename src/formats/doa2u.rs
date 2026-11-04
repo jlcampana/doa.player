@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-use super::doa3::{Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
+use super::doa3::{parse_sparse_joint_skins, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
 const XPR_MAGIC: u32 = 0x3052_5058;
@@ -173,17 +173,9 @@ pub fn parse_drawn_objects(cat: &[u8], skeleton: &[Vec3; 17]) -> Result<Vec<Draw
     Ok(objects)
 }
 
-/// Turns a kind 1 slot into a node of `doa3::solve_pose`. 128 and 129 go through
-/// the table at 0x64C9B0 to the game's nodes 24 and 25, the forearm twists.
+/// Turns a kind 1 slot into a node. Slots 128 and up are matrix 24 and up.
 fn rigid_node(slot: u8) -> Option<usize> {
-    match slot {
-        0..=14 => Some(slot as usize),
-        17 => Some(21),
-        21 => Some(22),
-        128 => Some(19),
-        129 => Some(20),
-        _ => None,
-    }
+    node_of_matrix(if slot >= 128 { slot - 128 + 24 } else { slot })
 }
 
 /// Reads a kind 2 slot: thighs and shins, from the table at 0x64C8B0.
@@ -201,6 +193,47 @@ fn weighted_slot(slot: u8, skeleton: &[Vec3; 17]) -> Option<(usize, Bend)> {
 // ─── Pose ─────────────────────────────────────────────────────────────────────
 
 const TRACK_COUNT: usize = 44;
+
+/// The hand ends of the forearm twists: the game's matrices 28 and 29.
+pub const NODE_TWIST_ENDS: [usize; 2] = [23, 24];
+
+/// Turns a game matrix number into a viewer node. Slots 128 and up in a draw list
+/// are matrix 24 and up (table at 0x64C9B0). 16, 18, 19, 20, 22, 23, 26, 27, 30 and
+/// 31 are not built yet.
+fn node_of_matrix(matrix: u8) -> Option<usize> {
+    match matrix {
+        0..=14 => Some(matrix as usize),
+        17 => Some(NODE_EYES[0]),
+        21 => Some(NODE_EYES[1]),
+        24 => Some(NODE_TWIST[0]),
+        25 => Some(NODE_TWIST[1]),
+        28 => Some(NODE_TWIST_ENDS[0]),
+        29 => Some(NODE_TWIST_ENDS[1]),
+        _ => None,
+    }
+}
+
+/// Reads the joint pieces, with their parents as viewer nodes. Pieces whose
+/// parent has no node are left out, with a warning.
+pub fn joint_skins(cat: &[u8]) -> Result<Vec<JointSkin>> {
+    let table = read_u32(cat, 0x10)? as usize;
+    Ok(parse_sparse_joint_skins(cat, table)
+        .into_iter()
+        .filter_map(|mut skin| {
+            // parse_joint_skin has already mapped the hands' parents to viewer nodes.
+            if skin.parent != NODE_TWIST[0] && skin.parent != NODE_TWIST[1] || matches!(skin.node, 5 | 11) == false {
+                match node_of_matrix(skin.parent as u8) {
+                    Some(parent) => skin.parent = parent,
+                    None => {
+                        log::warn!("Joint piece of object {} has parent matrix {}, which has no node", skin.object, skin.parent);
+                        return None;
+                    }
+                }
+            }
+            Some(skin)
+        })
+        .collect())
+}
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
 /// `sub_000E9430`). Each `*_turn` is three quarter turn counts for X, Y and Z.
@@ -341,8 +374,11 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], style: P
         nodes[limb.end] = Mat4::from_translation(end) * euler(&values[3..6]);
     }
 
-    for (out, mid, end, sign) in [(NODE_TWIST[1], 10, 11, -1.0f32), (NODE_TWIST[0], 4, 5, 1.0)] {
-        nodes[out] = match style.twist {
+    for (out, tip, mid, end, sign) in [
+        (NODE_TWIST[1], NODE_TWIST_ENDS[1], 10, 11, -1.0f32),
+        (NODE_TWIST[0], NODE_TWIST_ENDS[0], 4, 5, 1.0),
+    ] {
+        (nodes[out], nodes[tip]) = match style.twist {
             ForearmTwist::AlignHand => {
                 let turn = Quat::from_rotation_arc(
                     nodes[end].x_axis.truncate().normalize(),
@@ -350,11 +386,14 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], skeleton: &[Vec3; 17], style: P
                 );
                 let mut matrix = Mat4::from_quat(turn) * Mat4::from_mat3(Mat3::from_mat4(nodes[end]));
                 matrix.w_axis = nodes[mid].w_axis;
-                matrix
+                let mut tip_matrix = matrix;
+                tip_matrix.w_axis = nodes[end].w_axis;
+                (matrix, tip_matrix)
             }
             ForearmTwist::RollForearm => {
                 let hand_z = nodes[mid].inverse().transform_vector3(nodes[end].z_axis.truncate());
-                nodes[mid] * Mat4::from_rotation_z((sign * hand_z.y).atan2(sign * hand_z.x))
+                let angle = (sign * hand_z.y).atan2(sign * hand_z.x);
+                (nodes[mid] * Mat4::from_rotation_z(angle), nodes[mid] * Mat4::from_rotation_z(angle / 2.0))
             }
         };
     }
@@ -561,7 +600,7 @@ mod tests {
                 &[(14, 14), (10, 10), (8, 8), (4, 4)],
                 &[(12, 12), (13, 13), (6, 6), (7, 7)],
                 &[(11, 11), (5, 5)],
-                &[(NODE_TWIST[0], 24), (NODE_TWIST[1], 25)],
+                &[(NODE_TWIST[0], 24), (NODE_TWIST[1], 25), (NODE_TWIST_ENDS[0], 28), (NODE_TWIST_ENDS[1], 29)],
             ];
             for (slot, group) in worst.iter_mut().zip(pairs) {
                 for &(ours, theirs) in group {
@@ -686,8 +725,7 @@ mod tests {
             let clear = pixels.filter(|p| p[3] < 26).count();
             println!("texture {i} {}x{} clear {}%", texture.width, texture.height, clear * 100 / total);
         }
-        let table = read_u32(&cat, 0x10).unwrap() as usize;
-        let skins = crate::formats::doa3::parse_sparse_joint_skins(&cat, table);
+        let skins = joint_skins(&cat).unwrap();
         for (i, piece) in model.pieces.iter().enumerate() {
             let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             for vertex in &piece.vertices {
@@ -716,6 +754,57 @@ mod tests {
                 }
             }
             println!("{i:3} v{:5} w{} [{:.2} {:.2} {:.2}]..[{:.2} {:.2} {:.2}] {uses:?} tex {textures:?}", piece.vertices.len(), model.weights[i].is_some() as u8, low.x, low.y, low.z, high.x, high.y, high.z);
+        }
+    }
+
+    /// Compares joint pieces with vertices read from the game, using the game's
+    /// own matrices. DOA2U_JOINTS is a capture of the object DOA2U_COSTUME.
+    #[test]
+    #[ignore]
+    fn joint_pieces_match_captured_vertices() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let stem = std::env::var("DOA2U_COSTUME").expect("DOA2U_COSTUME");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+        decrypt_cat(&mut cat).unwrap();
+        let skins = joint_skins(&cat).unwrap();
+        let text = std::fs::read_to_string(std::env::var("DOA2U_JOINTS").expect("DOA2U_JOINTS")).unwrap();
+        let mut nodes = [Mat4::IDENTITY; NODE_COUNT];
+        let mut errors: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let kind = words.next().unwrap();
+            if kind == "matrices" {
+                let m: Vec<f32> = words.map(|v| v.parse().unwrap()).collect();
+                let game = |i: usize| Mat4::from_cols_slice(&m[i * 16..i * 16 + 16]);
+                for i in 0..=14 {
+                    nodes[i] = game(i);
+                }
+                nodes[NODE_TWIST[0]] = game(24);
+                nodes[NODE_TWIST[1]] = game(25);
+                nodes[NODE_TWIST_ENDS[0]] = game(28);
+                nodes[NODE_TWIST_ENDS[1]] = game(29);
+            } else {
+                let object: usize = words.next().unwrap().parse().unwrap();
+                let v: Vec<f32> = words.map(|v| v.parse().unwrap()).collect();
+                let Some(skin) = skins.iter().find(|s| s.object == object) else { continue };
+                let (own, parent) = (nodes[skin.node], nodes[skin.parent]);
+                for vertex in &skin.vertices {
+                    let live = own.transform_point3(Vec3::new(v[vertex.vertex * 3], v[vertex.vertex * 3 + 1], v[vertex.vertex * 3 + 2]));
+                    let ours = if vertex.weight >= 1.0 {
+                        parent.transform_point3(vertex.position)
+                    } else {
+                        let (rotation, origin) = skin.blend.frame(&own, &parent, vertex.weight);
+                        rotation * vertex.position + origin
+                    };
+                    errors.entry(object).or_default().push(ours.distance(live));
+                }
+            }
+        }
+        for (object, list) in &mut errors {
+            list.sort_by(f32::total_cmp);
+            let skin = skins.iter().find(|s| s.object == *object).unwrap();
+            println!("object {object} node {} parent {}: {} samples, median {:.4}, worst {:.4}", skin.node, skin.parent, list.len(), list[list.len() / 2], list[list.len() - 1]);
         }
     }
 

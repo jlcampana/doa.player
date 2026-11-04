@@ -7,8 +7,9 @@
 use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
 
-/// 15 skeleton nodes, the forearm twist nodes 19 and 20, and the two eyes.
-pub const NODE_COUNT: usize = 23;
+/// 15 skeleton nodes, the forearm twist nodes 19 and 20, the two eyes, and two
+/// nodes only DOA2U uses (`doa2u::NODE_TWIST_ENDS`).
+pub const NODE_COUNT: usize = 25;
 pub const NODE_TWIST: [usize; 2] = [19, 20];
 pub const NODE_EYES: [usize; 2] = [21, 22];
 const NODE_ELBOWS_AND_KNEES: [usize; 4] = [4, 7, 10, 13];

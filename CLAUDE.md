@@ -31,15 +31,19 @@ Limbs use the game's own solve, `doa2u::solve_pose`, measured against a running 
 
 Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same, so this is the viewer's convention, not a pose bug.
 
-## Current work: Kasumi's costume in DOA2U
+## Current work: faults on Kasumi's `kas00` in DOA2U
 
-The user reports faults from the head down on `kas00`: chest see-through, feet and shin pieces wrong. Not solved. Known so far:
+Reported by the user from the head down: chest see-through, feet and shin pieces wrong. Measured against a running match:
 
-- The chest and foot objects are drawn, and their textures have no transparent pixels, so the shader's alpha discard is not the cause.
-- Objects 0, 12 to 18, 25, 26, 37, 38, 42 and 43 are in no draw list. CAT types 3 and 6 are the next thing to read.
-- Type 7 is only a list of texture slots (`sub_00060880`), not objects.
+- Fixed: forearm joint pieces use matrices 28 and 29, which had no node, so the renderer skipped them. Joint pieces now match the game within 7 mm, except shoulders (objects 20 and 32), worst 2.6 cm, unexplained.
+- Shin pieces (object 27) and the foot (object 22) are not rewritten by the game. Whether their look is right has not been compared.
+- The game rewrites objects every frame: hair and fringe in objects 0 and 1, the front panel in 4, cords in 17, 18, 25, 26, 37 and 38, and the torso front in 11. These are soft bodies, not parsing errors.
+- The see-through chest is not explained. Textures have no transparent pixels, and object 11 is drawn.
+- Not read yet: objects 15, 16, 42, 43 are in no draw list and do not change. Object 0 is in no draw list either. Records of type 3 and type 6 (`apa!`, `sub_000602F0`).
 
-`list_costume_objects` lists a costume's objects, materials and textures. Diagnose this from data rather than from close-up renders of the body.
+Limit agreed with the user's request history: no chest spring or body soft bodies for Kasumi, Ayane and Hitomi, including skirts. Hair is separate. Develop cloth on adult characters: Helena's coat, Tina's `tin16`, Lei Fang. Diagnose Kasumi from data rather than from close-up renders of the body.
+
+`list_costume_objects` lists a costume's objects and materials. `joint_pieces_match_captured_vertices` compares joint pieces with a capture.
 
 ## Development notes
 
@@ -49,7 +53,7 @@ The user reports faults from the head down on `kas00`: chest see-through, feet a
 
 ## Unverified in DOA2U
 
-- Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Head, feet on slopes, drawing and joint pieces are not.
+- Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
 - Back-face flag: OBJ material +0xC also holds 5 and 8.
 - Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
