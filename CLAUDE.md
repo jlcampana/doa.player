@@ -64,6 +64,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 - `tools/re/doa2u_cloth_pairs.py`, `tools/re/doa2u_chain_pairs.py`: consecutive particle frames. They wait for quiet, because reads otherwise catch sheets half written.
 - `tools/re/doa2u_copy_check.py`: checks kind 250 copies against a capture.
 - `tools/re/doa2u_lights.py`: lists the D3D lights the game enables.
+- `tools/re/doa2u_stage_lights.py`: lists the light records in the executable.
 - `tools/re/doa2u_normal_check.py`: per object in a capture, how many positions and normals the game changes.
 - `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping.
 - Ignored tests: `list_costume_objects`, `joint_pieces_match_captured_vertices`, `captured_tracks_are_found_in_motions`, `cloth_follows_captured_vertices`, `doa2u_single_steps`, `doa2u_chain_single_steps`. Each reads its inputs from environment variables, named in its comment.
@@ -73,7 +74,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 - Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character. Validate close-ups on an adult, as the limit above says, not on Kasumi, which an older version of this note suggested.
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
-- `s*_dat.bin` in the archives may hold each stage's lights, which would avoid measuring them. Not looked at.
+- All stage lights are in the executable (`tools/re/doa2u_stage_lights.py`, see the notes), but which set is whose is unknown. Finding that would replace measuring stage by stage.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
 
 ## Unverified in DOA2U
@@ -88,7 +89,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 1. DOA2U: stages, other soft body kinds.
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
-4. Unlocking everything: last of all, by user request.
+4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Other unlockables were not looked for.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
 
 ## Development principles

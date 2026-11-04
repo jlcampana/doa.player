@@ -213,6 +213,8 @@ The viewer's own additions, not from the game: mipmaps and 16x anisotropic filte
 
 Colors in the game have no gamma step. The viewer's textures and window are sRGB, so its shader converts to stored values and back.
 
+Light records are in the executable, 0x50 bytes each, and `tools/re/doa2u_stage_lights.py` lists them: 773 records in 131 runs, from `0x6BB000` to `0x752000` or so. +0 kind (0 point in the sets seen, 1 directional, by `0x7AFF38`), +4 a color, +0x10 diffuse, +0x1C and +0x20 angles, +0x24 position, +0x30 attenuation, +0x3C range, +0x40 falloff, +0x44 and +0x48 cone angles, +0x4C specular factor. Direction is (-cos a sin b, -sin a, -cos a cos b), in 0x10000 per turn. The first record of a set seems to hold the set's ambient in its color: 0.37, 0.25, 0.34, 0.25, 0.3, 0.33 and (0.3, 0.37, 0.3) agree with Desert, Area 8, Cloudy, Laboratory, Storm, Blue sky and Disco. `sub_00285BE0` copies a record to the live lights. Which set belongs to which stage was not found: no pointers to these records were found in the data around them, and the stage's `s*_dat.bin` holds none of the values. With that, the selector could list every stage with no measuring.
+
 Compared with the game: `hel08` and `kas00` by eye against one screenshot, in other poses and angles. Not measured by pixel. Differences to expect:
 
 - The viewer holds the lights read so far (`DOA2U_LIGHTS`, picked in the Background panel or with `--lights N`). `0x87CFA4` indexed by `0x8783A9` does not identify a stage: lists `[8, 48]`, `[6, 48]`, `[41, 48]` and `[16, 15]` were read, and the value 6 came with two different sets of lights, one of them read with an older filter. `sub_000D79F0` sets those bytes, and what they mean was not read. So "Area 8" and "Area 48" are provisional names, to replace with what the user sees in each. To add a stage, run `tools/re/doa2u_lights.py 8` there and take the most frequent set. Fighters face a fixed way in the viewer, so the light falls differently from any given moment in play.
@@ -280,6 +282,10 @@ The `A0` series is DOA3's format, both `cat` (plain, starting with 1) and `xpr` 
 `voice.afs`: 746 entries, of which 712 are named `.adx` (58 of those are `dummy`). 595 are mono at 22050 Hz, and the rest are stereo or other rates. Prefixes: `ks`, `ay`, `zk`, `tn`, `ry`, `le`, `jn`, `ba`, `by`, `gn`, `ln`, `tg`, `ei`, `he`. `by` as Bayman and `ln` as Leon are inferred. No prefix for Hitomi was found. `rd`, `gr` and `lt` hold the same announcer lines in three sets, and `v_` holds others; what tells them apart was not read.
 
 `formats/adx.rs` follows the usual description of ADX. Against ffmpeg on all 712 clips, the 58 dummies are identical and the others are not: on one clip, an RMS difference of 30 on a signal of 6217, and a worst of 137. ffmpeg's first nonzero sample there, -27, is not a multiple of the block's scale of 7, so the two differ in more than coefficients, and which is exact was not settled. Playback writes a temporary WAV and runs `pw-play`, `paplay` or `aplay`. Not heard by Claude. `export_clips_for_comparison` writes the clips for such a comparison.
+
+## Unlocks
+
+Costumes offered in a slot come from a byte in the save, at +0x2ED8 from the save in memory (pointer at `0x87CFA8`), with slots by ID at `0x6959C0`, clamped to `0x6E0F08` (`sub_0011E410`). In this save, read from memory, all 15 are already at the maximum: 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 20, 20, 3, 6, 14. So nothing was changed. The save, `.recomp-storage/partition1/UDATA/54430006/*/ups.dat`, is 74056 bytes and looks encrypted, as the bytes in memory are not in it; its format was not read. Other unlockables, such as galleries, were not looked for. Characters and costumes the select screen does not offer are in the viewer anyway. DOA3's own tool is `tools/doa3_unlock_save.py`.
 
 ## Not done
 
