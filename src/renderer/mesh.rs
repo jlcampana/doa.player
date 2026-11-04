@@ -57,25 +57,32 @@ const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLi
     SceneLights { ambient: [ambient as f32 / 255.0; 3], lights: out }
 }
 
-/// Lights read from the game while it draws fighters, by stage. See `doa2u_lights.py`.
-pub const DOA2U_LIGHTS: [(&str, SceneLights); 3] = [
+/// Lights read from the game while it draws fighters, by area of a stage. See `doa2u_lights.py`.
+pub const DOA2U_LIGHTS: [(&str, SceneLights); 4] = [
     ("Desert", stage_lights(0x5E, [
         ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
         ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
         ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28]),
         ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12]),
     ])),
-    ("Stage 8", stage_lights(0x3F, [
+    ("Area 8", stage_lights(0x3F, [
         ([0.451, -0.29, -0.844], [0.78, 0.57, 0.42]),
         ([-0.677, -0.29, -0.677], [0.62, 0.41, 0.28]),
         ([0.36, 0.337, 0.87], [0.36, 0.22, 0.37]),
         ([-0.878, 0.098, 0.469], [0.2, 0.16, 0.38]),
     ])),
-    ("Stage 30", stage_lights(0x54, [
+    ("Area 30", stage_lights(0x54, [
         ([-0.628, -0.147, -0.765], [0.72, 0.6, 0.52]),
         ([0.451, -0.29, -0.844], [0.62, 0.54, 0.4]),
         ([0.664, 0.147, 0.733], [0.24, 0.28, 0.38]),
         ([-0.848, -0.147, 0.509], [0.36, 0.38, 0.3]),
+    ])),
+    // The same stage as area 8, in another part. It has three lights.
+    ("Area 48", stage_lights(0x5E, [
+        ([0.643, -0.29, -0.709], [0.48, 0.54, 0.63]),
+        ([0.884, -0.29, 0.366], [0.35, 0.39, 0.58]),
+        ([-0.773, 0.0, -0.634], [0.41, 0.29, 0.1]),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
     ])),
 ];
 

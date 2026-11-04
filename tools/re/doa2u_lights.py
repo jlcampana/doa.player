@@ -35,18 +35,27 @@ def main():
     for f in range(2):
         words = struct.unpack('<17I', g.r(0x850738 + 0x44 * f, 0x44))
         fighters.update(p for p in struct.unpack('<70I', g.r(words[0] & 0x0FFFFFFF, 280)) if p)
-    print('stage byte', g.r(0x87CFA4, 1)[0], 'at 0x87CFA4')
+    area = g.r(0x8783A9, 1)[0]
+    print('area', g.r(0x87CFA4 + area, 1)[0], 'index', area, 'list', list(g.r(0x87CFA4, 4)))
+    # The drawn object stays set after a fighter, while stage objects draw through other
+    # paths. So a read counts only once the next object drawn is also a fighter's.
     seen = {}
+    pending = []
+    last = None
     end = time.time() + float(sys.argv[1])
     while time.time() < end:
         drawn = struct.unpack('<I', g.r(DRAWN_OBJECT, 4))[0]
-        if drawn not in fighters:
-            continue
         ambient = struct.unpack('<I', g.r(AMBIENT, 4))[0]
         slots = struct.unpack('<8I', g.r(device + 0x7AC, 32))
         key = (ambient, tuple(light(g, s) for s in slots if s))
-        if struct.unpack('<I', g.r(DRAWN_OBJECT, 4))[0] == drawn:
-            seen[key] = seen.get(key, 0) + 1
+        if drawn != last:
+            if last in fighters and drawn in fighters:
+                for one in pending:
+                    seen[one] = seen.get(one, 0) + 1
+            pending = []
+            last = drawn
+        if drawn in fighters:
+            pending.append(key)
     for (ambient, lights), count in sorted(seen.items(), key=lambda kv: -kv[1])[:6]:
         print('seen', count, 'times, ambient', hex(ambient))
         for one in lights:
