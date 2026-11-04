@@ -102,17 +102,20 @@ State at +0x2090, stride `0x7C`. The file's record has DOA3's cloth layout (`doa
 - Flags 0x180 both write vertices with their own offsets (`sub_00050A50`).
 - Sheets can have 17 columns or more; the game limits columns to 27 and rows to 23. The floor is the stage's height (`sub_00146920`); the viewer has no stage.
 
-One step against the game's particles, wind included, median over 6 pairs per record, from `doa2u_single_steps` with `DOA2U_FLOOR=1.015`, on a roof stage:
+One step against the game's particles, median per record, from `doa2u_single_steps`, with `DOA2U_FLOOR` at the stage's ground. Wind was 0 in these captures, so wind is not tested here.
 
-| Sheet | Segment error, floor 0 | Segment error, floor 1.015 | Without stepping | Worst position, floor 1.015 |
+| Sheet | Pairs | Segment error | Without stepping | Worst position |
 | --- | --- | --- | --- | --- |
-| `tin16` skirt | 0.79 mm | 0.00 mm | 2.79 mm | 0.22 mm |
-| `hel00` coat 1 | 11.39 mm | 0.00 mm | 3.19 mm | 0.00 mm |
-| `hel00` coat 2 | 9.45 mm | 0.00 mm | 1.99 mm | 0.00 mm |
-| `hel00` coat 3 | 11.31 mm | 0.00 mm | 3.69 mm | 0.00 mm |
-| `hel00` object 0, two sheets | 0.00 mm | 0.00 mm | 0.58 and 0.66 mm | 0.00 mm |
+| `tin16` skirt | 6 | 0.00 mm | 2.79 mm | 0.01 mm |
+| `hel00` coat, 3 sheets | 6 | 0.00 mm | 1.99 to 3.69 mm | 0.00 mm |
+| `hel00` object 0, 2 sheets | 6 | 0.00 mm | 0.58, 0.66 mm | 0.00 mm |
+| `lei00` skirt, 2 sheets | 20 | 0.00 mm | 14.57, 8.06 mm | 0.01, 0.00 mm |
+| `lei04` skirt, 2 sheets | 20 | 0.00 mm | 14.08, 2.67 mm | 0.00 mm |
+| `lei04` trouser cuffs, 2 sheets | 20 | 0.16, 0.83 mm | 0.49, 3.95 mm | 1.38, 7.15 mm |
+| `tin09` cape | 8 | 1.03 mm | 1.36 mm | 6.01 mm |
+| `lei00` and `lei04` head strips, 4 sheets, flags 0x90 | 20 | 2.88 to 6.76 mm | 4.67 to 16.21 mm | 13.24 to 32.24 mm |
 
-So the error between captures was the stage's floor, which sits at about 1.015 on that stage and touches only sheets that reach it. The floor per row is the ground + 0.002 - 0.001 per row, as in DOA3. The game samples the ground once per sheet and frame (`sub_00146920`, plus the constant at `0x3C2E68`). 1.015 was read from where particles stop and then tried in steps of 0.002, and the stage's own height table was not read. The ground was flat under both fighters in this capture; slopes were not tried. The viewer's ground is 0 (`floor_height`), with the feet on it. Only the single step is measured, not a long run, where small errors could add up.
+The error between earlier captures was the stage's floor, at about 1.015 on that stage, which touches only sheets that reach it. The floor per row is the ground + 0.002 - 0.001 per row, as in DOA3. The game samples the ground once per sheet and frame (`sub_00146920`, plus the constant at `0x3C2E68`). 1.015 was read from where particles stop and then tried in steps of 0.002, and the stage's own height table was not read. The ground was flat under both fighters in this capture; slopes were not tried. The viewer's ground is 0 (`floor_height`), with the feet on it. Only the single step is measured, not a long run, where small errors could add up.
 
 Other costumes were not measured, including Lei Fang's. The viewer's Wind option uses a stand-in, as in DOA3, and it is off by default.
 
@@ -149,7 +152,23 @@ Checked against captured vertices, with each copy read from the game's source an
 
 The mismatches are taken to be reads that fell between the source's write and the copy, since the game does not stop for reads. That was not proven.
 
-The cape of `tin09` (object 2, 11 x 8, flags 0x180) in single steps, 8 pairs, ground anywhere from -10.2 to -9.95: segment error 1.50 mm, against 1.36 mm without stepping, worst position 14.77 mm. So stepping is no better than not stepping on this sheet, and this cape is not exact. Tina stood near y = -9 on this stage. All 476 vertices of object 2 in the cape's area are written by the viewer.
+### Limb slots in collisions
+
+A shape's bone of 0x80 and up is a slot, not a bone. `sub_0004B920` builds them per fighter, into `0x84A0C0` and their inverses into `0x849E40`: matrix M times turns about X, then Y, then Z, in quarter turns:
+
+| Slot | Matrix | Turns |
+| --- | --- | --- |
+| 0x82, 0x83 | 6, 7 | (1, 0, 1), (1, 2, -1) |
+| 0x84, 0x85 | 8, 4 | (0, 1, 0), (0, -1, 0) |
+| 0x86, 0x87 | 12, 13 | (1, 0, -1), (1, 2, 1) |
+| 0x88, 0x89 | 14, 10 | (0, -1, 0), (0, 1, 0) |
+
+They match the game's table exactly over 400 reads (largest difference 0.0000). The viewer used to skip these shapes, so skirts and capes went through the legs. A sheet's own bone can also be a slot in the game's code; records like that fail `plausible_record` and are not handled.
+
+Two more differences from DOA3, read in `sub_00051F20` and `sub_0004BFE0`:
+
+- A fold's length runs along the axis not in `axes` (`length_axis`). Legs run along Y. DOA3's port had Z fixed.
+- The tip collision of flag 4 does not restore the segment's length.
 
 ### Other kinds
 

@@ -7,7 +7,7 @@
 use glam::{Mat4, Vec3};
 
 use super::doa3_chains::{
-    find_sections, keep_above_floor, parse_shapes, read_f32, read_u32, read_vec3, with_length, Shape, ANGLE_UNITS,
+    find_sections, keep_above_floor, parse_shapes, read_f32, resolve_limb_slots, read_u32, read_vec3, with_length, Shape, ANGLE_UNITS,
     NO_VERTEX, POINT_LIST_END, VERTEX_STRIDE,
 };
 
@@ -90,6 +90,9 @@ struct JointFold {
     /// Its sign says on which side the joint folds.
     limit: f32,
     stiffness_factor: f32,
+    /// The component that runs along the tube. Z in DOA3's code; DOA2U's update chooses
+    /// it from the same field as `axes`, and its leg bones run along Y.
+    length_axis: usize,
 }
 
 impl JointFold {
@@ -111,6 +114,7 @@ impl JointFold {
             bend_end: read_f32(cat, at + 0x24)?,
             limit: read_f32(cat, at + 0x28)?,
             stiffness_factor: read_f32(cat, at + 0x30)?,
+            length_axis: 2,
         })
     }
 
@@ -257,6 +261,10 @@ pub fn parse_cloth_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
         .filter_map(|&offset| {
             let at = base + offset;
             let mut cloth = parse_record(cat, base, at)?;
+            resolve_limb_slots(&mut cloth.shapes);
+            if let Some(fold) = &mut cloth.fold {
+                fold.length_axis = 3 - fold.axes.0 - fold.axes.1;
+            }
             let all_flags = read_u32(cat, at + 8)?;
             let high_flags = (all_flags >> 8) as u8;
             cloth.wind_in_pull = true;
@@ -500,7 +508,8 @@ impl SoftCloth {
             self.roots.iter().map(|root| self.column_stiffness(root.x, joint_angle)).collect();
         let mut points: Vec<Vec3> = self.roots.iter().map(|r| bone.transform_point3(*r)).collect();
         let mut directions: Vec<Vec3> = self.directions.iter().map(|d| bone.transform_vector3(*d)).collect();
-        let mut root_z: Vec<f32> = self.roots.iter().map(|r| r.z).collect();
+        let length_axis = self.fold.map_or(2, |fold| fold.length_axis);
+        let mut root_z: Vec<f32> = self.roots.iter().map(|r| r[length_axis]).collect();
         let mut segments = vec![Vec3::ZERO; self.columns];
         let mut floor = self.floor_height + FLOOR;
 
@@ -658,11 +667,11 @@ impl SoftCloth {
                 rotate_xz(&mut segment, angle, 0.0);
             }
             let limit = root_z[c] + fold.limit;
-            let tip = root_z[c] + segment.z;
+            let tip = root_z[c] + segment[fold.length_axis];
             root_z[c] = tip;
             let past_limit = if fold.limit >= 0.0 { limit > tip } else { limit < tip };
             if past_limit {
-                segment.z += limit - tip;
+                segment[fold.length_axis] += limit - tip;
                 root_z[c] = limit;
             }
             fold.limit_tip(self.angles[c], point, &mut segment);
@@ -683,12 +692,14 @@ impl SoftCloth {
         if !is_ring && self.flags & FLAG_COLLIDE_ENDS != 0 {
             let length = self.column_lengths[columns - 1];
             for c in [0, columns - 1] {
+                // DOA2U leaves the moved tip where it is (`sub_0004BFE0`).
+                let length = (!self.wind_in_pull).then_some(length);
                 segments[c] = collide_tip(&self.shapes, nodes, points[c], segments[c], length);
             }
         }
         let mut tips: Vec<Vec3> = points[..columns].iter().zip(segments.iter()).map(|(p, s)| *p + *s).collect();
         for shape in &self.shapes {
-            let Some(matrix) = nodes.get(shape.bone) else { continue };
+            let Some(matrix) = shape.matrix(nodes) else { continue };
             let inverse = matrix.inverse();
             let mut local: Vec<Vec3> = tips.iter().map(|t| inverse.transform_point3(*t)).collect();
             let first_pair = if is_ring { 0 } else { 1 };
@@ -822,13 +833,13 @@ fn pair_mut(values: &mut [Vec3], a: usize, b: usize) -> (&mut Vec3, &mut Vec3) {
 /// `sub_0003D7A0`: shapes on the same bone are tested together. The game
 /// always moves back from the last group, so the segment ends with this length
 /// even when nothing was hit.
-fn collide_tip(shapes: &[Shape], nodes: &[Mat4], point: Vec3, segment: Vec3, length: f32) -> Vec3 {
+fn collide_tip(shapes: &[Shape], nodes: &[Mat4], point: Vec3, segment: Vec3, length: Option<f32>) -> Vec3 {
     let mut tip = point + segment;
     let mut start = 0;
     while start < shapes.len() {
         let bone = shapes[start].bone;
         let end = shapes[start..].iter().position(|s| s.bone != bone).map_or(shapes.len(), |n| start + n);
-        if let Some(matrix) = nodes.get(bone) {
+        if let Some(matrix) = shapes[start].matrix(nodes) {
             let mut local = matrix.inverse().transform_point3(tip);
             let mut hit = false;
             for shape in &shapes[start..end] {
@@ -840,7 +851,7 @@ fn collide_tip(shapes: &[Shape], nodes: &[Mat4], point: Vec3, segment: Vec3, len
         }
         start = end;
     }
-    with_length(tip - point, length)
+    length.map_or(tip - point, |length| with_length(tip - point, length))
 }
 
 #[cfg(test)]
@@ -970,7 +981,7 @@ mod tests {
                     }
                     if std::env::var("DOA2U_PARTICLES").is_ok() {
                         // Particle by particle, to see where a sheet parts from the game.
-                        println!("record {k}: {} x {}", cloth.columns, rows);
+                        println!("record {k}: {} x {} flags {:#x} shapes {:?} fold {:?} roots {:?} ring {} angle {:?}", cloth.columns, rows, cloth.flags, cloth.shapes.iter().map(|s| (s.bone, s.kind, s.values)).collect::<Vec<_>>(), cloth.fold, &cloth.roots[..2], cloth.is_ring, cloth.fold.map(|f| f.angle(&nodes[fighter], &nodes[fighter][cloth.bone].inverse())));
                         for (i, (ours, game)) in cloth.particles().iter().zip(&after).enumerate() {
                             let delta = ours.position - game.position;
                             if delta.length() > 0.001 {

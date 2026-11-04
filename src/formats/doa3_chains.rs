@@ -43,9 +43,43 @@ pub struct Shape {
     pub bone: usize,
     pub kind: u8,
     pub values: [f32; 6],
+    /// DOA2U: the node and quarter turns behind a slot of 0x80 and up.
+    pub slot: Option<(usize, Mat4)>,
+}
+
+/// DOA2U's limb slots (`sub_0004B920`): slot, matrix and quarter turns about X, Y and Z.
+/// They give shapes the limb frames of DOA3. Read against the game's table at `0x849E40`.
+const LIMB_SLOTS: [(usize, usize, [f32; 3]); 8] = [
+    (0x82, 6, [1.0, 0.0, 1.0]),
+    (0x83, 7, [1.0, 2.0, -1.0]),
+    (0x84, 8, [0.0, 1.0, 0.0]),
+    (0x85, 4, [0.0, -1.0, 0.0]),
+    (0x86, 12, [1.0, 0.0, -1.0]),
+    (0x87, 13, [1.0, 2.0, 1.0]),
+    (0x88, 14, [0.0, -1.0, 0.0]),
+    (0x89, 10, [0.0, 1.0, 0.0]),
+];
+
+/// Resolves DOA2U's limb slots. Others, such as 0x80 and 0x81, stay without a node.
+pub(super) fn resolve_limb_slots(shapes: &mut [Shape]) {
+    for shape in shapes {
+        if let Some(&(_, node, turns)) = LIMB_SLOTS.iter().find(|entry| entry.0 == shape.bone) {
+            let angle = |turn: f32| turn * std::f32::consts::FRAC_PI_2;
+            let turn = Mat4::from_rotation_x(angle(turns[0])) * Mat4::from_rotation_y(angle(turns[1])) * Mat4::from_rotation_z(angle(turns[2]));
+            shape.slot = Some((node, turn));
+        }
+    }
 }
 
 impl Shape {
+    /// The space of this shape.
+    pub(super) fn matrix(&self, nodes: &[Mat4]) -> Option<Mat4> {
+        match self.slot {
+            Some((node, turn)) => nodes.get(node).map(|m| *m * turn),
+            None => nodes.get(self.bone).copied(),
+        }
+    }
+
     /// Pushes `point` out of the shape. Returns whether it moved it.
     pub(super) fn push_out(&self, point: &mut Vec3) -> bool {
         let f = &self.values;
@@ -373,7 +407,7 @@ pub(super) fn parse_shapes(cat: &[u8], mut at: usize) -> Option<Vec<Shape>> {
         for (i, value) in values.iter_mut().enumerate() {
             *value = read_f32(cat, at + 4 + i * 4)?;
         }
-        shapes.push(Shape { bone: *cat.get(at)? as usize, kind, values });
+        shapes.push(Shape { bone: *cat.get(at)? as usize, kind, values, slot: None });
         at += SHAPE_SIZE;
     }
 }
@@ -536,6 +570,7 @@ pub fn parse_chain_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
         .filter_map(|&offset| {
             let at = base + offset;
             let mut chain = parse_chain(cat, base, at)?;
+            resolve_limb_slots(&mut chain.shapes);
             chain.wind_factor = Some(read_f32(cat, at + 0x3C)?);
             // A root on a vertex of the object at +2, by byte offset (`sub_000591A0`).
             let root = read_u32(cat, at + 0x44)?;
@@ -693,7 +728,7 @@ impl SoftChain {
         while let Some(shape) = shapes.next() {
             if shape.bone != current {
                 current = shape.bone;
-                matrix = nodes.get(current).copied().unwrap_or(Mat4::IDENTITY);
+                matrix = shape.matrix(nodes).unwrap_or(Mat4::IDENTITY);
                 local = matrix.inverse().transform_point3(target);
                 hit = false;
             }
@@ -903,7 +938,25 @@ mod tests {
     }
 
     fn shape(kind: u8, values: [f32; 6]) -> Shape {
-        Shape { bone: 0, kind, values }
+        Shape { bone: 0, kind, values, slot: None }
+    }
+
+    #[test]
+    fn limb_slots_turn_the_game_s_matrices() {
+        let mut shapes = [shape(0, [0.0; 6])];
+        shapes[0].bone = 0x82;
+        resolve_limb_slots(&mut shapes);
+        let mut nodes = vec![Mat4::IDENTITY; 23];
+        nodes[6] = Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0));
+        let matrix = shapes[0].matrix(&nodes).unwrap();
+        assert!(matrix.transform_point3(Vec3::ZERO).distance(Vec3::new(1.0, 2.0, 3.0)) < 1e-5);
+        // Slot 0x82: quarter turns about X then Z, on the local axes.
+        let expected = Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2) * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        assert!(matrix.transform_vector3(Vec3::X).distance(expected.transform_vector3(Vec3::X)) < 1e-5);
+        shapes[0].bone = 0x80;
+        shapes[0].slot = None;
+        resolve_limb_slots(&mut shapes);
+        assert!(shapes[0].matrix(&nodes).is_none());
     }
 
     #[test]
