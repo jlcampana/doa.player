@@ -50,6 +50,7 @@ Limit agreed with the user's request history: no chest spring or body soft bodie
 - Investigate the chest spring implementation in DOA2U.
 - Improve close-up framing for body renders. Use Kasumi as the reference character during validation.
 - Investigate additional costume availability in DOA2U by exploring `datadvd.afs` alongside the currently supported `datahdd2.afs` archives.
+- Lighting: try to recreate the game's lighting so that colors look similar to the game. DOA2U materials hold color and shininess values that the viewer does not use yet.
 
 ## Unverified in DOA2U
 
