@@ -97,7 +97,8 @@ pub fn decrypt_xpr(data: &mut [u8]) -> Result<()> {
 /// Decrypts a CAT in place. The stream's length is the last section offset that is set.
 pub fn decrypt_cat(data: &mut [u8]) -> Result<()> {
     let first = read_u32(data, 0)?;
-    if first == CAT_MAGIC {
+    // The `A0` series in `char_doa3` is plain, and starts with 1.
+    if first == CAT_MAGIC || first == 1 {
         return Ok(());
     }
     let length = [0x10, 0xC, 8, 4]
@@ -258,8 +259,14 @@ pub fn soft_body_offsets(cat: &[u8], wanted: u32) -> Result<(usize, Vec<usize>)>
 }
 
 /// Characters whose body has no soft bodies in the viewer, by choice: Kasumi,
-/// Ayane and Hitomi. Fixed in code, and not a limit of the game or its files.
-const NO_SOFT_CLOTH_IDS: [usize; 3] = [5, 13, 21];
+/// Ayane, Hitomi and `ytina`, taken to be Tina as a girl from her name and not checked.
+/// Fixed in code, and not a limit of the game or its files.
+const NO_SOFT_CLOTH_IDS: [usize; 4] = [5, 13, 18, 21];
+
+/// Whether a character's body may have soft bodies in the viewer.
+pub fn allows_body_soft_bodies(character_id: usize) -> bool {
+    !NO_SOFT_CLOTH_IDS.contains(&character_id)
+}
 
 /// The costume's cloth: kind 2 in the soft body list. Roots on vertices start
 /// on the file's shape, and `SoftCloth::follow_vertices` keeps them up to date.
@@ -552,6 +559,18 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
     }
     let mut hands = Vec::with_capacity(2);
     for entry_index in [1, 0] {
+        // Some entries of `pdg` and `yti` have other layouts, not read. They keep their hands.
+        match read_hand(cat, base, entry_index) {
+            Ok(Some(hand)) => hands.push(hand),
+            Ok(None) => {}
+            Err(e) => log::warn!("Hand entry {entry_index} not read: {e:#}"),
+        }
+    }
+    Ok(hands)
+}
+
+fn read_hand(cat: &[u8], base: usize, entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
+    {
         let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;
         let targets = read_u32(cat, entry)? as usize;
         let raw_object = read_u32(cat, entry + 4)?;
@@ -596,11 +615,10 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
             normals.push(read_list(base + read_u32(cat, table + target * 8 + 4)? as usize, normal_count)?);
         }
         if shapes.is_empty() {
-            continue;
+            return Ok(None);
         }
-        hands.push(crate::formats::doa3_morphs::PoseHand::new((raw_object & 0xFF) as usize, vertices, shapes, normal_vertices, normals));
+        Ok(Some(crate::formats::doa3_morphs::PoseHand::new((raw_object & 0xFF) as usize, vertices, shapes, normal_vertices, normals)))
     }
-    Ok(hands)
 }
 
 /// Characters with the chest spring in the viewer: Tina, Helena and Lei Fang.
@@ -1542,6 +1560,57 @@ mod tests {
         println!("{steps} steps, {} samples", ours.len());
         println!("cloth (median, 95%, worst): {:?}", summary(&mut ours));
         println!("file's shape, no cloth:     {:?}", summary(&mut still));
+    }
+
+    /// Reads every section the viewer uses, for every costume of both archives. A0 files
+    /// are plain, and the others encrypted. Prints what fails, without a body's data.
+    #[test]
+    #[ignore]
+    fn every_costume_reads_as_the_viewer_does() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        for name in ["datahdd2.afs", "datadvd.afs"] {
+            let archive = crate::formats::AfsArchive::from_file(format!("{dir}/{name}")).unwrap();
+            let stems: Vec<String> = archive.entries().iter().filter_map(|e| e.name.strip_suffix(".cat").map(String::from)).collect();
+            let (mut good, mut bad) = (0, 0);
+            for stem in stems {
+                let result = (|| -> Result<(usize, usize, usize)> {
+                    let mut xpr = archive.get_by_name(&format!("{stem}.xpr")).context("no xpr")?.to_vec();
+                    let mut cat = archive.get_by_name(&format!("{stem}.cat")).context("no cat")?.to_vec();
+                    decrypt_xpr(&mut xpr)?;
+                    decrypt_cat(&mut cat)?;
+                    // The A0 series is DOA3's format, read by `doa3.rs`.
+                    if read_u32(&cat, 0)? == 1 {
+                        let pieces = crate::formats::model::parse_xpr_model(&xpr)?;
+                        let nodes = crate::formats::doa3::parse_node_objects(&cat)?;
+                        if nodes.rigid.is_empty() || pieces.iter().all(|p| p.vertices.is_empty()) {
+                            bail!("nothing to draw in DOA3's format");
+                        }
+                        return Ok((0, 0, 0));
+                    }
+                    let model = parse_model(&xpr)?;
+                    let drawn = parse_drawn_objects(&cat, &[Vec3::ZERO; 17]).context("draw list")?;
+                    if drawn.is_empty() {
+                        bail!("nothing in the draw list");
+                    }
+                    joint_skins(&cat).context("joints")?;
+                    pose_style(&cat).context("style")?;
+                    let hands = hands(&cat).context("hands")?;
+                    let rebuilds = normal_rebuilds(&cat).context("rebuilds")?;
+                    let copies = vertex_copies(&cat, &xpr).context("copies")?;
+                    extra_objects(&cat, model.pieces.len()).context("extras")?;
+                    face(&cat).context("face")?;
+                    Ok((hands.len(), rebuilds.len(), copies.len()))
+                })();
+                match result {
+                    Ok(_) => good += 1,
+                    Err(e) => {
+                        bad += 1;
+                        println!("{name} {stem}: {e:#}");
+                    }
+                }
+            }
+            println!("{name}: {good} costumes read, {bad} failed");
+        }
     }
 
     #[test]

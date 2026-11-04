@@ -265,8 +265,18 @@ An earlier check here concluded the flag and winding were right, since winding a
 
 Material +0xC: 1 hides back faces. 0 does not. 4, 5, 8 and 9 also occur, and are not culled, which is unverified. Across the character costumes in `datahdd2.afs`: 0 on 40274 materials, 1 on 1651, 8 on 1305 in 124 costumes (17 on `tin09`), 9 on 134 in 16 costumes (80 on `zac01`, 40 on `zac05`, 1 on `lei03` and many Helena costumes), 5 on 12 in Kasumi's costumes only, 4 on 5.
 
+## Costume files
+
+The game's table at `0x694500` holds an `xpr` and `cat` path per costume, in order: Kasumi, Ayane, Tina, Lei Fang, Helena, Zack, Jann Lee, Ryu, Gen Fu, Leon, Bass, Bayman, Ein, Tengu, Hitomi, then `kas20` to `kas79`, `lei20` to `lei70`, `tin11`, `hel09`, `pdg00` to `pdg02`, `wba00`, `hks00`, `mam00`, `lor00` and `yti00`. Holes repeat another name: `kas00` and `kas18` among the later Kasumi ones, `bay00`, `ein00` and `kor00`. A second table at `0x695848` lists the `A0` series, in `char_doa3`.
+
+The counts per ID at `0x6E0F08` are 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 1, 3, 20, 20, 1, 1, 1, 3, 1, 1, 1, 14, 1, 1, 6. The select screen uses them, so the viewer no longer does. `.bin` names in `0x694288` give mama, wakabs, loran, ytina and pdog. Their IDs are inferred by matching counts.
+
+`datadvd.afs` has 122 costumes and all read: `every_costume_reads_as_the_viewer_does`. The viewer lists both archives, `datahdd2.afs` first, under each character. Costume numbers in `--load` are positions in that list.
+
+The `A0` series is DOA3's format, both `cat` (plain, starting with 1) and `xpr` (plain). The viewer loads it through DOA3's parsers and solve, with DOA2U's bones and motions, DOA3's shading and no chest spring. That `bay` here is Leon and `sam` Bayman, and the IDs of `nin` (10), `sui` (22) and `gok` (23), are inferred from the second table's order; `hks` as 16 from the counts. `nin`, `sui`, `gok` and `hks` have no motions of their own, so they lie down in `comon.mot`'s first motion. Whether the game uses these files at all was not read: nothing was found referencing the second table. `yti` is taken to be Tina as a girl from the name `ytina`, not checked, and keeps no body soft bodies. Hands of `pdg00`, `pdg01` and `yti00` have other layouts and are skipped.
+
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
-- Soft bodies of kinds other than 1, 2, 3 and 250, and the costumes in `datadvd.afs`.
+- Soft bodies of kinds other than 1, 2, 3, 250 and 251.
 - Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. In `kas00`, type 5 lists objects 45 to 59, which have no textures and reach down Z by 1: probably shadows, going by their shape. Type 7 lists objects 12, 13 and 14 (`sub_00060880`, up to 4 objects); of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have it, and its use is unknown. Each list ends in `0xFE`.

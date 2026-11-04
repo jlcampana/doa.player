@@ -109,47 +109,61 @@ fn asset_path(relative: &str) -> PathBuf {
 
 // ─── DOA2U character roster ───────────────────────────────────────────────────
 
-fn doa2u_characters(costume_files: Option<&AfsArchive>) -> Vec<CharacterEntry> {
-    // (file prefix of the costumes, name of the .bin and .mot files, shown name,
-    // character ID, costumes on the select screen, from the counts at 0x6E0F08).
-    // IDs are from the counts and the order of the file names at 0x694288.
-    let roster = [
-        ("kas", "kasumi",  "Kasumi",           5, 20),
-        ("aya", "ayane",   "Ayane",           13, 20),
-        ("zac", "zack",    "Zack",             0,  8),
-        ("tin", "tina",    "Tina Armstrong",   1, 16),
-        ("ryu", "ryu",     "Ryu Hayabusa",     4,  9),
-        ("lei", "leifang", "Lei Fang",        12, 20),
-        ("jan", "janlee",  "Jann Lee",         2,  8),
-        ("bas", "bass",    "Bass Armstrong",   9,  8),
+fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
+    // (file prefixes of the costumes, name of the .bin and .mot files, shown name, character
+    // ID). IDs are from the counts at 0x6E0F08 and the order of the file names at 0x694288.
+    // Costumes come from the archives, not from the select screen's counts: the game's own
+    // table at 0x694500 also lists the ones it does not offer there.
+    //
+    // Prefixes in the `A0` series follow the order of the table at 0x695848, which runs by ID:
+    // that `bay` there is Leon and `sam` Bayman, and the IDs of `nin`, `sui` and `gok`, are
+    // inferred from it. `hks` has no .bin, and its ID is inferred from the costume counts.
+    let roster: [(&[&str], &[&str], &str, &str, usize); 24] = [
+        (&["kas"], &[], "kasumi", "Kasumi", 5),
+        (&["aya"], &[], "ayane", "Ayane", 13),
+        (&["zac"], &[], "zack", "Zack", 0),
+        (&["tin"], &[], "tina", "Tina Armstrong", 1),
+        (&["ryu"], &[], "ryu", "Ryu Hayabusa", 4),
+        (&["lei"], &[], "leifang", "Lei Fang", 12),
+        (&["jan"], &[], "janlee", "Jann Lee", 2),
+        (&["bas"], &[], "bass", "Bass Armstrong", 9),
         // "sambo" is Bayman and "bayman" is Leon. Bayman's ID and files were
         // measured in a running match. Leon's follow, and from the costume counts.
-        ("bay", "sambo",   "Bayman",          24,  6),
-        ("gen", "genfu",   "Gen Fu",           6,  8),
-        ("leo", "bayman",  "Leon",             8,  7),
-        ("kor", "koryu",   "Hitomi",          21, 14),
-        ("tng", "tengu",   "Tengu",           17,  3),
-        ("ein", "karate",  "Ein",              3,  7),
-        ("hel", "hika",    "Helena Douglas",   7, 13),
+        (&["bay", "sam"], &["bayA"], "sambo", "Bayman", 24),
+        (&["gen"], &[], "genfu", "Gen Fu", 6),
+        (&["leo", "bayA"], &[], "bayman", "Leon", 8),
+        (&["kor"], &[], "koryu", "Hitomi", 21),
+        (&["tng"], &[], "tengu", "Tengu", 17),
+        (&["ein"], &[], "karate", "Ein", 3),
+        (&["hel", "hik"], &[], "hika", "Helena Douglas", 7),
+        (&["mam"], &[], "mama", "Mama", 10),
+        (&["pdg"], &[], "pdog", "Pdog", 11),
+        (&["wba"], &[], "wakabs", "Wakabs", 14),
+        (&["lor"], &[], "loran", "Loran", 15),
+        (&["hks"], &[], "", "hks", 16),
+        (&["yti"], &[], "ytina", "ytina", 18),
+        (&["nin"], &[], "", "nin", 10),
+        (&["sui"], &[], "", "sui", 22),
+        (&["gok"], &[], "", "gok", 23),
     ];
     roster
         .iter()
-        .map(|(cat_id, bin_id, name, id, costume_count)| CharacterEntry {
-            id: cat_id.to_string(),
+        .map(|(prefixes, excluded, bin_id, name, id)| CharacterEntry {
+            id: prefixes[0].to_string(),
             bin_id: bin_id.to_string(),
             display_name: name.to_string(),
-            // File numbers have gaps, and placeholders repeat the first name.
-            costumes: costume_files.map_or_else(Vec::new, |archive| {
+            // File numbers have gaps, and placeholders repeat another costume's name.
+            costumes: {
                 let mut stems: Vec<String> = Vec::new();
-                for entry in archive.entries() {
+                for entry in archives.iter().flat_map(|archive| archive.entries()) {
                     let Some(stem) = entry.name.strip_suffix(".xpr") else { continue };
-                    if stem.starts_with(cat_id) && !stems.iter().any(|known| known == stem) {
+                    let ours = prefixes.iter().any(|p| stem.starts_with(p)) && !excluded.iter().any(|p| stem.starts_with(p));
+                    if ours && !stems.iter().any(|known| known == stem) {
                         stems.push(stem.to_string());
                     }
                 }
-                stems.truncate(*costume_count);
                 stems
-            }),
+            },
             afs_indices: vec![],
             doa3: None,
             doa2u_id: Some(*id),
@@ -396,7 +410,15 @@ impl App {
                 None
             }
         };
-        let doa2u_characters = doa2u_characters(hdd2_archive.as_ref());
+        let dvd_archive = match AfsArchive::from_file(DOA2U_DVD_PATH) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                log::warn!("Could not load DOA2U datadvd.afs: {}", e);
+                None
+            }
+        };
+        let costume_archives: Vec<&AfsArchive> = hdd2_archive.iter().chain(dvd_archive.iter()).collect();
+        let doa2u_characters = doa2u_characters(&costume_archives);
 
         let hdd_archive = match AfsArchive::from_file(DOA2U_HDD_PATH) {
             Ok(a) => {
@@ -454,7 +476,7 @@ impl App {
             background_options,
             hdd_archive,
             hdd2_archive,
-            dvd_archive: None,
+            dvd_archive,
             loadfile_archive,
             doa3_xbe,
             doa2u_xbe: None,
@@ -507,13 +529,23 @@ impl App {
         if self.doa2u_xbe.is_none() {
             self.doa2u_xbe = Some(Xbe::from_bytes(std::fs::read(DOA2U_XBE_PATH)?)?);
         }
-        let archive = self.hdd2_archive.as_ref().context("datahdd2.afs not loaded")?;
         let xbe = self.doa2u_xbe.as_ref().context("DOA2.xbe not loaded")?;
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        let mut xpr = archive.get_by_name(&format!("{stem}.xpr")).with_context(|| format!("no {stem}.xpr"))?.to_vec();
+        // datahdd2.afs first: it holds the game's own copy where a name is in both.
+        let archive = self
+            .hdd2_archive
+            .iter()
+            .chain(self.dvd_archive.iter())
+            .find(|archive| archive.get_by_name(&format!("{stem}.xpr")).is_some())
+            .with_context(|| format!("no {stem}.xpr"))?;
+        let mut xpr = archive.get_by_name(&format!("{stem}.xpr")).context("no xpr")?.to_vec();
         let mut cat = archive.get_by_name(&format!("{stem}.cat")).with_context(|| format!("no {stem}.cat"))?.to_vec();
         doa2u::decrypt_xpr(&mut xpr)?;
         doa2u::decrypt_cat(&mut cat)?;
+        if cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
+            let skeleton = doa2u::skeleton(xbe, id)?;
+            return self.load_doa3_format_costume(char_idx, &display_name, &stem, &bin_id, id, skeleton, &xpr, &cat);
+        }
 
         let mut model = doa2u::parse_model(&xpr)?;
         let textures = parse_xpr_textures(&xpr)?;
@@ -715,6 +747,136 @@ impl App {
                 self.doa3_pose = None;
             }
         }
+    }
+
+    /// The `A0` series of DOA2U's `char_doa3` folder, in DOA3's format, posed by DOA3's solve
+    /// with DOA2U's bones and motions. It has DOA3's shading and no chest spring. How the game
+    /// itself uses these files was not read.
+    #[allow(clippy::too_many_arguments)]
+    fn load_doa3_format_costume(
+        &mut self,
+        char_idx: usize,
+        display_name: &str,
+        stem: &str,
+        bin_id: &str,
+        id: usize,
+        skeleton: [glam::Vec3; 17],
+        xpr: &[u8],
+        cat: &[u8],
+    ) -> anyhow::Result<String> {
+        let mut pieces = parse_xpr_model(xpr)?;
+        let textures = parse_xpr_textures(xpr)?;
+        let nodes = doa3::parse_node_objects(cat)?;
+        doa3_morphs::apply_base_shapes(cat, &nodes.rigid, &mut pieces);
+        let grouped = doa3::grouped_objects(cat);
+        let props: Vec<_> = doa3_chains::parse_props(cat, pieces.len()).into_iter().filter(|prop| !grouped.contains(&prop.object)).collect();
+        let overlays: Vec<_> = doa3_chains::parse_overlays(cat, pieces.len()).into_iter().filter(|overlay| !grouped.contains(&overlay.prop.object)).collect();
+        for prop in props.iter().chain(overlays.iter().map(|overlay| &overlay.prop)) {
+            let matrix = prop.matrix();
+            for vertex in &mut pieces[prop.object].vertices {
+                vertex.position = matrix.transform_point3(vertex.position.into()).into();
+                vertex.normal = matrix.transform_vector3(vertex.normal.into()).into();
+            }
+        }
+        let draws_of = |object: usize| {
+            pieces.get(object).map(|piece| {
+                let draws = piece.materials.iter().map(|m| (m.indices.as_slice(), m.base_texture(textures.len()), m.cull_back, m.look)).collect::<Vec<_>>();
+                (piece.vertices.as_slice(), draws)
+            })
+        };
+        let rigid = nodes.rigid.iter().filter_map(|&(node, object)| {
+            let (vertices, draws) = draws_of(object)?;
+            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None })
+        });
+        let rigid_input = |object: usize| nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object);
+        let skins = nodes.skins.iter().filter_map(|skin| {
+            let (vertices, draws) = draws_of(skin.object)?;
+            let welds = skin
+                .welds
+                .iter()
+                .filter_map(|weld| Some((rigid_input(weld.object)?, weld)))
+                .flat_map(|(input, weld)| weld.links.iter().flat_map(move |(source, targets)| targets.iter().map(move |&target| (input, *source, target))))
+                .filter(|&(input, source, target)| {
+                    let count = nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).nth(input).map_or(0, |&(_, o)| pieces[o].vertices.len());
+                    source < count && target < vertices.len()
+                })
+                .collect();
+            Some(PieceInput { node: skin.node, vertices, draws, parent: skin.parent, skin: Some((skin.blend, skin.vertices.as_slice())), welds, translucent: false, bend: None })
+        });
+        let mut inputs: Vec<PieceInput> = rigid.chain(skins).collect();
+
+        // Only hair on the characters that keep no soft bodies on the body.
+        let allowed = doa2u::allows_body_soft_bodies(id);
+        let mut chains = doa3_chains::parse_chains(cat);
+        if !allowed {
+            chains.retain(|chain| chain.bone == 1);
+        }
+        let cloth = if allowed { doa3_cloth::parse_cloth(cat) } else { Vec::new() };
+        let tubes = if allowed { doa3_tubes::parse_tubes(cat) } else { Vec::new() };
+        let springs = if allowed { doa3_springs::parse_springs(cat) } else { Vec::new() };
+        let mut chain_pieces: Vec<Option<(usize, usize)>> = vec![None; pieces.len()];
+        let drawn = nodes.rigid.iter().copied().chain(nodes.skins.iter().map(|skin| (skin.node, skin.object))).filter(|&(_, object)| object < pieces.len());
+        for (input, (node, object)) in drawn.enumerate() {
+            chain_pieces[object].get_or_insert((input, node));
+        }
+        for chain in &chains {
+            for target in chain.targets.iter().filter(|t| t.detached) {
+                if chain_pieces.get(target.object) != Some(&None) {
+                    continue;
+                }
+                let Some((vertices, draws)) = draws_of(target.object) else { continue };
+                chain_pieces[target.object] = Some((inputs.len(), chain.bone));
+                inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, bend: None });
+            }
+        }
+        for (prop, translucent) in props.iter().map(|prop| (prop, false)).chain(overlays.iter().map(|overlay| (&overlay.prop, overlay.translucent))) {
+            if chain_pieces[prop.object].is_some() {
+                continue;
+            }
+            let Some((vertices, draws)) = draws_of(prop.object) else { continue };
+            chain_pieces[prop.object] = Some((inputs.len(), prop.bone));
+            inputs.push(PieceInput { node: prop.bone, vertices, draws, parent: prop.bone, skin: None, welds: Vec::new(), translucent, bend: None });
+        }
+        let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
+        let piece_count = inputs.len();
+        self.mesh.set_lights(None);
+        self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
+        for chain in &chains {
+            for target in chain.targets.iter().filter(|t| t.detached) {
+                let Some(&Some((piece, _))) = chain_pieces.get(target.object) else { continue };
+                let rest: Vec<glam::Vec3> = pieces[target.object].vertices.iter().map(|v| glam::Vec3::from(v.position)).collect();
+                self.mesh.set_rest_positions(piece, chain.anchored_vertices(target, &rest));
+            }
+        }
+        self.wireframe.update_lines(&self.ctx.queue, &[]);
+        if self.framed_character != Some(char_idx) {
+            self.camera.frame_character(1.8);
+            self.framed_character = Some(char_idx);
+        }
+        self.current_animations = self.hdd_archive.as_ref().map_or_else(Vec::new, |a| doa2u_animations(bin_id, a));
+        let hands = doa3_morphs::parse_hands(cat, &nodes.rigid);
+        let face = doa3_morphs::parse_face(cat, &nodes.rigid);
+        let hand_events = self.hdd_archive.as_ref().and_then(|a| a.get_by_name(&format!("{bin_id}.bin"))).map(doa3_morphs::parse_hand_events).unwrap_or_default();
+        let chains = Doa3Chains {
+            chains,
+            cloth,
+            tubes,
+            springs,
+            pieces: chain_pieces,
+            frame: 0,
+            wind: Wind::new(),
+            hands,
+            face,
+            hand_events,
+            character: id,
+            pose_hands: Vec::new(),
+            normal_rebuilds: Vec::new(),
+            copies: Vec::new(),
+        };
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains });
+        self.game_clock = 0.0;
+        self.select_motion(0);
+        Ok(format!("DOA2U: {display_name} {stem}, DOA3 format: {piece_count} pieces, {triangles} triangles, {} textures", textures.len()))
     }
 
     fn try_load_doa3_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {

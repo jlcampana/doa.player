@@ -32,13 +32,13 @@ impl BgSelectPanel {
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
                 if lit {
                     ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
-                    ui.separator();
-                    ui.label("Stage lights:");
-                    for (i, (name, _)) in crate::renderer::mesh::DOA2U_LIGHTS.iter().enumerate() {
-                        if ui.selectable_label(self.lights == i, *name).clicked() {
-                            self.lights = i;
+                    egui::CollapsingHeader::new("Stage lights").show(ui, |ui| {
+                        for (i, (name, _)) in crate::renderer::mesh::DOA2U_LIGHTS.iter().enumerate() {
+                            if ui.selectable_label(self.lights == i, *name).clicked() {
+                                self.lights = i;
+                            }
                         }
-                    }
+                    });
                 }
                 if has_bounce {
                     ui.add(egui::Slider::new(&mut self.bounce_scale, 0.0..=3.0).text("Bounce"));

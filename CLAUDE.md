@@ -43,7 +43,7 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 
 ## Limit on soft bodies
 
-Claude set this and told the user: no chest spring, cloth or other body soft bodies for Kasumi, Ayane and Hitomi, skirts included, as they are teenagers or young in the series. Their hair stays on: `NO_SOFT_CLOTH_IDS` in `doa2u.rs` keeps only chains on the head. The DOA2U chest spring, at the user's request, is only for Tina, Helena and Lei Fang (`CHEST_SPRING_IDS`). Develop and validate cloth on adult characters: Helena, Tina (`tin16`), Lei Fang. Diagnose those three from data, and use an adult for close-up body renders.
+Claude set this and told the user: no chest spring, cloth or other body soft bodies for Kasumi, Ayane and Hitomi, skirts included, as they are teenagers or young in the series. `ytina` (`yti00`, ID 18), by her name Tina as a girl, is on the same list. Their hair stays on: `NO_SOFT_CLOTH_IDS` in `doa2u.rs` keeps only chains on the head. The DOA2U chest spring, at the user's request, is only for Tina, Helena and Lei Fang (`CHEST_SPRING_IDS`). Develop and validate cloth on adult characters: Helena, Tina (`tin16`), Lei Fang. Diagnose those three from data, and use an adult for close-up body renders.
 
 `CHEST_SPRING_CHARACTER_IDS` and `TORSO_FRONT_CHAIN_CHARACTER_IDS` in `doa3.rs`, and `characters.toml`, do include them, against an older note in memory. The user was asked how that came about and has not answered. It was left unchanged, and is not to be carried over to DOA2U.
 
@@ -71,14 +71,14 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 ## Development notes
 
 - Improve close-up framing for body renders. Use Kasumi as the reference character during validation.
-- Investigate additional costume availability in DOA2U by exploring `datadvd.afs` alongside the currently supported `datahdd2.afs` archives.
+- `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
+- `s*_dat.bin` in the archives may hold each stage's lights, which would avoid measuring them. Not looked at.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
 
 ## Unverified in DOA2U
 
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
-- Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.
 
