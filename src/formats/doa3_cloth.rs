@@ -228,26 +228,41 @@ pub fn parse_cloth(cat: &[u8]) -> Vec<SoftCloth> {
     sections
         .iter()
         .filter(|(kind, _)| *kind == CLOTH_SECTION)
+        .filter(|&&(_, offset)| plausible_record(cat, base + offset))
         .filter_map(|&(_, offset)| parse_record(cat, base, base + offset))
         .collect()
+}
+
+/// Reads cloth records at offsets from `base`, for files whose section list is
+/// known to be real, so the limits of `plausible_record` do not apply. DOA2U has
+/// sheets of 17 columns and flag 0x08. Records that cannot be read are left out.
+pub fn parse_cloth_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftCloth> {
+    offsets.iter().filter_map(|&offset| parse_record(cat, base, base + offset)).collect()
 }
 
 fn floats(cat: &[u8], at: usize, count: usize) -> Option<Vec<f32>> {
     (0..count).map(|i| read_f32(cat, at + i * 4)).collect()
 }
 
-fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftCloth> {
-    let header = cat.get(at..at + 9)?;
-    let (mode, axis, bone, object, columns, rows, pivot, flags) =
-        (header[0], header[1], header[2], header[4], header[5], header[6], header[7], header[8]);
-    let valid = mode <= MAX_MODE
+/// Whether a section found by scanning a DOA3 CAT looks like a real cloth record.
+fn plausible_record(cat: &[u8], at: usize) -> bool {
+    let Some(header) = cat.get(at..at + 9) else { return false };
+    let (mode, axis, bone, object, columns, rows, flags) =
+        (header[0], header[1], header[2], header[4], header[5], header[6], header[8]);
+    mode <= MAX_MODE
         && axis <= MAX_AXIS
         && bone <= MAX_BONE
         && object != NO_OBJECT
         && (1..=MAX_COLUMNS).contains(&columns)
         && (1..=MAX_ROWS).contains(&rows)
-        && flags & UNSUPPORTED_FLAGS == 0;
-    if !valid {
+        && flags & UNSUPPORTED_FLAGS == 0
+}
+
+fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftCloth> {
+    let header = cat.get(at..at + 9)?;
+    let (mode, axis, bone, object, columns, rows, pivot, flags) =
+        (header[0], header[1], header[2], header[4], header[5], header[6], header[7], header[8]);
+    if columns == 0 || rows == 0 {
         return None;
     }
     let (columns, rows) = (columns as usize, rows as usize);

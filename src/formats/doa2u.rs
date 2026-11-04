@@ -235,6 +235,23 @@ pub fn joint_skins(cat: &[u8]) -> Result<Vec<JointSkin>> {
         .collect())
 }
 
+/// The soft bodies of a costume: the list at CAT word 2 holds a kind and an
+/// offset per body, relative to the list (`sub_0005A250`), up to a kind of 0xFF.
+pub fn soft_body_offsets(cat: &[u8], wanted: u32) -> Result<(usize, Vec<usize>)> {
+    let base = read_u32(cat, 8)? as usize;
+    let mut offsets = Vec::new();
+    for at in (base..).step_by(8) {
+        let kind = read_u32(cat, at)?;
+        if kind & 0xFF == 0 || kind == 0xFF {
+            break;
+        }
+        if kind == wanted {
+            offsets.push(read_u32(cat, at + 4)? as usize);
+        }
+    }
+    Ok((base, offsets))
+}
+
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
 /// `sub_000E9430`). Each `*_turn` is three quarter turn counts for X, Y and Z.
 struct Limb {
@@ -806,6 +823,82 @@ mod tests {
             let skin = skins.iter().find(|s| s.object == *object).unwrap();
             println!("object {object} node {} parent {}: {} samples, median {:.4}, worst {:.4}", skin.node, skin.parent, list.len(), list[list.len() / 2], list[list.len() - 1]);
         }
+    }
+
+    /// Runs DOA3's cloth over matrices read from the game and compares its vertices
+    /// with the game's. DOA2U_CLOTH is an export of a capture, for a fighter and
+    /// object given by DOA2U_CLOTH_ID ("fighter object costume").
+    #[test]
+    #[ignore]
+    fn cloth_follows_captured_vertices() {
+        use crate::formats::doa3_cloth::parse_cloth_records;
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let id = std::env::var("DOA2U_CLOTH_ID").expect("DOA2U_CLOTH_ID");
+        let id: Vec<&str> = id.split_whitespace().collect();
+        let (fighter, object, stem) = (id[0], id[1].parse::<usize>().unwrap(), id[2]);
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+        decrypt_cat(&mut cat).unwrap();
+        let mut xpr = archive.get_by_name(&format!("{stem}.xpr")).unwrap().to_vec();
+        decrypt_xpr(&mut xpr).unwrap();
+        let rest: Vec<Vec3> = parse_model(&xpr).unwrap().pieces[object].vertices.iter().map(|v| Vec3::from_array(v.position)).collect();
+        let (base, offsets) = soft_body_offsets(&cat, 2).unwrap();
+        let sheets = parse_cloth_records(&cat, base, &offsets);
+        println!("{} kind 2 records", offsets.len());
+        println!("{} sheets: {:?}", sheets.len(), sheets.iter().map(|s| (s.bone, s.object)).collect::<Vec<_>>());
+        let mut sheets: Vec<_> = sheets.into_iter().filter(|s| s.object == object).collect();
+        assert!(!sheets.is_empty());
+
+        let text = std::fs::read_to_string(std::env::var("DOA2U_CLOTH").expect("DOA2U_CLOTH")).unwrap();
+        let (mut nodes, mut last, mut steps) = (vec![Mat4::IDENTITY; 23], f32::MIN, 0usize);
+        let (mut time, mut previous): (f32, Vec<f32>) = (0.0, Vec::new());
+        let (mut ours, mut still) = (Vec::new(), Vec::new());
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            match words.next().unwrap() {
+                "read" => time = words.next().unwrap().parse().unwrap(),
+                "matrices" if words.next().unwrap() == fighter => {
+                    let m: Vec<f32> = words.map(|v| v.parse().unwrap()).collect();
+                    if m == previous {
+                        continue;
+                    }
+                    let game = |i: usize| Mat4::from_cols_slice(&m[i * 16..i * 16 + 16]);
+                    for i in 0..=14 {
+                        nodes[i] = game(i);
+                    }
+                    nodes[NODE_TWIST[0]] = game(24);
+                    nodes[NODE_TWIST[1]] = game(25);
+                    previous = m.clone();
+                    // Reads miss some frames: step once for each 60 Hz frame gone by.
+                    let frames = if last == f32::MIN { 1 } else { (((time - last) * 60.0).round() as usize).clamp(1, 4) };
+                    last = time;
+                    for _ in 0..frames {
+                        for sheet in &mut sheets {
+                            sheet.step(&nodes, Vec3::ZERO);
+                        }
+                        steps += 1;
+                    }
+                }
+                "object" if words.next().unwrap() == fighter && words.next().unwrap().parse::<usize>().unwrap() == object && steps > 60 => {
+                    let v: Vec<f32> = words.map(|v| v.parse().unwrap()).collect();
+                    for sheet in &sheets {
+                        for (vertex, position) in sheet.vertex_positions(&nodes) {
+                            let live = Vec3::new(v[vertex * 3], v[vertex * 3 + 1], v[vertex * 3 + 2]);
+                            ours.push(position.distance(live));
+                            still.push(rest[vertex].distance(live));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let summary = |list: &mut Vec<f32>| {
+            list.sort_by(f32::total_cmp);
+            (list[list.len() / 2], list[list.len() * 95 / 100], list[list.len() - 1])
+        };
+        println!("{steps} steps, {} samples", ours.len());
+        println!("cloth (median, 95%, worst): {:?}", summary(&mut ours));
+        println!("file's shape, no cloth:     {:?}", summary(&mut still));
     }
 
     #[test]

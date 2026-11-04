@@ -47,9 +47,15 @@ Limit set by Claude and told to the user: no chest spring or body soft bodies fo
 
 ## Next: cloth in DOA2U
 
-Captured `tin16` against `hel00` with `tools/re/doa2u_capture_objects.py`, in `target/captures/tin16_hel00.pkl` (not tracked; `cargo clean` deletes it). `hel00` objects 1, 30, 32, 40 and 41 move up to 1.3 m from the file's shape, and `tin16` objects 3 and 32 up to 0.47 m. Which part of the costume each one is has not been checked, nor have these been separated from hair.
+Not in the viewer yet. Known:
 
-The simulation code is not read yet. Candidates: `sub_00060360` (CAT word 2) and the functions around `0x852F40` and `0x8509A0` (`sub_0005F950`, `sub_0005FBC0`, `sub_0005FCF0`, `sub_0005FE10`). CAT word 3 starts with the magic `apv` and type 6 with `apa`; they may be morphs. Do not assume this matches DOA3's cloth (`doa3_cloth.rs`).
+- CAT word 2 is a list of soft bodies, like DOA3's sections: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, `sub_00057370`). `soft_body_offsets` reads it. DOA3's `find_sections` rejects it, because kind 1 records differ.
+- Kind 2 records have the header of DOA3's cloth. `tin16`'s skirt is object 3 (17 columns, 6 rows), `hel00`'s coat is object 1 (three sheets, flags 0x80 and 0x88), and `lei00` has one on object 1.
+- Running DOA3's cloth over captured matrices (`cloth_follows_captured_vertices`, median error against the game): `hel00` 11 cm, against 18.5 cm for the file's still shape; `tin16` 16 cm, worse than the still shape's 8 cm. So DOA3's simulation is not this game's. Giving it DOA3 style limb frames changed nothing.
+- This compares a free-running simulation over reads that miss frames, with no wind, so it is only a rough measure. An exact check needs the particles from memory, as DOA3's `matches_captured_frames` does. State is at `0x80B7A8`; byte +2 counted 12 for `tin16`'s 12 kind 1 records.
+- Next: read `sub_00051110` and `sub_00051F20`, the likely cloth updaters. They test flags 2, 4, 8 and 0x10. Which kind each one runs is not confirmed. Then find the particles in memory and compare single steps.
+
+The capture is `target/captures/tin16_hel00.pkl` (not tracked; `cargo clean` deletes it), made with `tools/re/doa2u_capture_objects.py`.
 
 ## Development notes
 
