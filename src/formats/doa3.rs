@@ -785,6 +785,30 @@ impl ChestSpring {
 mod tests {
     use super::*;
 
+    /// Prints every character ID's files and menu costumes, and the kinds of entries in the
+    /// archive that are not costume models.
+    #[test]
+    #[ignore]
+    fn survey_roster_and_gaps() {
+        let archive = crate::formats::AfsArchive::from_file("assets/doa3/loadfile.afs").unwrap();
+        let xbe = Xbe::from_bytes(std::fs::read("assets/doa3/default.xbe").unwrap()).unwrap();
+        let table = xbe.offset(MOTION_TABLE_A_VA).unwrap();
+        for (id, name) in CHARACTER_NAMES.iter().enumerate() {
+            let bin = read_u16(&xbe.data, table + id * 4);
+            println!("id {id} {name}: bin {bin:?}, menu {:?}", xbe.selectable_costumes(id));
+        }
+        let kind = |i: usize| -> String {
+            let Some(d) = archive.get_by_index(i) else { return "none".into() };
+            let head = d.get(..4).unwrap_or(&[]);
+            let text = if head.iter().all(|b| b.is_ascii_graphic()) { String::from_utf8_lossy(head).to_string() } else { format!("{:02x}{:02x}", head.first().unwrap_or(&0), head.get(1).unwrap_or(&0)) };
+            let mdl = d.get(0x14..0x18) == Some(b"MDL\0");
+            format!("{text}{}:{}", if mdl { "+MDL" } else { "" }, d.len() / 1024)
+        };
+        println!("first entries {:?}", (0..120).step_by(6).map(kind).collect::<Vec<_>>());
+        println!("Kasumi run {:?}", (292..352).map(|i| format!("{i}={}", kind(i))).collect::<Vec<_>>());
+        println!("after Bayman {:?}", (742..770).map(|i| format!("{i}={}", kind(i))).collect::<Vec<_>>());
+    }
+
     /// Lists what `loadfile.afs` holds around the costumes: every model, with its owner and
     /// whether the viewer offers it.
     #[test]

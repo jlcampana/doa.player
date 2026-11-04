@@ -202,6 +202,26 @@ Each character ID has groups of costumes: `0x3680F0` points to the size of each 
 
 No flag for hidden characters has been identified. A fresh save already has 2 in every costume byte, which is the maximum for all but Zack, Ein and Kasumi, so the unlock only adds their third group.
 
+## Costumes on the disc
+
+`survey_models_in_loadfile` and `survey_roster_and_gaps` list them. `loadfile.afs` has 1102 entries and 96 models, 69 of which sit in a character's range with a CAT that reads, and all 69 are in the viewer. The others are after Bayman's range, have placeholders where a CAT would be, and look like stages, going by their sizes and object counts; they were not opened.
+
+| Character | Models | Offered by the menu |
+| --- | --- | --- |
+| Zack, Tina, Ein, Ryu, Helena, Leon, Hayate, Ayane, Brad Wong, Christie, Bayman | 3 each | all 3 |
+| Gen Fu | 2 | both |
+| Lei Fang | 5 | all 5 |
+| Jann Lee | 4 | all 4 |
+| Bass | 4 | 0, 2 and 3, so not 1 |
+| Kasumi | 10 | 0 to 8, so not 9 (entry 345, smaller than the others) |
+| Hitomi | 8 | 5, 4 and 2, so not 0, 1, 3, 6 and 7 |
+| Genra | 2 | no menu list |
+| Chin | 1 | no menu list |
+
+IDs 10, 15, 16, 21 and 22 (Hakkyoku-ken, K-1, Pro Wrestler, Taekwondo, Demi Human) have no menu list and point at the files of Helena or Kasumi, so they have no models of their own. Tengu has its `.bin` and motions at entries 656 to 658 and only placeholders after them, so no model here.
+
+DOA2U's `datadvd.afs` holds 25 more models in DOA3's format, the `A0` series, which are not byte for byte any of the 96: see "Costume files" in `docs/doa2u-notes.md`. They are listed under DOA2U in the viewer.
+
 ## Status and plan (2026-11-03)
 
 Known defects:

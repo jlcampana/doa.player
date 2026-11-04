@@ -144,9 +144,10 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
         (&["lor"], &[], "loran", "Loran", 15),
         (&["hks"], &[], "", "hks", 16),
         (&["yti"], &[], "ytina", "ytina", 18),
-        (&["nin"], &[], "", "nin", 10),
-        (&["sui"], &[], "", "sui", 22),
-        (&["gok"], &[], "", "gok", 23),
+        // These three have no motions of their own: they borrow some, so as not to lie down.
+        (&["nin"], &[], "ryu", "nin", 10),
+        (&["sui"], &[], "karate", "sui", 22),
+        (&["gok"], &[], "genfu", "gok", 23),
     ];
     roster
         .iter()
