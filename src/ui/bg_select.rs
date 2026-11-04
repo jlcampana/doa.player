@@ -5,7 +5,7 @@ pub struct BgSelectPanel {
     pub anime_shading: bool,
     /// Multiplies the chest spring's deformation; 1 is what the game does.
     pub bounce_scale: f32,
-    /// Index in `DOA2U_LIGHTS`.
+    /// Index in the app's list of stage lights.
     pub lights: usize,
     /// The optional bump from textures. 0 is what the game draws.
     pub relief: f32,
@@ -18,7 +18,7 @@ impl BgSelectPanel {
         Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool) {
+    pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool, light_names: &[String]) {
         egui::Window::new("Background")
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .default_size([160.0, 220.0])
@@ -45,11 +45,13 @@ impl BgSelectPanel {
                 if lit {
                     ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
                     egui::CollapsingHeader::new("Stage lights").show(ui, |ui| {
-                        for (i, (name, _)) in crate::renderer::mesh::DOA2U_LIGHTS.iter().enumerate() {
-                            if ui.selectable_label(self.lights == i, *name).clicked() {
-                                self.lights = i;
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            for (i, name) in light_names.iter().enumerate() {
+                                if ui.selectable_label(self.lights == i, name).clicked() {
+                                    self.lights = i;
+                                }
                             }
-                        }
+                        });
                     });
                 }
                 if has_bounce {

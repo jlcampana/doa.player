@@ -50,7 +50,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Next steps, in order
 
-1. **Rest of the lighting.** Lights of more stages, by asking the user what each looks like (`tools/re/doa2u_lights.py 8`). Rename "Area 8" and "Area 48" when they come up, and check whether the Stage byte hints help. Four stage materials (`hel10`), drawing in the game's order, fog, lightning, point lights with a fighter position.
+1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: four stage materials (`hel10`), drawing in the game's order, fog, lightning, real point lights with a fighter position, and which areas change their table in code.
 2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
 3. **Remaining soft body error.** Head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm), the cuffs of `lei04` (worst 7 mm), chains on `tin16` 7, 8, 9 and `hel00` 3, 5, 8 (1 to 5 mm), and shoulders (up to 2.6 cm). Wind was 0 in the cloth captures, so it is untested.
 4. **Other soft body kinds:** 4, 5, 7, 8, 9, 12 and 14. They need those costumes in a match. Kind 0xFE variants are read but only variant 0 is shown; the selector byte at `0x877CA0` and `sub_0005B050` were not followed.
@@ -74,7 +74,6 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 - Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character. Validate close-ups on an adult, as the limit above says, not on Kasumi, which an older version of this note suggested.
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
-- All stage lights are in the executable (`tools/re/doa2u_stage_lights.py`, see the notes), but which set is whose is unknown. Finding that would replace measuring stage by stage.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
 
 ## Unverified in DOA2U

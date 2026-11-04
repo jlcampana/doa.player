@@ -184,6 +184,7 @@ fn render_frame(app: &mut App, window: &Window) {
     } else {
         Vec::new()
     };
+    let light_names: Vec<String> = app.stage_lights.iter().map(|(name, _)| name.clone()).collect();
     let has_bounce = app.has_chest_spring();
     let is_lit = app.mesh.is_lit();
     let bounce_before = app.bg_panel.bounce_scale;
@@ -200,6 +201,7 @@ fn render_frame(app: &mut App, window: &Window) {
             is_lit,
             &mut app.voice_panel,
             &voice_clips,
+            &light_names,
             &app.status_msg,
             &mut actions,
         );
@@ -256,7 +258,8 @@ fn render_frame(app: &mut App, window: &Window) {
         }
     }
     if app.mesh.is_lit() {
-        app.mesh.set_lights(Some(renderer::mesh::DOA2U_LIGHTS[app.bg_panel.lights].1));
+        let lights = app.current_stage_lights();
+        app.mesh.set_lights(Some(lights));
     }
     app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief);
     app.wireframe.update_camera(&app.ctx.queue, &vp);
@@ -344,6 +347,7 @@ fn build_ui(
     is_lit: bool,
     voice_panel: &mut ui::VoicePanel,
     voice_clips: &[voices::Clip],
+    light_names: &[String],
     status_msg: &str,
     actions: &mut UiActions,
 ) {
@@ -355,7 +359,7 @@ fn build_ui(
         actions.selected_anim = Some(ai);
     });
 
-    bg_panel.show(ctx, backgrounds, has_bounce, is_lit);
+    bg_panel.show(ctx, backgrounds, has_bounce, is_lit, light_names);
     voice_panel.show(ctx, voice_clips, &mut |entry| actions.play_voice = Some(entry));
 
     egui::TopBottomPanel::bottom("status")
@@ -430,7 +434,7 @@ fn load_from_arguments(app: &mut App) {
         app.bg_panel.relief = relief as f32 / 100.0;
     }
     if let Some(lights) = value_of("--lights") {
-        app.bg_panel.lights = lights.min(renderer::mesh::DOA2U_LIGHTS.len() - 1);
+        app.bg_panel.lights = lights.min(app.stage_lights.len().saturating_sub(1));
     }
     app.anim_panel.wind = args.iter().any(|a| a == "--wind");
     let float = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok());

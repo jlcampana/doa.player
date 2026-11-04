@@ -94,6 +94,12 @@ impl Xbe {
     }
 
     /// Reads `count` rows of a character's bone table, from a table of pointers.
+    /// Bytes at a virtual address, for sections stored in the file.
+    pub fn bytes(&self, va: u32, length: usize) -> Option<&[u8]> {
+        let start = self.offset(va)?;
+        self.data.get(start..start + length)
+    }
+
     pub fn bone_table(&self, table_va: u32, character_id: usize, count: usize) -> Result<Vec<Vec3>> {
         let table = self.offset(table_va).context("no skeleton table")?;
         let pointer = read_u32(&self.data, table + character_id * 4).context("bad character")?;
@@ -778,6 +784,39 @@ impl ChestSpring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lists what `loadfile.afs` holds around the costumes: every model, with its owner and
+    /// whether the viewer offers it.
+    #[test]
+    #[ignore]
+    fn survey_models_in_loadfile() {
+        let archive = crate::formats::AfsArchive::from_file("assets/doa3/loadfile.afs").unwrap();
+        let xbe = Xbe::from_bytes(std::fs::read("assets/doa3/default.xbe").unwrap()).unwrap();
+        let roster = xbe.roster().unwrap();
+        let mut starts: Vec<(usize, &str)> = roster.iter().map(|r| (r.bin_entry, r.name)).collect();
+        starts.sort_unstable();
+        println!("entries {}, first starts {:?}", archive.entries().len(), &starts[..3.min(starts.len())]);
+        for i in 0..archive.entries().len() {
+            let Some(data) = archive.get_by_index(i) else { continue };
+            if data.get(..4) != Some(b"XPR0") || data.get(0x14..0x18) != Some(b"MDL\0") {
+                continue;
+            }
+            let owner = starts.iter().rev().find(|(start, _)| *start <= i).map_or("before all", |(_, name)| name);
+            let next = archive.get_by_index(i + 1).unwrap_or(&[]);
+            let nodes = parse_node_objects(next);
+            let pieces = crate::formats::model::parse_xpr_model(data);
+            let vertices: usize = pieces.as_ref().map_or(0, |p| p.iter().map(|x| x.vertices.len()).sum());
+            println!(
+                "{i} {owner} size {} next {:?} next_size {} nodes {} objects {} vertices {vertices}",
+                data.len() / 1024,
+                next.get(..4).map(|b| String::from_utf8_lossy(b).to_string()),
+                next.len(),
+                nodes.as_ref().map_or_else(|e| format!("no: {e}"), |n| format!("rigid {} skins {}", n.rigid.len(), n.skins.len())),
+                pieces.as_ref().map_or(0, |p| p.len()),
+            );
+        }
+    }
+
 
     fn record(head: u16, low: u16) -> Vec<u8> {
         [head.to_le_bytes(), low.to_le_bytes()].concat()

@@ -53,92 +53,41 @@ pub struct SceneLights {
     pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
 }
 
-/// A stage's lights: ambient, then direction and diffuse. Specular is 0.3 of diffuse in
-/// all that were read.
-const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLights {
-    let mut out = [([0.0; 3], [0.0; 3], [0.0; 3]); 4];
-    let mut i = 0;
-    while i < 4 {
-        let c = lights[i].1;
-        out[i] = (lights[i].0, c, [c[0] * 0.3, c[1] * 0.3, c[2] * 0.3]);
-        i += 1;
-    }
-    SceneLights { ambient: [ambient as f32 / 255.0; 3], lights: out }
-}
+/// Used when the executable's table cannot be read: the desert stage's.
+pub const FALLBACK_LIGHTS: SceneLights = SceneLights {
+    ambient: [94.0 / 255.0; 3],
+    lights: [
+        ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45], [0.18, 0.144, 0.135]),
+        ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53], [0.234, 0.186, 0.159]),
+        ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28], [0.057, 0.042, 0.084]),
+        ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12], [0.078, 0.072, 0.036]),
+    ],
+};
 
-/// Lights read from the game while it draws fighters, by stage. Names with a number are provisional: the number is the
-/// byte read at the time, which does not identify a stage. See `doa2u_lights.py`.
-const fn with_ambient(lights: SceneLights, rgb: [u8; 3]) -> SceneLights {
-    SceneLights { ambient: [rgb[0] as f32 / 255.0, rgb[1] as f32 / 255.0, rgb[2] as f32 / 255.0], lights: lights.lights }
-}
+/// The cloudy stage's lights, read from the running game: its first light's direction differs
+/// from the table, and its code was not read.
+pub const CLOUDY_LIGHTS: SceneLights = SceneLights {
+    ambient: [86.0 / 255.0; 3],
+    lights: [
+        ([-0.988, -0.147, -0.049], [0.62, 0.54, 0.48], [0.186, 0.162, 0.144]),
+        ([0.466, -0.147, 0.872], [0.52, 0.4, 0.36], [0.156, 0.12, 0.108]),
+        ([-0.049, 0.049, -0.998], [0.18, 0.14, 0.24], [0.054, 0.042, 0.072]),
+        ([0.894, 0.147, -0.423], [0.22, 0.24, 0.34], [0.066, 0.072, 0.102]),
+    ],
+};
 
-pub const DOA2U_LIGHTS: [(&str, SceneLights); 10] = [
-    ("Desert", stage_lights(0x5E, [
-        ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
-        ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
-        ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28]),
-        ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12]),
-    ])),
-    ("Area 8", stage_lights(0x3F, [
-        ([0.451, -0.29, -0.844], [0.78, 0.57, 0.42]),
-        ([-0.677, -0.29, -0.677], [0.62, 0.41, 0.28]),
-        ([0.36, 0.337, 0.87], [0.36, 0.22, 0.37]),
-        ([-0.878, 0.098, 0.469], [0.2, 0.16, 0.38]),
-    ])),
-    ("Blue sky", stage_lights(0x54, [
-        ([-0.628, -0.147, -0.765], [0.72, 0.6, 0.52]),
-        ([0.451, -0.29, -0.844], [0.62, 0.54, 0.4]),
-        ([0.664, 0.147, 0.733], [0.24, 0.28, 0.38]),
-        ([-0.848, -0.147, 0.509], [0.36, 0.38, 0.3]),
-    ])),
-    // It has three lights.
-    ("Area 48", stage_lights(0x5E, [
-        ([0.643, -0.29, -0.709], [0.48, 0.54, 0.63]),
-        ([0.884, -0.29, 0.366], [0.35, 0.39, 0.58]),
-        ([-0.773, 0.0, -0.634], [0.41, 0.29, 0.1]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-    ])),
-    // Between flashes. A flash is in the notes.
-    ("Storm", stage_lights(0x4C, [
-        ([-0.593, -0.098, -0.799], [0.44, 0.52, 0.59]),
-        ([0.998, -0.049, -0.049], [0.4, 0.52, 0.48]),
-        ([-0.282, 0.243, 0.928], [0.23, 0.14, 0.08]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-    ])),
-    ("Cloudy", stage_lights(0x56, [
-        ([-0.988, -0.147, -0.049], [0.62, 0.54, 0.48]),
-        ([0.466, -0.147, 0.872], [0.52, 0.4, 0.36]),
-        ([-0.049, 0.049, -0.998], [0.18, 0.14, 0.24]),
-        ([0.894, 0.147, -0.423], [0.22, 0.24, 0.34]),
-    ])),
-    // Two of these are point lights in the game, taken at one place the fighters stood.
-    // See the notes.
-    ("Snowy night", stage_lights(0x47, [
-        ([-0.99, -0.098, -0.098], [0.29, 0.22, 0.2]),
-        ([-0.146, -0.105, 0.981], [0.215, 0.142, 0.066]),
-        ([-0.938, -0.297, 0.184], [0.533, 0.4, 0.213]),
-        ([0.988, -0.147, -0.049], [0.12, 0.13, 0.15]),
-    ])),
-    ("Laboratory", stage_lights(0x3F, [
-        ([-0.98, -0.049, 0.195], [1.05, 0.6, 0.48]),
-        ([-0.335, 0.098, -0.937], [0.26, 0.28, 0.21]),
-        ([0.97, -0.147, -0.193], [0.36, 0.6, 0.44]),
-        ([0.415, 0.243, 0.877], [0.29, 0.24, 0.17]),
-    ])),
-    // Two more lights turn slowly in the game with no color, for the 30 s read.
-    ("Disco", with_ambient(stage_lights(0, [
-        ([0.904, 0.0, 0.428], [0.42, 0.33, 0.17]),
-        ([-0.884, 0.29, -0.366], [0.17, 0.35, 0.47]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-    ]), [0x4C, 0x5E, 0x4C])),
-    ("Beach", stage_lights(0x5E, [
-        ([-0.539, -0.428, -0.726], [0.61, 0.53, 0.48]),
-        ([0.584, -0.195, -0.788], [0.74, 0.73, 0.63]),
-        ([-0.865, 0.29, 0.409], [0.2, 0.24, 0.41]),
-        ([0.668, -0.098, 0.737], [0.42, 0.4, 0.32]),
-    ])),
-];
+/// The snowy night's lights, read from the running game, since that stage changes its table's
+/// values in its own code. Two are lanterns, taken as directional lights from where the
+/// fighters stood in that read.
+pub const SNOWY_NIGHT_LIGHTS: SceneLights = SceneLights {
+    ambient: [71.0 / 255.0; 3],
+    lights: [
+        ([-0.99, -0.098, -0.098], [0.29, 0.22, 0.2], [0.087, 0.066, 0.06]),
+        ([-0.146, -0.105, 0.981], [0.215, 0.142, 0.066], [0.0645, 0.0426, 0.0198]),
+        ([-0.938, -0.297, 0.184], [0.533, 0.4, 0.213], [0.16, 0.12, 0.064]),
+        ([0.988, -0.147, -0.049], [0.12, 0.13, 0.15], [0.036, 0.039, 0.045]),
+    ],
+};
 
 struct LoadedModel {
     /// Vertices in bone space. Posed copies are uploaded every frame.

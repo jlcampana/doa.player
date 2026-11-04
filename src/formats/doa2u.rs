@@ -314,6 +314,77 @@ pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
     Ok(parse_overlay_records(cat, base, &offsets, object_count))
 }
 
+/// The game's lights for fighters in one stage area: ambient, then per light the direction
+/// it travels, diffuse and specular.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AreaLights {
+    pub area: usize,
+    pub name: String,
+    pub ambient: [f32; 3],
+    pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
+}
+
+/// The fighters' table follows the stage's, by area number: 71 sets of four 0x50 byte records
+/// from 0x6C9BF8 (`sub_00118570` reads the stage's).
+const AREA_LIGHTS_VA: u32 = 0x6C9BF8 + 71 * 0x140;
+const AREA_COUNT: usize = 71;
+
+/// Area names by number, from the game's list of `ECUSTOM_` names, which runs down from 70.
+/// Numbers 0 to 7 are doubtful: the list's names there do not fit its count, and the `?` says
+/// so. Empty ones are named `X` numbers in the list, with no stage files.
+const AREA_NAMES: [&str; AREA_COUNT] = [
+    "GL1?", "AG1N?", "DS2?", "GL2?", "", "KL1?", "KL1 inner?", "DS1?", "OH", "OH2",
+    "SN", "SN2", "SN3", "AM", "AG1D", "AG2 (cloudy)", "EL", "MI", "NK", "NK outer (snowy night)",
+    "MO", "PO (blue sky)", "", "BP", "BL (laboratory)", "GL1Z", "AG2N", "MI3", "GC", "TF",
+    "PO2", "PR (desert)", "TR", "KL2", "AG1S", "AG2S", "AL", "COL", "OL", "SA",
+    "KK", "TE (storm)", "TE2", "HT", "OL2", "TF2", "DJ", "KM", "NC", "BC (beach)",
+    "FC", "LT (disco)", "SV", "LC", "SEA", "DT", "SP", "SB", "", "",
+    "EAR", "WL2", "WL3", "MISM", "MIAU", "MIWI", "", "", "", "", "",
+];
+
+/// Reads the fighters' lights of every named area. Kind 0 is off, 1 directional and 2 a point
+/// (table at 0x7AFF38). The viewer has no point lights nor a place on the stage, so a point
+/// becomes a directional light as seen from the stage's center, with its attenuation there.
+pub fn area_lights(xbe: &Xbe) -> Result<Vec<AreaLights>> {
+    let center = Vec3::new(0.0, 1.0, 0.0);
+    let mut areas = Vec::new();
+    for (area, name) in AREA_NAMES.iter().enumerate() {
+        if name.is_empty() {
+            continue;
+        }
+        let set = xbe.bytes(AREA_LIGHTS_VA + area as u32 * 0x140, 0x140).context("area lights are outside the file")?;
+        let float = |at: usize| f32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
+        let word = |at: usize| u32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
+        let triple = |at: usize| Vec3::new(float(at), float(at + 4), float(at + 8));
+        let mut lights = [([0.0; 3], [0.0; 3], [0.0; 3]); 4];
+        for (i, light) in lights.iter_mut().enumerate() {
+            let at = i * 0x50;
+            let turn = std::f32::consts::TAU / 65536.0;
+            let (a, b) = (word(at + 0x1C) as i32 as f32 * turn, word(at + 0x20) as i32 as f32 * turn);
+            let mut direction = Vec3::new(-a.cos() * b.sin(), -a.sin(), -a.cos() * b.cos());
+            let mut scale = match word(at) {
+                1 => 1.0,
+                2 => {
+                    let offset = center - triple(at + 0x24);
+                    let distance = offset.length();
+                    direction = offset.normalize_or_zero();
+                    let (att0, att1, att2) = (float(at + 0x30), float(at + 0x34), float(at + 0x38));
+                    let denominator = att0 + att1 * distance + att2 * distance * distance;
+                    if distance <= float(at + 0x3C) && denominator > 0.0 { 1.0 / denominator } else { 0.0 }
+                }
+                _ => 0.0,
+            };
+            if !scale.is_finite() {
+                scale = 0.0;
+            }
+            let diffuse = triple(at + 0x10) * scale;
+            *light = (direction.to_array(), diffuse.to_array(), (diffuse * float(at + 0x4C)).to_array());
+        }
+        areas.push(AreaLights { area, name: name.to_string(), ambient: triple(4).to_array(), lights });
+    }
+    Ok(areas)
+}
+
 /// Kind 251 in the soft body list (`sub_0004FD00`): rebuilds a moving object's normals from
 /// triangle strips. +0 of the record is the object and +4 the offset of the data: +0 the
 /// group count, +4 a position's byte offset per group, +8 seeds, +0xC strips, +0x10 where
@@ -1124,6 +1195,39 @@ mod tests {
         let normals = rebuild.normals(|v| square.get(v).copied());
         assert!(normals.iter().filter(|n| n.0 < 4).all(|n| n.1[2] == 1.0), "{normals:?}");
         assert_eq!(normals.iter().find(|n| n.0 == 9).unwrap().1[2], -1.0);
+    }
+
+    /// Compares the executable's table with what was read from the running game. DOA2U_XBE
+    /// is the executable.
+    #[test]
+    #[ignore]
+    fn area_lights_match_the_measured_ones() {
+        let xbe = Xbe::from_bytes(std::fs::read(std::env::var("DOA2U_XBE").expect("DOA2U_XBE")).unwrap()).unwrap();
+        let areas = area_lights(&xbe).unwrap();
+        // Area, ambient, first light's direction and diffuse, as measured.
+        let measured = [
+            (31, 94.0, [-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
+            (8, 63.0, [0.451, -0.29, -0.844], [0.78, 0.57, 0.42]),
+            (21, 84.0, [-0.628, -0.147, -0.765], [0.72, 0.6, 0.52]),
+            (48, 94.0, [0.643, -0.29, -0.709], [0.48, 0.54, 0.63]),
+            (41, 76.0, [-0.593, -0.098, -0.799], [0.44, 0.52, 0.59]),
+            (24, 63.0, [-0.98, -0.049, 0.195], [1.05, 0.6, 0.48]),
+            (49, 94.0, [-0.539, -0.428, -0.726], [0.61, 0.53, 0.48]),
+        ];
+        for (area, ambient, direction, diffuse) in measured {
+            let found = areas.iter().find(|a| a.area == area).unwrap();
+            assert!((found.ambient[0] * 255.0 - ambient).abs() < 2.0, "area {area} ambient {:?}", found.ambient);
+            for i in 0..3 {
+                assert!((found.lights[0].0[i] - direction[i]).abs() < 0.002, "area {area} direction {:?}", found.lights[0].0);
+                assert!((found.lights[0].1[i] - diffuse[i]).abs() < 0.002, "area {area} diffuse {:?}", found.lights[0].1);
+                assert!((found.lights[0].2[i] - diffuse[i] * 0.3).abs() < 0.002, "area {area} specular {:?}", found.lights[0].2);
+            }
+        }
+        // Disco's ambient is not gray, and its second and third lights are off.
+        let disco = areas.iter().find(|a| a.area == 51).unwrap();
+        assert!((disco.ambient[1] * 255.0 - 94.0).abs() < 2.0 && (disco.ambient[0] * 255.0 - 76.0).abs() < 2.0);
+        assert_eq!(disco.lights[1].1, [0.0; 3]);
+        println!("{} areas", areas.len());
     }
 
     #[test]

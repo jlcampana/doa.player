@@ -260,6 +260,38 @@ fn doa2u_animations(bin_id: &str, archive: &AfsArchive) -> Vec<AnimationEntry> {
     animations
 }
 
+/// Every stage's lights from DOA2's executable, the desert first. The snowy night and the
+/// cloudy stage use what was read from the running game, which differs from the table.
+fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
+    use crate::renderer::mesh::{SceneLights, CLOUDY_LIGHTS, FALLBACK_LIGHTS, SNOWY_NIGHT_LIGHTS};
+    let areas = std::fs::read(DOA2U_XBE_PATH).map_err(anyhow::Error::from).and_then(Xbe::from_bytes).and_then(|xbe| doa2u::area_lights(&xbe));
+    let mut list: Vec<(String, SceneLights)> = match areas {
+        Ok(areas) => areas
+            .into_iter()
+            .map(|area| {
+                let lights = match area.area {
+                    15 => CLOUDY_LIGHTS,
+                    19 => SNOWY_NIGHT_LIGHTS,
+                    _ => SceneLights { ambient: area.ambient, lights: area.lights },
+                };
+                (area.name, lights)
+            })
+            .collect(),
+        Err(e) => {
+            log::warn!("Could not read the stage lights: {e:#}");
+            Vec::new()
+        }
+    };
+    if let Some(desert) = list.iter().position(|(name, _)| name.contains("desert")) {
+        let entry = list.remove(desert);
+        list.insert(0, entry);
+    }
+    if list.is_empty() {
+        list.push(("Desert".to_string(), FALLBACK_LIGHTS));
+    }
+    list
+}
+
 fn background_options() -> Vec<BackgroundOption> {
     vec![
         BackgroundOption { name: "Black".into(),         clear_color: [0.0, 0.0, 0.0, 1.0] },
@@ -315,6 +347,8 @@ pub struct App {
     // Archives (lazily loaded)
     pub hdd_archive: Option<AfsArchive>,
     pub hdd2_archive: Option<AfsArchive>,
+    /// Names and lights of the stages, for the selector.
+    pub stage_lights: Vec<(String, crate::renderer::mesh::SceneLights)>,
     pub voices: crate::voices::VoicePlayer,
     pub voice_panel: crate::ui::VoicePanel,
     pub dvd_archive: Option<AfsArchive>,
@@ -407,6 +441,7 @@ impl App {
         camera.frame_character(1.8);
 
         let background_options = background_options();
+        let stage_lights = load_stage_lights();
         let hdd2_archive = match AfsArchive::from_file(DOA2U_HDD2_PATH) {
             Ok(a) => Some(a),
             Err(e) => {
@@ -480,6 +515,7 @@ impl App {
             background_options,
             hdd_archive,
             hdd2_archive,
+            stage_lights,
             voices: Default::default(),
             voice_panel: crate::ui::VoicePanel::new(),
             dvd_archive,
@@ -495,6 +531,11 @@ impl App {
             doa3_pose: None,
             framed_character: None,
         }
+    }
+
+    /// The stage lights picked in the panel.
+    pub fn current_stage_lights(&self) -> crate::renderer::mesh::SceneLights {
+        self.stage_lights.get(self.bg_panel.lights).map_or(crate::renderer::mesh::FALLBACK_LIGHTS, |entry| entry.1)
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {
@@ -678,7 +719,7 @@ impl App {
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
-        self.mesh.set_lights(Some(crate::renderer::mesh::DOA2U_LIGHTS[self.bg_panel.lights].1));
+        self.mesh.set_lights(Some(self.current_stage_lights()));
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         for chain in &chains {
