@@ -10,6 +10,8 @@ pub struct Camera {
     pub aspect: f32,
     pub near: f32,
     pub far: f32,
+    /// Where drags turn around, set by a click. None turns around the target.
+    pub pivot: Option<Vec3>,
 }
 
 impl Camera {
@@ -23,6 +25,7 @@ impl Camera {
             aspect,
             near: 0.01,
             far: 1000.0,
+            pivot: None,
         }
     }
 
@@ -47,12 +50,20 @@ impl Camera {
 
     /// Handle drag input. delta is in pixels.
     pub fn orbit(&mut self, delta: Vec2) {
+        let held = self.pivot.map(|pivot| (pivot, self.view_matrix().transform_point3(pivot)));
         self.yaw -= delta.x * 0.005;
         self.pitch += delta.y * 0.005;
         self.pitch = self.pitch.clamp(
             -std::f32::consts::FRAC_PI_2 + 0.05,
             std::f32::consts::FRAC_PI_2 - 0.05,
         );
+        // The pivot stays where it is on screen, and the view moves around it.
+        if let Some((pivot, on_screen)) = held {
+            let offset = self.position() - self.target;
+            let turn = Mat4::look_at_rh(offset, Vec3::ZERO, Vec3::Y);
+            let eye = pivot - turn.inverse().transform_vector3(on_screen);
+            self.target = eye - offset;
+        }
     }
 
     /// The ray through a window position, as origin and direction.
@@ -66,20 +77,6 @@ impl Camera {
     /// Radius per unit of distance of a number of pixels, for a window height.
     pub fn pixel_spread(&self, pixels: f32, height: f32) -> f32 {
         (self.fov_y * 0.5).tan() * 2.0 * pixels / height
-    }
-
-    /// Orbits around a new point from now on, keeping the camera where it is.
-    /// The view turns to face the point, so it recenters on it.
-    pub fn orbit_around(&mut self, point: Vec3) {
-        let offset = self.position() - point;
-        let distance = offset.length();
-        if distance < 1e-3 {
-            return;
-        }
-        self.target = point;
-        self.distance = distance;
-        self.yaw = offset.x.atan2(offset.z);
-        self.pitch = (offset.y / distance).asin();
     }
 
     /// Handle scroll for zoom.
@@ -106,6 +103,7 @@ impl Camera {
         self.distance = h * 1.2;
         self.pitch = 0.1;
         self.yaw = std::f32::consts::FRAC_PI_4;
+        self.pivot = None;
     }
 }
 
@@ -114,13 +112,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn orbiting_around_a_point_keeps_the_camera_in_place() {
+    fn a_pivot_stays_in_place_on_screen_while_orbiting() {
         let mut camera = Camera::new(1.5);
-        let before = camera.position();
         let point = Vec3::new(0.3, 1.4, -0.2);
-        camera.orbit_around(point);
-        assert!(camera.position().distance(before) < 1e-4);
-        assert_eq!(camera.target, point);
+        camera.pivot = Some(point);
+        let before = camera.view_matrix().transform_point3(point);
+        let (position, target) = (camera.position(), camera.target);
+        camera.orbit(Vec2::new(40.0, -25.0));
+        assert!(camera.view_matrix().transform_point3(point).distance(before) < 1e-3);
+        assert!(camera.position().distance(position) > 0.01 && camera.target.distance(target) > 0.01);
+    }
+
+    #[test]
+    fn without_a_pivot_orbiting_keeps_the_target() {
+        let mut camera = Camera::new(1.5);
+        let target = camera.target;
+        camera.orbit(Vec2::new(40.0, -25.0));
+        assert_eq!(camera.target, target);
     }
 
     #[test]

@@ -205,6 +205,8 @@ Material blocks are read by `material_look`, as `sub_00286C00` and `sub_00286D30
 - Stages, 16 bytes each: texture, then at +8 a mode for the table at `0x7AFFC8`, whose pairs of indices point at `(op, arg, arg)` in `0x7B0078`. +0xF selects coordinates through `0x7B018C`; 1 is a camera space reflection. Modes 0 and 1 are texture times diffuse, with alpha from the material or also from the texture. Modes 3, 4, 5 on three stages blend stage 1 over stage 0 by stage 1's alpha, then multiply by diffuse.
 - Texture matrices during fighter draws: TEXTURE0 is 0.5, -0.5 with offset 0.5, TEXTURE1 is the identity, in all 49791 reads.
 
+The viewer's own additions, not from the game: mipmaps and 16x anisotropic filtering on all textures, in DOA3 too, and an optional relief (Background panel, `--relief PERCENT`, off by default), a bump from each texture's brightness lit per pixel. It applies to every lit material, skin included, and looks grainy on detailed textures at the top of its range. Whether the game's own textures have mip levels was not checked.
+
 Colors in the game have no gamma step. The viewer's textures and window are sRGB, so its shader converts to stored values and back.
 
 Compared with the game: `hel08` and `kas00` by eye against one screenshot, in other poses and angles. Not measured by pixel. Differences to expect:

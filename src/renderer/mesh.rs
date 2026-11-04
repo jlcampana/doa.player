@@ -260,6 +260,8 @@ impl MeshRenderer {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
 
@@ -374,12 +376,14 @@ impl MeshRenderer {
         self.lights.is_some()
     }
 
-    pub fn update(&self, queue: &wgpu::Queue, view_proj: &glam::Mat4, view: &glam::Mat4, anime_shading: bool) {
+    /// `relief` is the optional texture bump, 0 for what the game draws.
+    pub fn update(&self, queue: &wgpu::Queue, view_proj: &glam::Mat4, view: &glam::Mat4, anime_shading: bool, relief: f32) {
         let model = glam::Mat4::IDENTITY;
         let mut buf = [0f32; UNIFORM_FLOATS];
         buf[..16].copy_from_slice(&view_proj.to_cols_array());
         buf[16..32].copy_from_slice(&model.to_cols_array());
         buf[32] = if anime_shading { 1.0 } else { 0.0 };
+        buf[33] = relief;
         buf[36..52].copy_from_slice(&view.to_cols_array());
         if let Some(lights) = &self.lights {
             buf[52..55].copy_from_slice(&lights.ambient);
@@ -635,6 +639,57 @@ fn nearest_along_ray(
 /// Floats in the uniform buffer. The material holds 6 vec4 in its own buffer.
 const UNIFORM_FLOATS: usize = 104;
 
+/// All mip levels, one after another, averaged in linear light with the viewer's sRGB
+/// textures. The viewer's own choice: this is not read from the game's files.
+fn with_mipmaps(width: u32, height: u32, rgba: &[u8]) -> (u32, Vec<u8>) {
+    let to_linear = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let to_byte = |c: f32| {
+        let c = if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+        (c * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+    };
+    let mut levels = rgba.to_vec();
+    let (mut w, mut h) = (width as usize, height as usize);
+    let mut previous = rgba.to_vec();
+    let mut count = 1;
+    while w > 1 || h > 1 {
+        let (next_w, next_h) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0u8; next_w * next_h * 4];
+        for y in 0..next_h {
+            for x in 0..next_w {
+                let mut sum = [0f32; 4];
+                let mut alpha_weight = 0.0;
+                let (xs, ys) = ([x * 2, (x * 2 + 1).min(w - 1)], [y * 2, (y * 2 + 1).min(h - 1)]);
+                for sy in ys {
+                    for sx in xs {
+                        let p = &previous[(sy * w + sx) * 4..(sy * w + sx) * 4 + 4];
+                        let a = p[3] as f32 / 255.0;
+                        // Colors count by alpha, so clear texels do not bleed into edges.
+                        for c in 0..3 {
+                            sum[c] += to_linear(p[c]) * a;
+                        }
+                        sum[3] += a;
+                        alpha_weight += a;
+                    }
+                }
+                let out = &mut next[(y * next_w + x) * 4..(y * next_w + x) * 4 + 4];
+                for c in 0..3 {
+                    out[c] = to_byte(if alpha_weight > 0.0 { sum[c] / alpha_weight } else { 0.0 });
+                }
+                out[3] = (sum[3] / 4.0 * 255.0 + 0.5) as u8;
+            }
+        }
+        levels.extend_from_slice(&next);
+        previous = next;
+        w = next_w;
+        h = next_h;
+        count += 1;
+    }
+    (count, levels)
+}
+
 /// A draw's textures and material. Without a look it keeps the viewer's own shading.
 fn draw_bind_group(
     device: &wgpu::Device,
@@ -681,12 +736,13 @@ fn create_texture(
     rgba: &[u8],
 ) -> wgpu::TextureView {
     let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let (mip_level_count, levels) = with_mipmaps(width, height, rgba);
     let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: Some("Model Texture"),
             size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -694,7 +750,7 @@ fn create_texture(
             view_formats: &[],
         },
         wgpu::util::TextureDataOrder::LayerMajor,
-        rgba,
+        &levels,
     );
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
@@ -775,6 +831,7 @@ struct VertOut {
     @location(2) layer_uv: vec2<f32>,
     @location(3) lit: vec3<f32>,
     @location(4) specular: vec3<f32>,
+    @location(5) world: vec3<f32>,
 }
 
 @vertex
@@ -785,6 +842,7 @@ fn vs_main(v: VertIn) -> VertOut {
     out.normal = v.normal;
     out.uv = v.uv;
     out.layer_uv = v.uv;
+    out.world = world_pos.xyz;
     if material.flags.x > 0.5 {
         // Per vertex, as the game's fixed function lighting (d3d_draw_shader.cpp in its port).
         let n = normalize(v.normal);
@@ -800,23 +858,32 @@ fn vs_main(v: VertIn) -> VertOut {
         if material.coords.y > 0.5 {
             out.layer_uv = reflected.xy;
         }
-        // The game's specular takes an infinite viewer: +Z in camera space.
-        let to_eye = (vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz;
-        var rgb = material.emissive.rgb + material.ambient.rgb * u.ambient.rgb;
-        var specular = vec3<f32>(0.0);
-        for (var i = 0; i < 4; i += 1) {
-            let l = u.light_to[i].xyz;
-            let d = dot(n, l);
-            if d > 0.0 {
-                rgb += material.diffuse.rgb * u.light_diffuse[i].rgb * d;
-                let h = normalize(l + to_eye);
-                specular += material.specular.rgb * u.light_specular[i].rgb * pow(max(dot(n, h), 1e-5), material.specular.w);
-            }
-        }
-        out.lit = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-        out.specular = clamp(specular, vec3<f32>(0.0), vec3<f32>(1.0)) * material.flags.y;
+        let lit = light_at(n);
+        out.lit = lit[0];
+        out.specular = lit[1];
     }
     return out;
+}
+
+/// The diffuse and specular of the game's lighting, for a normal.
+fn light_at(n: vec3<f32>) -> array<vec3<f32>, 2> {
+    // The game's specular takes an infinite viewer: +Z in camera space.
+    let to_eye = (vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz;
+    var rgb = material.emissive.rgb + material.ambient.rgb * u.ambient.rgb;
+    var specular = vec3<f32>(0.0);
+    for (var i = 0; i < 4; i += 1) {
+        let l = u.light_to[i].xyz;
+        let d = dot(n, l);
+        if d > 0.0 {
+            rgb += material.diffuse.rgb * u.light_diffuse[i].rgb * d;
+            let h = normalize(l + to_eye);
+            specular += material.specular.rgb * u.light_specular[i].rgb * pow(max(dot(n, h), 1e-5), material.specular.w);
+        }
+    }
+    return array<vec3<f32>, 2>(
+        clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)),
+        clamp(specular, vec3<f32>(0.0), vec3<f32>(1.0)) * material.flags.y,
+    );
 }
 
 // The game works on stored texture values, with no gamma. The viewer's textures and
@@ -865,7 +932,26 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
             color = mix(color, to_stored(layer.rgb), layer.a);
             alpha = material.diffuse.a * mix(alpha, layer.a, layer.a);
         }
-        let lit = clamp(color * v.lit + v.specular, vec3<f32>(0.0), vec3<f32>(1.0));
+        var diffuse_light = v.lit;
+        var specular_light = v.specular;
+        // Not in the game: a bump from the texture's own brightness, lit per pixel.
+        let brightness = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+        let dx = dpdx(v.world);
+        let dy = dpdy(v.world);
+        let dhx = dpdx(brightness);
+        let dhy = dpdy(brightness);
+        if u.anime_shading.y > 0.0 {
+            let n = normalize(v.normal);
+            let r1 = cross(dy, n);
+            let r2 = cross(n, dx);
+            let det = dot(dx, r1);
+            let gradient = sign(det) * (dhx * r1 + dhy * r2);
+            let bumped = normalize(abs(det) * n - u.anime_shading.y * 0.012 * gradient);
+            let lit_here = light_at(bumped);
+            diffuse_light = lit_here[0];
+            specular_light = lit_here[1];
+        }
+        let lit = clamp(color * diffuse_light + specular_light, vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(from_stored(lit), alpha);
     }
     if texel.a < 0.1 {
@@ -880,6 +966,16 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 mod tests {
     use super::*;
     use glam::Vec3;
+
+    #[test]
+    fn mipmaps_fill_every_level_and_ignore_clear_texels() {
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 0, 255, 0, 0, 255, 0, 255, 0, 0];
+        let (count, levels) = with_mipmaps(2, 2, &rgba);
+        assert_eq!((count, levels.len()), (2, 16 + 4));
+        assert_eq!(&levels[16..], &[255, 0, 0, 128]);
+        let (count, levels) = with_mipmaps(4, 1, &[9; 16]);
+        assert_eq!((count, levels.len()), (3, 16 + 8 + 4));
+    }
 
     #[test]
     fn picking_takes_the_nearest_point_on_the_ray() {

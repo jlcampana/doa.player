@@ -96,13 +96,11 @@ impl ApplicationHandler for Handler {
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
                         self.mouse_left_down = true;
-                        // Rotates around the point of the character under the cursor.
+                        // Later drags turn around the point of the character under the cursor.
                         let size = window.inner_size();
                         let (width, height) = (size.width as f32, size.height as f32);
                         let (origin, direction) = app.camera.ray(self.last_pos.0 as f32, self.last_pos.1 as f32, width, height);
-                        if let Some(point) = app.mesh.pick(origin, direction, app.camera.pixel_spread(6.0, height)) {
-                            app.camera.orbit_around(point);
-                        }
+                        app.camera.pivot = app.mesh.pick(origin, direction, app.camera.pixel_spread(6.0, height));
                     }
                     (MouseButton::Left, ElementState::Released) => self.mouse_left_down = false,
                     (MouseButton::Right, ElementState::Pressed) => self.mouse_right_down = true,
@@ -227,7 +225,7 @@ fn render_frame(app: &mut App, window: &Window) {
     if app.mesh.is_lit() {
         app.mesh.set_lights(Some(renderer::mesh::DOA2U_LIGHTS[app.bg_panel.lights].1));
     }
-    app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading);
+    app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief);
     app.wireframe.update_camera(&app.ctx.queue, &vp);
 
     let mut encoder = app.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -380,6 +378,9 @@ fn load_from_arguments(app: &mut App) {
     }
 
     app.bg_panel.anime_shading = args.iter().any(|a| a == "--anime");
+    if let Some(relief) = value_of("--relief") {
+        app.bg_panel.relief = relief as f32 / 100.0;
+    }
     if let Some(lights) = value_of("--lights") {
         app.bg_panel.lights = lights.min(renderer::mesh::DOA2U_LIGHTS.len() - 1);
     }

@@ -7,11 +7,13 @@ pub struct BgSelectPanel {
     pub bounce_scale: f32,
     /// Index in `DOA2U_LIGHTS`.
     pub lights: usize,
+    /// The optional bump from textures. 0 is what the game draws.
+    pub relief: f32,
 }
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0 }
+        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0, relief: 0.0 }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool) {
@@ -29,6 +31,7 @@ impl BgSelectPanel {
                 ui.separator();
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
                 if lit {
+                    ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
                     ui.separator();
                     ui.label("Stage lights:");
                     for (i, (name, _)) in crate::renderer::mesh::DOA2U_LIGHTS.iter().enumerate() {
