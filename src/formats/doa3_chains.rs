@@ -311,6 +311,9 @@ pub struct SoftChain {
     max_force: f32,
     particles: Vec<Particle>,
     ready: bool,
+    /// DOA2U's factor for the wind. It goes in the pull, not the force.
+    wind_factor: Option<f32>,
+    root_vertex: Option<(usize, usize)>,
 }
 
 /// Finds the CAT's list of physics sections and returns its base and entries.
@@ -519,6 +522,24 @@ pub fn parse_overlays(cat: &[u8], object_count: usize) -> Vec<Overlay> {
 }
 
 /// Reads every chain in a CAT that moves vertices.
+/// Reads chains at offsets from `base`, for DOA2U, whose list is read elsewhere.
+pub fn parse_chain_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftChain> {
+    offsets
+        .iter()
+        .filter_map(|&offset| {
+            let at = base + offset;
+            let mut chain = parse_chain(cat, base, at)?;
+            chain.wind_factor = Some(read_f32(cat, at + 0x3C)?);
+            // A root on a vertex of the object at +2, by byte offset (`sub_000591A0`).
+            let root = read_u32(cat, at + 0x44)?;
+            if root != 0 {
+                chain.root_vertex = Some((*cat.get(at + 2)? as usize, root as usize / VERTEX_STRIDE as usize));
+            }
+            Some(chain)
+        })
+        .collect()
+}
+
 pub fn parse_chains(cat: &[u8]) -> Vec<SoftChain> {
     let Some((base, sections)) = find_sections(cat) else { return Vec::new() };
     sections
@@ -566,10 +587,22 @@ fn parse_chain(cat: &[u8], base: usize, at: usize) -> Option<SoftChain> {
         max_force: read_f32(cat, at + 0x40)?,
         particles: vec![Particle::default(); count],
         ready: false,
+        wind_factor: None,
+        root_vertex: None,
     })
 }
 
 impl SoftChain {
+    /// DOA2U: the object and vertex this chain starts on, if any.
+    pub fn root_vertex(&self) -> Option<(usize, usize)> {
+        self.root_vertex
+    }
+
+    /// Moves the chain's start, in the bone's space, for `root_vertex`.
+    pub fn set_root(&mut self, position: Vec3) {
+        self.offset = position;
+    }
+
     /// Whether this chain hangs from the front of the torso.
     pub fn is_on_torso_front(&self) -> bool {
         self.bone == 0 && self.offset.z > 0.0
@@ -586,9 +619,14 @@ impl SoftChain {
         }
         let mut point = bone.transform_point3(self.offset);
         let mut direction = bone.transform_vector3(self.direction);
+        // DOA2U adds the wind to the pull, so it also feeds the velocity.
+        let (pull_wind, wind) = match self.wind_factor {
+            Some(factor) => (wind * factor, Vec3::ZERO),
+            None => (Vec3::ZERO, wind),
+        };
         for i in 0..self.particles.len() {
             let particle = self.particles[i];
-            let pull = particle.position - point;
+            let pull = particle.position - point + pull_wind;
             let mut velocity = (particle.velocity + pull - particle.last_pull) * self.damping;
             velocity.y -= self.gravity;
 
@@ -755,6 +793,100 @@ fn segment_frame(point: Vec3, along: Vec3) -> Mat4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One step of DOA2U chains against particles from the game. DOA2U_PAIRS comes
+    /// from `tools/re/doa2u_chain_pairs.py`, and DOA2U_RECORDS lists "fighter costume".
+    #[test]
+    #[ignore]
+    fn doa2u_chain_single_steps() {
+        use crate::formats::doa2u::{decrypt_cat, soft_body_offsets};
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut costumes = std::collections::HashMap::new();
+        for pair in std::env::var("DOA2U_RECORDS").expect("DOA2U_RECORDS").split(',') {
+            let (fighter, stem) = pair.split_once(' ').unwrap();
+            let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+            decrypt_cat(&mut cat).unwrap();
+            let (base, offsets) = soft_body_offsets(&cat, 1).unwrap();
+            println!("{stem}: {} kind 1 records", offsets.len());
+            costumes.insert(fighter.to_string(), parse_chain_records(&cat, base, &offsets));
+        }
+        let text = std::fs::read_to_string(std::env::var("DOA2U_PAIRS").expect("DOA2U_PAIRS")).unwrap();
+        let particles = |v: &[f32]| -> Vec<Particle> {
+            v.chunks_exact(16)
+                .map(|p| Particle {
+                    position: Vec3::new(p[0], p[1], p[2]),
+                    segment: Vec3::new(p[4], p[5], p[6]),
+                    velocity: Vec3::new(p[8], p[9], p[10]),
+                    last_pull: Vec3::new(p[12], p[13], p[14]),
+                })
+                .collect()
+        };
+        let mut records = Vec::new();
+        let mut nodes: std::collections::HashMap<String, Vec<Mat4>> = Default::default();
+        let mut before: Vec<Particle> = Vec::new();
+        let (mut head, mut ring) = (0usize, Vec::<f32>::new());
+        let mut results: std::collections::BTreeMap<usize, Vec<(f32, f32, f32)>> = Default::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let kind = words.next().unwrap();
+            let rest: Vec<&str> = words.collect();
+            match kind {
+                "rec" => records.push((rest[0].to_string(), rest[1].parse::<usize>().unwrap())),
+                "wind" => {
+                    head = rest[0].parse().unwrap();
+                    ring = rest[1..].iter().map(|v| v.parse().unwrap()).collect();
+                }
+                "matrices" => {
+                    let m: Vec<f32> = rest[1..].iter().map(|v| v.parse().unwrap()).collect();
+                    let game = |i: usize| Mat4::from_cols_slice(&m[i * 16..i * 16 + 16]);
+                    let mut list = vec![Mat4::IDENTITY; 23];
+                    for (i, node) in list.iter_mut().enumerate().take(15) {
+                        *node = game(i);
+                    }
+                    list[19] = game(24);
+                    list[20] = game(25);
+                    nodes.insert(rest[0].to_string(), list);
+                }
+                "before" => before = particles(&rest[1..].iter().map(|v| v.parse().unwrap()).collect::<Vec<f32>>()),
+                "after" => {
+                    let k: usize = rest[0].parse().unwrap();
+                    let after = particles(&rest[1..].iter().map(|v| v.parse().unwrap()).collect::<Vec<f32>>());
+                    let (fighter, record) = &records[k];
+                    let Some(chain) = costumes.get_mut(fighter).and_then(|c| c.get_mut(*record)) else { continue };
+                    if chain.particles.len() != after.len() {
+                        println!("record {k}: {} particles here, {} in the game", chain.particles.len(), after.len());
+                        continue;
+                    }
+                    chain.ready = true;
+                    chain.particles.copy_from_slice(&before);
+                    let phase = (*record * 3) & 7;
+                    let index = (head as i64 - phase as i64 - 1).rem_euclid(64) as usize * 4;
+                    chain.step(&nodes[fighter], Vec3::new(ring[index], ring[index + 1], ring[index + 2]));
+                    if (chain.particles[0].position - after[0].position).length() < 0.0005 {
+                        let error = |list: &[Particle]| list.iter().zip(&after).map(|(a, b)| (a.segment - b.segment).length()).sum::<f32>() / after.len() as f32 * 1000.0;
+                        let worst = chain.particles.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0, f32::max) * 1000.0;
+                        results.entry(k).or_default().push((error(&chain.particles), error(&before), worst));
+                    } else {
+                        results.entry(k).or_default();
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (k, mut list) in results {
+            let median = |v: &mut Vec<f32>| {
+                v.sort_by(f32::total_cmp);
+                v.get(v.len() / 2).copied().unwrap_or(f32::NAN)
+            };
+            let count = list.len();
+            let mut ours: Vec<f32> = list.iter().map(|r| r.0).collect();
+            let mut still: Vec<f32> = list.iter().map(|r| r.1).collect();
+            let mut worst: Vec<f32> = list.drain(..).map(|r| r.2).collect();
+            println!("record {k} {:?}: {count} pairs usable; segment error {:.2} mm, without stepping {:.2} mm, worst position {:.2} mm", records[k], median(&mut ours), median(&mut still), median(&mut worst));
+        }
+    }
+
 
     fn entry(data: &[u8], index: usize) -> &[u8] {
         let at = 8 + index * 8;

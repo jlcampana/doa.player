@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
 
 use super::doa3::{parse_sparse_joint_skins, JointSkin, Xbe, NODE_COUNT, NODE_EYES, NODE_TWIST};
+use super::doa3_chains::{parse_chain_records, SoftChain};
 use super::doa3_cloth::{parse_cloth_records, SoftCloth};
 use super::model::{read_u32, slice, strip_to_triangles, ModelMaterial, ModelPiece, ModelVertex, VERTEX_SIZE};
 
@@ -271,6 +272,29 @@ pub fn soft_cloth(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<
         sheet.follow_vertices(|v| vertices.get(v).map(|vertex| Vec3::from_array(vertex.position)));
     }
     Ok(cloth)
+}
+
+/// The costume's chains: kind 1 in the soft body list, for hair and similar. On
+/// `NO_SOFT_CLOTH_IDS` only the head's chains are kept, as the rest are on the body.
+pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<SoftChain>> {
+    let (base, offsets) = soft_body_offsets(cat, 1)?;
+    let mut chains = parse_chain_records(cat, base, &offsets);
+    for chain in &mut chains {
+        // Bones from 0x80 are matrices from 24, as draw list slots are.
+        if chain.bone >= 128 {
+            chain.bone = node_of_matrix((chain.bone - 128 + 24) as u8).unwrap_or(usize::MAX);
+        }
+        if let Some((object, vertex)) = chain.root_vertex() {
+            if let Some(position) = model.pieces.get(object).and_then(|piece| piece.vertices.get(vertex)) {
+                chain.set_root(Vec3::from_array(position.position));
+            }
+        }
+    }
+    chains.retain(|chain| chain.bone != usize::MAX);
+    if NO_SOFT_CLOTH_IDS.contains(&character_id) {
+        chains.retain(|chain| chain.bone == 1);
+    }
+    Ok(chains)
 }
 
 /// Limbs of `sub_000EB880`, from the table at 0x699600 (the origins come from
@@ -789,6 +813,27 @@ mod tests {
                     let words: Vec<String> = (0..(size.min(0x80 + 16 * 4)) / 4).map(|w| format!("{:x}", read_u32(&xpr, block + w * 4).unwrap())).collect();
                     println!("  material {}", words.join(" "));
                     block += size;
+                }
+            }
+            if std::env::var("DOA2U_WINDING").is_ok() {
+                let record = read_u32(&xpr, 0x28 + i * 4).unwrap() as usize;
+                let index_offset = read_u32(&xpr, record + 0x2C).unwrap() as usize;
+                let mut block = record + 0xA0;
+                for material in &piece.materials {
+                    let (mut with, mut against) = (0, 0);
+                    for t in material.indices.chunks_exact(3) {
+                        let v = |k: usize| &piece.vertices[t[k] as usize];
+                        let p = |k: usize| Vec3::from_array(v(k).position);
+                        let face = (p(1) - p(0)).cross(p(2) - p(0));
+                        let stored = Vec3::from_array(v(0).normal) + Vec3::from_array(v(1).normal) + Vec3::from_array(v(2).normal);
+                        if face.dot(stored) >= 0.0 { with += 1 } else { against += 1 }
+                    }
+                    let flag = read_u32(&xpr, block + 0xC).unwrap();
+                    let size = read_u32(&xpr, block + 4).unwrap() as usize;
+                    let last = read_u32(&xpr, block + size - 4).unwrap();
+                    println!("  winding obj {i} flag {flag} last {last} tris {} with normals {with} against {against}", material.indices.len() / 3);
+                    block += size;
+                    let _ = index_offset;
                 }
             }
             println!("{i:3} v{:5} w{} [{:.2} {:.2} {:.2}]..[{:.2} {:.2} {:.2}] {uses:?} tex {textures:?}", piece.vertices.len(), model.weights[i].is_some() as u8, low.x, low.y, low.z, high.x, high.y, high.z);

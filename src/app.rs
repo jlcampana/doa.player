@@ -580,10 +580,44 @@ impl App {
             });
         }
         log::info!("DOA2U: {stem}: {rigid_count} placed objects, {} joint pieces", skins.len());
+        // Soft bodies write into the first piece that draws their object. A detached
+        // object is only drawn through its chain.
+        let chains = doa2u::soft_chains(&cat, &model, id)?;
+        let mut chain_pieces: Vec<Option<(usize, usize)>> = vec![None; model.pieces.len()];
+        for (input, (object, node)) in drawn_nodes.iter().enumerate() {
+            chain_pieces[*object].get_or_insert((input, *node));
+        }
+        for chain in &chains {
+            for target in chain.targets.iter().filter(|t| t.detached) {
+                if chain_pieces.get(target.object) != Some(&None) {
+                    continue;
+                }
+                let piece = &model.pieces[target.object];
+                chain_pieces[target.object] = Some((inputs.len(), chain.bone));
+                inputs.push(PieceInput {
+                    node: chain.bone,
+                    vertices: &piece.vertices,
+                    draws: draws_of(piece, texture_count),
+                    parent: chain.bone,
+                    skin: None,
+                    bend: None,
+                    welds: Vec::new(),
+                    translucent: false,
+                });
+            }
+        }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
+        for chain in &chains {
+            for target in chain.targets.iter().filter(|t| t.detached) {
+                let Some(&Some((piece, _))) = chain_pieces.get(target.object) else { continue };
+                let rest: Vec<glam::Vec3> =
+                    model.pieces[target.object].vertices.iter().map(|v| glam::Vec3::from(v.position)).collect();
+                self.mesh.set_rest_positions(piece, chain.anchored_vertices(target, &rest));
+            }
+        }
 
         self.current_animations = self.hdd_archive.as_ref().map_or_else(Vec::new, |a| doa2u_animations(&bin_id, a));
         self.wireframe.update_lines(&self.ctx.queue, &[]);
@@ -591,13 +625,8 @@ impl App {
             self.camera.frame_character(1.8);
             self.framed_character = Some(char_idx);
         }
-        // Soft bodies write into the first piece that draws their object.
-        let mut chain_pieces: Vec<Option<(usize, usize)>> = vec![None; model.pieces.len()];
-        for (input, (object, node)) in drawn_nodes.iter().enumerate() {
-            chain_pieces[*object].get_or_insert((input, *node));
-        }
         let chains = Doa3Chains {
-            chains: Vec::new(),
+            chains,
             cloth,
             tubes: Vec::new(),
             springs: Vec::new(),
