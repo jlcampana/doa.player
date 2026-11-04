@@ -34,7 +34,7 @@ Measured against the running game; see `docs/doa2u-notes.md` for numbers and cod
 
 - Pose: limbs, hands, forearm twists, upper arms and motion tracks. `doa2u::solve_pose`.
 - Joint pieces: measured on `kas00` only. Shoulders are off by up to 2.6 cm, unexplained.
-- Cloth (kind 2), chains (kind 1, hair) and extra objects (kind 3) are in the viewer. Single steps match the game on most records, not all.
+- Cloth (kind 2), chains (kind 1, hair) and extra objects (kind 3) are in the viewer. Single steps of cloth match the game on `tin16` and `hel00`; chains match on most records, not all.
 - Chest spring: Tina, Helena and Lei Fang only. Measured on Helena and Lei Fang.
 - Roster: Zack 0, Tina 1, Leon 8, Lei Fang 12, Hitomi 21, Bayman 24 measured in matches. Internal names differ: `sambo` is Bayman, `bayman` is Leon, `koryu` is Hitomi.
 
@@ -50,7 +50,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye, and the feet and shins of `kas00` look right against a game screenshot, by eye. The ones worth comparing are those with material flags 8 and 9, which are not culled and unverified: `zac01`, `tin09`, `lei03`. No need to check every costume. Objects `hel08` 31 and `kas00` 15 and 43 are soft body variants the viewer does not select (see the notes); `hel08` 35 to 38 are probably kind 8, and `kas00` 42 is unread.
    Also compare the hair of `hel08` with the game. In the viewer the top of the head has olive patches, and it is pale in the game; the translucent layer (kind 3) or the lighting may be the cause. Not checked.
-2. **Remaining soft body error.** The `tin16` skirt, the first sheet of `hel00`'s coat, and chain records 11 and 19 of the last capture (`tin16` 11, `hel00` 7). The stage's floor height is the first suspect, not checked.
+2. **Remaining soft body error.** Cloth on `tin16` and `hel00` now matches in single steps, once the test uses the stage's floor (`DOA2U_FLOOR=1.015`). Chains still differ: in the last capture `tin16` 7, 8 and 9 and `hel00` 3, 5 and 8, by 1 to 5 mm. Lei Fang's cloth was not measured.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
 4. Hands (`apv` entries 0 and 1, and move scripts) and lighting. Blink and mouth are in, with DOA3's timing.
 

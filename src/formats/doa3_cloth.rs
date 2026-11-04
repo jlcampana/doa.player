@@ -199,6 +199,9 @@ enum ClothVertices {
 
 #[derive(Debug, Clone)]
 pub struct SoftCloth {
+    /// Height of the ground under the sheet. The viewer's is 0; the game's comes from
+    /// the stage (`sub_00146920`), sampled once per sheet and frame.
+    pub floor_height: f32,
     pub bone: usize,
     pub object: usize,
     is_ring: bool,
@@ -404,6 +407,7 @@ fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftCloth> {
         fold,
         vertices,
         particles: vec![ClothParticle::default(); columns * (rows + 1)],
+        floor_height: 0.0,
         ready: false,
         wind_in_pull: false,
         ring_rows: 1,
@@ -498,7 +502,7 @@ impl SoftCloth {
         let mut directions: Vec<Vec3> = self.directions.iter().map(|d| bone.transform_vector3(*d)).collect();
         let mut root_z: Vec<f32> = self.roots.iter().map(|r| r.z).collect();
         let mut segments = vec![Vec3::ZERO; self.columns];
-        let mut floor = FLOOR;
+        let mut floor = self.floor_height + FLOOR;
 
         for row in 0..self.rows {
             let (columns, is_ring) = self.row_shape(row);
@@ -930,6 +934,7 @@ mod tests {
                     let (fighter, record) = &records[k];
                     let Some(cloth) = costumes.get_mut(fighter).and_then(|c| c.get_mut(*record)) else { continue };
                     cloth.ready = true;
+                    cloth.floor_height = std::env::var("DOA2U_FLOOR").map_or(0.0, |v| v.parse().unwrap());
                     if !object.is_empty() {
                         cloth.follow_vertices(|v| object.get(v * 8..v * 8 + 3).map(|p| Vec3::new(p[0], p[1], p[2])));
                     }
@@ -959,6 +964,16 @@ mod tests {
                         .map(|c| (cloth.particles()[c * rows].position - after[c * rows].position).length())
                         .fold(0.0, f32::max);
                     roots.entry(k).or_insert_with(Vec::new).push(root_error);
+                    if std::env::var("DOA2U_PARTICLES").is_ok() {
+                        // Particle by particle, to see where a sheet parts from the game.
+                        println!("record {k}: {} x {}", cloth.columns, rows);
+                        for (i, (ours, game)) in cloth.particles().iter().zip(&after).enumerate() {
+                            let delta = ours.position - game.position;
+                            if delta.length() > 0.001 {
+                                println!("  c{} r{} game y {:.4} delta [{:.1} {:.1} {:.1}] mm", i / rows, i % rows, game.position.y, delta.x * 1000.0, delta.y * 1000.0, delta.z * 1000.0);
+                            }
+                        }
+                    }
                     if root_error < 0.0005 {
                         let error = |list: &[ClothParticle]| list.iter().zip(&after).map(|(a, b)| (a.segment - b.segment).length()).sum::<f32>() / after.len() as f32;
                         let worst = cloth.particles().iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0, f32::max);

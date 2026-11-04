@@ -102,18 +102,17 @@ State at +0x2090, stride `0x7C`. The file's record has DOA3's cloth layout (`doa
 - Flags 0x180 both write vertices with their own offsets (`sub_00050A50`).
 - Sheets can have 17 columns or more; the game limits columns to 27 and rows to 23. The floor is the stage's height (`sub_00146920`); the viewer has no stage.
 
-One step against the game's particles, wind included, median over 60 pairs per record, from `doa2u_single_steps` on the last capture:
+One step against the game's particles, wind included, median over 6 pairs per record, from `doa2u_single_steps` with `DOA2U_FLOOR=1.015`, on a roof stage:
 
-| Sheet | Pairs used | Segment error | Without stepping | Worst position |
+| Sheet | Segment error, floor 0 | Segment error, floor 1.015 | Without stepping | Worst position, floor 1.015 |
 | --- | --- | --- | --- | --- |
-| `tin16` skirt, 17 x 6, flags 0x20000102 | 60 of 60 | 2.01 mm | 5.49 mm | 43.51 mm |
-| `hel00` coat 1, 7 x 4, flags 0x180 | 60 of 60 | 3.49 mm | 5.30 mm | 18.85 mm |
-| `hel00` coat 2, 4 x 5, flags 0x188 | 58 of 60 | 1.03 mm | 6.37 mm | 14.46 mm |
-| `hel00` coat 3, 4 x 5, flags 0x188 | 60 of 60 | 0.00 mm | 5.39 mm | 0.01 mm |
-| `hel00` object 0, 4 x 1, flags 0x80 | 60 of 60 | 0.00 mm | 2.06 mm | 0.00 mm |
-| `hel00` object 0, 4 x 1, flags 0x80 | 60 of 60 | 0.00 mm | 2.45 mm | 0.00 mm |
+| `tin16` skirt | 0.79 mm | 0.00 mm | 2.79 mm | 0.22 mm |
+| `hel00` coat 1 | 11.39 mm | 0.00 mm | 3.19 mm | 0.00 mm |
+| `hel00` coat 2 | 9.45 mm | 0.00 mm | 1.99 mm | 0.00 mm |
+| `hel00` coat 3 | 11.31 mm | 0.00 mm | 3.69 mm | 0.00 mm |
+| `hel00` object 0, two sheets | 0.00 mm | 0.00 mm | 0.58 and 0.66 mm | 0.00 mm |
 
-Repeated captures differ: the first coat sheet gave 0.00 mm in one and 3.49 mm in another, so some situation is not covered. The stage's floor is the first suspect, not checked. Which sheets have shape collisions was not checked either, so the wording of commit `a9cb787`, that sheets without collisions match exactly, is not verified.
+So the error between captures was the stage's floor, which sits at about 1.015 on that stage and touches only sheets that reach it. The floor per row is the ground + 0.002 - 0.001 per row, as in DOA3. The game samples the ground once per sheet and frame (`sub_00146920`, plus the constant at `0x3C2E68`). 1.015 was read from where particles stop and then tried in steps of 0.002, and the stage's own height table was not read. The ground was flat under both fighters in this capture; slopes were not tried. The viewer's ground is 0 (`floor_height`), with the feet on it. Only the single step is measured, not a long run, where small errors could add up.
 
 Other costumes were not measured, including Lei Fang's. The viewer's Wind option uses a stand-in, as in DOA3, and it is off by default.
 
