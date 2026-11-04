@@ -57,8 +57,9 @@ const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLi
     SceneLights { ambient: [ambient as f32 / 255.0; 3], lights: out }
 }
 
-/// Lights read from the game while it draws fighters, by area of a stage. See `doa2u_lights.py`.
-pub const DOA2U_LIGHTS: [(&str, SceneLights); 4] = [
+/// Lights read from the game while it draws fighters, by stage. Names with a number are provisional: the number is the
+/// byte read at the time, which does not identify a stage. See `doa2u_lights.py`.
+pub const DOA2U_LIGHTS: [(&str, SceneLights); 5] = [
     ("Desert", stage_lights(0x5E, [
         ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
         ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
@@ -77,11 +78,18 @@ pub const DOA2U_LIGHTS: [(&str, SceneLights); 4] = [
         ([0.664, 0.147, 0.733], [0.24, 0.28, 0.38]),
         ([-0.848, -0.147, 0.509], [0.36, 0.38, 0.3]),
     ])),
-    // The same stage as area 8, in another part. It has three lights.
+    // It has three lights.
     ("Area 48", stage_lights(0x5E, [
         ([0.643, -0.29, -0.709], [0.48, 0.54, 0.63]),
         ([0.884, -0.29, 0.366], [0.35, 0.39, 0.58]),
         ([-0.773, 0.0, -0.634], [0.41, 0.29, 0.1]),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+    ])),
+    // Between flashes. A flash is in the notes.
+    ("Storm", stage_lights(0x4C, [
+        ([-0.593, -0.098, -0.799], [0.44, 0.52, 0.59]),
+        ([0.998, -0.049, -0.049], [0.4, 0.52, 0.48]),
+        ([-0.282, 0.243, 0.928], [0.23, 0.14, 0.08]),
         ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
     ])),
 ];
