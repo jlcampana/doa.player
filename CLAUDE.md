@@ -26,6 +26,7 @@ EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
 cargo build --profile fast                              # quick test build, target/fast/doa_player
 cargo test --profile fast                               # quick tests; build.sh stays optimized
 BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
+EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 ```
 
 ## Current state of DOA2U (2026-11-04)
@@ -70,7 +71,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Development notes
 
-- Improve close-up framing for body renders. Use Kasumi as the reference character during validation.
+- Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character. Validate close-ups on an adult, as the limit above says, not on Kasumi, which an older version of this note suggested.
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
 - `s*_dat.bin` in the archives may hold each stage's lights, which would avoid measuring them. Not looked at.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.

@@ -688,6 +688,7 @@ impl App {
         self.wireframe.update_lines(&self.ctx.queue, &[]);
         if self.framed_character != Some(char_idx) {
             self.camera.frame_character(1.8);
+            self.bg_panel.frame_request = Some(crate::renderer::mesh::FramePart::Full);
             self.framed_character = Some(char_idx);
         }
         let chest_morph = doa2u::chest_morph(&cat, id)?;
@@ -851,6 +852,7 @@ impl App {
         self.wireframe.update_lines(&self.ctx.queue, &[]);
         if self.framed_character != Some(char_idx) {
             self.camera.frame_character(1.8);
+            self.bg_panel.frame_request = Some(crate::renderer::mesh::FramePart::Full);
             self.framed_character = Some(char_idx);
         }
         self.current_animations = self.hdd_archive.as_ref().map_or_else(Vec::new, |a| doa2u_animations(bin_id, a));
@@ -1057,6 +1059,7 @@ impl App {
         // Changing costume keeps the camera; only a new character is framed.
         if self.framed_character != Some(char_idx) {
             self.camera.frame_character(1.8);
+            self.bg_panel.frame_request = Some(crate::renderer::mesh::FramePart::Full);
             self.framed_character = Some(char_idx);
         }
         self.current_animations = animations;

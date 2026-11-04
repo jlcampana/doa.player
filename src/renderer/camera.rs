@@ -12,6 +12,10 @@ pub struct Camera {
     pub far: f32,
     /// Where drags turn around, set by a click. None turns around the target.
     pub pivot: Option<Vec3>,
+    /// Moves the view to the right, in clip space, to center it in what panels leave free.
+    view_shift: f32,
+    /// Width over height of that free part.
+    free_aspect: f32,
 }
 
 impl Camera {
@@ -26,6 +30,8 @@ impl Camera {
             near: 0.01,
             far: 1000.0,
             pivot: None,
+            view_shift: 0.0,
+            free_aspect: aspect,
         }
     }
 
@@ -45,7 +51,14 @@ impl Camera {
     }
 
     pub fn view_proj(&self) -> Mat4 {
-        self.proj_matrix() * self.view_matrix()
+        Mat4::from_translation(Vec3::new(self.view_shift, 0.0, 0.0)) * self.proj_matrix() * self.view_matrix()
+    }
+
+    /// Tells the camera how many pixels on the left panels cover.
+    pub fn set_left_inset(&mut self, inset: f32, width: f32, height: f32) {
+        let inset = inset.min(width * 0.6);
+        self.view_shift = inset / width;
+        self.free_aspect = (width - inset) / height;
     }
 
     /// Handle drag input. delta is in pixels.
@@ -96,6 +109,16 @@ impl Camera {
         self.aspect = aspect;
     }
 
+    /// Looks at a box from the current direction, close enough to fit it in the window.
+    pub fn frame_box(&mut self, low: Vec3, high: Vec3) {
+        let radius = (high - low).length() * 0.5;
+        let half_height = (self.fov_y * 0.5).tan();
+        let half_view = half_height.min(half_height * self.free_aspect).atan();
+        self.target = (low + high) * 0.5;
+        self.distance = (radius / half_view.sin()).clamp(0.1, 50.0);
+        self.pivot = None;
+    }
+
     /// Reset to default framing for a character of given height.
     pub fn frame_character(&mut self, height: f32) {
         let h = height.max(1.0);
@@ -124,6 +147,22 @@ mod tests {
     }
 
     #[test]
+    fn a_framed_box_fits_in_the_view() {
+        let mut camera = Camera::new(1.5);
+        let (low, high) = (Vec3::new(-0.2, 0.1, -0.2), Vec3::new(0.3, 1.7, 0.2));
+        camera.frame_box(low, high);
+        assert_eq!(camera.target, (low + high) * 0.5);
+        for x in [low.x, high.x] {
+            for y in [low.y, high.y] {
+                for z in [low.z, high.z] {
+                    let clip = camera.view_proj() * Vec3::new(x, y, z).extend(1.0);
+                    assert!(clip.x.abs() <= clip.w && clip.y.abs() <= clip.w, "{clip}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn without_a_pivot_orbiting_keeps_the_target() {
         let mut camera = Camera::new(1.5);
         let target = camera.target;
@@ -137,5 +176,10 @@ mod tests {
         let (origin, direction) = camera.ray(300.0, 200.0, 600.0, 400.0);
         let to_target = (camera.target - origin).normalize();
         assert!(direction.distance(to_target) < 1e-4, "{direction} {to_target}");
+        // With panels, the target is in the middle of the free part.
+        let mut camera = Camera::new(1.5);
+        camera.set_left_inset(200.0, 600.0, 400.0);
+        let (origin, direction) = camera.ray(400.0, 200.0, 600.0, 400.0);
+        assert!(direction.distance((camera.target - origin).normalize()) < 1e-4);
     }
 }

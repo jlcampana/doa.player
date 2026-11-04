@@ -9,16 +9,18 @@ pub struct BgSelectPanel {
     pub lights: usize,
     /// The optional bump from textures. 0 is what the game draws.
     pub relief: f32,
+    /// A part of the character to frame, asked for this frame.
+    pub frame_request: Option<crate::renderer::mesh::FramePart>,
 }
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0, relief: 0.0 }
+        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool) {
         egui::Window::new("Background")
-            .default_pos([440.0, 10.0])
+            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
             .default_size([160.0, 220.0])
             .resizable(false)
             .show(ctx, |ui| {
@@ -28,6 +30,16 @@ impl BgSelectPanel {
                         self.selected = i;
                     }
                 }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    use crate::renderer::mesh::FramePart;
+                    ui.label("View:");
+                    for (name, part) in [("Full", FramePart::Full), ("Head", FramePart::Head), ("Hands", FramePart::Hands), ("Feet", FramePart::Feet)] {
+                        if ui.small_button(name).clicked() {
+                            self.frame_request = Some(part);
+                        }
+                    }
+                });
                 ui.separator();
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
                 if lit {

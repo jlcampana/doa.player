@@ -36,6 +36,15 @@ struct DrawCall {
     blended: bool,
 }
 
+/// Parts of the character the camera can frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FramePart {
+    Full,
+    Head,
+    Hands,
+    Feet,
+}
+
 /// The lights the game uses while it draws fighters: D3D directional lights and ambient.
 #[derive(Debug, Clone, Copy)]
 pub struct SceneLights {
@@ -179,6 +188,8 @@ pub struct MeshRenderer {
     white_view: wgpu::TextureView,
     white_bind_group: wgpu::BindGroup,
     lights: Option<SceneLights>,
+    /// The nodes of the last pose, for framing.
+    last_nodes: Vec<glam::Mat4>,
 }
 
 impl MeshRenderer {
@@ -356,6 +367,7 @@ impl MeshRenderer {
             white_view,
             white_bind_group,
             lights: None,
+            last_nodes: Vec::new(),
         }
     }
 
@@ -369,6 +381,34 @@ impl MeshRenderer {
     pub fn pick(&self, origin: glam::Vec3, direction: glam::Vec3, tolerance: f32) -> Option<glam::Vec3> {
         let model = self.model.as_ref()?;
         nearest_along_ray(model.posed_vertices.iter().map(|v| glam::Vec3::from(v.position)), origin, direction, tolerance)
+    }
+
+    /// The box to frame for a part of the posed character.
+    pub fn frame_box(&self, part: FramePart) -> Option<(glam::Vec3, glam::Vec3)> {
+        use glam::Vec3;
+        let model = self.model.as_ref()?;
+        let points: Vec<Vec3> = match part {
+            FramePart::Full => model.posed_vertices.iter().map(|v| Vec3::from(v.position)).collect(),
+            FramePart::Head => {
+                let head = self.last_nodes.get(1)?;
+                vec![head.transform_point3(Vec3::new(0.0, 0.17, 0.0))]
+            }
+            FramePart::Hands => [5, 11].iter().filter_map(|&n| self.last_nodes.get(n)).map(|m| m.w_axis.truncate()).collect(),
+            FramePart::Feet => [3, 9].iter().filter_map(|&n| self.last_nodes.get(n)).map(|m| m.w_axis.truncate()).collect(),
+        };
+        let (mut low, mut high) = (points.first().copied()?, points.first().copied()?);
+        for point in &points {
+            low = low.min(*point);
+            high = high.max(*point);
+        }
+        // Nodes are points: this is about the size of what hangs from them.
+        let margin = match part {
+            FramePart::Full => 0.05,
+            FramePart::Head => 0.17,
+            FramePart::Hands => 0.2,
+            FramePart::Feet => 0.22,
+        };
+        Some((low - Vec3::splat(margin), high + Vec3::splat(margin)))
     }
 
     /// Whether the current model uses the game's lighting.
@@ -533,6 +573,8 @@ impl MeshRenderer {
 
     /// Moves the vertices of every piece by its node matrix and uploads them.
     pub fn apply_pose(&mut self, queue: &wgpu::Queue, nodes: &[glam::Mat4]) {
+        self.last_nodes.clear();
+        self.last_nodes.extend_from_slice(nodes);
         let Some(model) = &mut self.model else { return };
         for piece in &model.pieces {
             let Some(matrix) = nodes.get(piece.node) else { continue };

@@ -12,6 +12,9 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
+/// Pixels on the left that panels cover by default.
+const LEFT_PANELS_WIDTH: f32 = 440.0;
+
 
 struct Handler {
     window: Option<Arc<Window>>,
@@ -222,6 +225,15 @@ fn render_frame(app: &mut App, window: &Window) {
 
     let vp = app.camera.view_proj();
     app.grid.update(&app.ctx.queue, &vp);
+    // The character list and the animations window on the left. The inset stays fixed when
+    // they are moved or collapsed.
+    let size = window.inner_size();
+    app.camera.set_left_inset(LEFT_PANELS_WIDTH, size.width as f32, size.height as f32);
+    if let Some(part) = app.bg_panel.frame_request.take() {
+        if let Some((low, high)) = app.mesh.frame_box(part) {
+            app.camera.frame_box(low, high);
+        }
+    }
     if app.mesh.is_lit() {
         app.mesh.set_lights(Some(renderer::mesh::DOA2U_LIGHTS[app.bg_panel.lights].1));
     }
@@ -378,6 +390,18 @@ fn load_from_arguments(app: &mut App) {
     }
 
     app.bg_panel.anime_shading = args.iter().any(|a| a == "--anime");
+    // Arguments set the camera themselves, unless they ask for a part.
+    app.bg_panel.frame_request = None;
+    if let Some(part) = args.iter().position(|a| a == "--view").and_then(|i| args.get(i + 1)) {
+        use renderer::mesh::FramePart;
+        app.bg_panel.frame_request = match part.as_str() {
+            "full" => Some(FramePart::Full),
+            "head" => Some(FramePart::Head),
+            "hands" => Some(FramePart::Hands),
+            "feet" => Some(FramePart::Feet),
+            _ => None,
+        };
+    }
     if let Some(relief) = value_of("--relief") {
         app.bg_panel.relief = relief as f32 / 100.0;
     }
