@@ -648,6 +648,77 @@ mod tests {
         println!("best match, median {} of {}", errors[errors.len() / 2], errors.len());
     }
 
+    /// Lists a costume's objects and where the CAT uses them. DOA2U_COSTUME is a file stem.
+    #[test]
+    #[ignore]
+    fn list_costume_objects() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let stem = std::env::var("DOA2U_COSTUME").expect("DOA2U_COSTUME");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut xpr = archive.get_by_name(&format!("{stem}.xpr")).unwrap().to_vec();
+        let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+        decrypt_xpr(&mut xpr).unwrap();
+        decrypt_cat(&mut cat).unwrap();
+        let model = parse_model(&xpr).unwrap();
+
+        let base = read_u32(&cat, 4).unwrap() as usize;
+        let mut lists: Vec<(u32, Vec<(u8, u8, u8)>)> = Vec::new();
+        let mut record = base;
+        loop {
+            let (value, kind) = (read_u32(&cat, record).unwrap(), read_u32(&cat, record + 4).unwrap());
+            if kind == 0 {
+                break;
+            }
+            println!("record type {} value {value:#x}", kind as i32);
+            if kind == 1 || kind == 9 {
+                let list = cat[base + value as usize..]
+                    .chunks_exact(3)
+                    .take_while(|e| e[0] == 1 || e[0] == 2)
+                    .map(|e| (e[0], e[1], e[2]))
+                    .collect();
+                lists.push((kind, list));
+            }
+            record += 8;
+        }
+        for (i, texture) in crate::formats::model::parse_xpr_textures(&xpr).unwrap().iter().enumerate() {
+            let pixels = texture.rgba.chunks_exact(4);
+            let total = pixels.len().max(1);
+            let clear = pixels.filter(|p| p[3] < 26).count();
+            println!("texture {i} {}x{} clear {}%", texture.width, texture.height, clear * 100 / total);
+        }
+        let table = read_u32(&cat, 0x10).unwrap() as usize;
+        let skins = crate::formats::doa3::parse_sparse_joint_skins(&cat, table);
+        for (i, piece) in model.pieces.iter().enumerate() {
+            let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for vertex in &piece.vertices {
+                let position = Vec3::from_array(vertex.position);
+                low = low.min(position);
+                high = high.max(position);
+            }
+            let uses: Vec<String> = lists
+                .iter()
+                .flat_map(|(kind, list)| list.iter().filter(|e| e.2 as usize == i).map(move |e| format!("t{kind}:k{}s{}", e.0, e.1)))
+                .chain(skins.iter().filter(|s| s.object == i).map(|s| format!("joint n{} p{}", s.node, s.parent)))
+                .collect();
+            let textures: Vec<_> = piece.materials.iter().map(|m| m.base_texture(usize::MAX)).collect();
+            if std::env::var("DOA2U_OBJECTS").is_ok_and(|list| list.split(',').any(|o| o.parse() == Ok(i))) {
+                let record = read_u32(&xpr, 0x28 + i * 4).unwrap() as usize;
+                let index_offset = read_u32(&xpr, record + 0x2C).unwrap() as usize;
+                let mut block = record + 0xA0;
+                while block < index_offset {
+                    let size = read_u32(&xpr, block + 4).unwrap() as usize;
+                    if size == LIST_END as usize {
+                        break;
+                    }
+                    let words: Vec<String> = (0..(size.min(0x80 + 16 * 4)) / 4).map(|w| format!("{:x}", read_u32(&xpr, block + w * 4).unwrap())).collect();
+                    println!("  material {}", words.join(" "));
+                    block += size;
+                }
+            }
+            println!("{i:3} v{:5} w{} [{:.2} {:.2} {:.2}]..[{:.2} {:.2} {:.2}] {uses:?} tex {textures:?}", piece.vertices.len(), model.weights[i].is_some() as u8, low.x, low.y, low.z, high.x, high.y, high.z);
+        }
+    }
+
     #[test]
     #[ignore]
     fn every_encrypted_costume_parses() {

@@ -32,7 +32,7 @@ CAT words 1 to 4 are section offsets:
 
 - Word 1: `(value, type)` records, read by `sub_0005B9F0`. Value is relative to the section. It ends at type 0.
   - Type 1: the draw list, used here. Type 9 has the same form with low detail objects. Type -1 is a version, used for the forearm twist. Type 10 sets upper arm flags. Types 3, 5, 6, 7, 11, 12 and 18 are not read yet.
-  - The switch is at `0x5BBAC`, indexed by type + 1.
+  - The switch is at `0x5BBAC`, indexed by type + 1. Slots at 0x80 and up in a draw list go through `0x64C930` (`sub_0005AF30`).
   - Draw list: three bytes per object, kind, slot, object. Kind 1 is one matrix (`sub_0005AF30`). Kind 2 blends matrices by vertex weight (`sub_0005B940`, table at `0x64C8B0`).
   - Slots below 0x80 are matrices. 0x80 and up go through the table at `0x64C9B0`: 128 and 129 are 24 and 25.
 - Word 4: the same node table as DOA3, with joint pieces. An entry of 1 means no piece (`sub_000639D0`).
@@ -76,12 +76,12 @@ The last line comes from `captured_tracks_are_found_in_motions`: 13 of 20 frames
 
 A read can also catch the tracks one frame ahead of the matrices, so `doa2u_live.py capture` drops frames whose pelvis does not match its tracks.
 
-Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon and `koryu` is Hitomi, per the user. The user selected Bayman, whose fighter had ID 24. It matched 13 frames in `sambo.mot` and 10 in `bayman.mot`, with motion 184 found only in `sambo.mot`, and the CAT in memory was `bay00` (97% of sampled bytes equal, the next costume outside Bayman's about 5%). Leon as ID 8 is inferred: the counts at `0x6E0F08` give 7 costumes to ID 8 and 6 to ID 24, and the files are 7 `leo` and 6 `bay`.
+Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon and `koryu` is Hitomi, per the user. The user selected Bayman, whose fighter had ID 24. It matched 13 frames in `sambo.mot` and 10 in `bayman.mot`, with motion 184 found only in `sambo.mot`, and the CAT in memory was `bay00` (97% of sampled bytes equal, the next costume outside Bayman's about 5%). In a later match Leon had ID 8 with `leo00` in memory (98%), and Hitomi ID 21 with `kor00` (96%). Their poses were found in `bayman.mot` (6 of 36 frames) and in `koryu.mot` or `comon.mot` (8 of 24). The counts at `0x6E0F08` agree: 7 costumes for ID 8, 6 for ID 24.
 
 ## Not done
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
 - Hair, cloth, face and hand morphs, translucent layers, and the costumes in `datadvd.afs`.
-- Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. Of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have a record of type 7 (`sub_00060880`), which is not read. Its purpose is unknown.
+- Costumes hold many objects the viewer does not draw. `kas00` has 75, of which 31 are drawn: 19 in the draw list and 12 joint pieces. Type 9's low detail list accounts for some of the rest. Of 9 costumes sampled, only `kas00`, `kas01` and `kas02` have a record of type 7. `sub_00060880` reads it as up to 4 texture slots, so it holds no objects.
 - The back-face flag is taken to be the same as DOA3's; the same word also holds 5 and 8 here.
 - No chest spring: it is not ported for DOA2U.

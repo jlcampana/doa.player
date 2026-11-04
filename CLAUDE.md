@@ -31,6 +31,16 @@ Limbs use the game's own solve, `doa2u::solve_pose`, measured against a running 
 
 Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same, so this is the viewer's convention, not a pose bug.
 
+## Current work: Kasumi's costume in DOA2U
+
+The user reports faults from the head down on `kas00`: chest see-through, feet and shin pieces wrong. Not solved. Known so far:
+
+- The chest and foot objects are drawn, and their textures have no transparent pixels, so the shader's alpha discard is not the cause.
+- Objects 0, 12 to 18, 25, 26, 37, 38, 42 and 43 are in no draw list. CAT types 3 and 6 are the next thing to read.
+- Type 7 is only a list of texture slots (`sub_00060880`), not objects.
+
+`list_costume_objects` lists a costume's objects, materials and textures. Diagnose this from data rather than from close-up renders of the body.
+
 ## Development notes
 
 - Investigate the chest spring implementation in DOA2U.
@@ -40,7 +50,7 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 ## Unverified in DOA2U
 
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Head, feet on slopes, drawing and joint pieces are not.
-- Character IDs in `app.rs` are inferred from tables. Measured in a match: Zack is ID 0 with `zack.mot` and `zac00`; Bayman is ID 24 with `sambo.mot` and `bay00`; Tina is ID 1 and Lei Fang ID 12. Leon as ID 8 with `bayman.mot` follows from that and the costume counts; it is not measured.
+- Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
 - Back-face flag: OBJ material +0xC also holds 5 and 8.
 - Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
@@ -52,6 +62,7 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Waiting on the user: whether Kasumi's DOA3 fringe covers her eyes too much in the game.
 4. Unlocking everything: last of all, by user request.
+5. After the viewer is finished: try playing the voices (`voice.afs`, see `README.md`). The user raised this as a possibility.
 
 ## Development principles
 
