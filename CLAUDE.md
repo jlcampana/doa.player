@@ -48,10 +48,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Next steps, in order
 
-1. **Holes in some costumes.** The user showed one at the waist of `hel08` in motion `hika 0062`, and reported Kasumi's `kas00` chest as see-through, with feet and shin pieces looking wrong. Not reproduced at the frames tried.
-   - Ruled out: alpha discard, back-face culling, and the torso's static shape. Details in the notes.
-   - Best next step: a screenshot from the game in the same pose, to compare with the viewer.
-   - Also unread: objects in no draw list, such as `hel08` 31 and 35 to 38 and `kas00` 15, 42 and 43.
+1. **Check the winding fix on other costumes against the game.** It was checked on `hel08` by eye. Feet and shin pieces of `kas00` were also reported as wrong; compare them in the game. Objects in no draw list are still unread, such as `hel08` 31 and 35 to 38 and `kas00` 15, 42 and 43.
 2. **Remaining soft body error.** The `tin16` skirt, the first sheet of `hel00`'s coat, and chain records 11 and 19 of the last capture (`tin16` 11, `hel00` 7). The stage's floor height is the first suspect, not checked.
 3. **Other soft body kinds:** 4, 5, 7 and 12, with updaters listed in the notes.
 4. Faces (eyes and mouth exist in DOA3, not in DOA2U), hands and lighting.
@@ -75,7 +72,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
-- Back-face flag: OBJ material +0xC also holds 5 and 8.
+- Back-face flag: OBJ material +0xC also holds 5, 8 and 9, which are not culled.
 - Not rendered yet: Ryu, Lei Fang, Hitomi (files `kor*`, `koryu`), Tengu.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.

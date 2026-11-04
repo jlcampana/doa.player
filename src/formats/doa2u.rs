@@ -571,6 +571,16 @@ pub fn parse_model(data: &[u8]) -> Result<Model> {
     Ok(model)
 }
 
+/// DOA2U's strips wind the other way from DOA3's, against the renderer's front
+/// face. Without this, materials that hide back faces show their inner side: the
+/// purple lining of `hel08`'s white skirt, compared with the game.
+fn wound_for_viewer(mut triangles: Vec<u32>) -> Vec<u32> {
+    for triangle in triangles.chunks_exact_mut(3) {
+        triangle.swap(0, 1);
+    }
+    triangles
+}
+
 fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f32>>)> {
     if slice(data, record, 4)? != b"OBJ\0" {
         bail!("missing OBJ magic");
@@ -638,7 +648,7 @@ fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f3
     let materials = blocks
         .into_iter()
         .map(|(first, end, textures, cull_back)| ModelMaterial {
-            indices: strip_to_triangles(&strip[first..end]),
+            indices: wound_for_viewer(strip_to_triangles(&strip[first..end])),
             textures,
             cull_back,
         })
@@ -649,6 +659,11 @@ fn parse_object(data: &[u8], record: usize) -> Result<(ModelPiece, Option<Vec<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn triangles_are_wound_the_other_way() {
+        assert_eq!(wound_for_viewer(vec![1, 2, 3, 4, 5, 6]), vec![2, 1, 3, 5, 4, 6]);
+    }
 
     #[test]
     fn draw_list_places_rigid_and_weighted_objects() {

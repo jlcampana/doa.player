@@ -147,9 +147,13 @@ Measured:
 - Vertices against `base + (target - base) * |x|`, best `x` fitted per read: on `hel08` the worst residual was 0.00000 and on `lei00` a median of 0.00000 and a maximum of 2.4 mm. The base equals the file's shape on both.
 - `tin` costumes and the viewer's spring running over time were not compared.
 
-## Holes in some costumes
+## Winding and back faces
 
-Not solved. See "Next steps" in `CLAUDE.md`. The torso's static shape is ruled out: on `hel08` the file's shape equals the morph's base, and no torso vertex stays away from it by over 2 mm. Sheets write the right vertices on `hel08` (median 0.00 mm, against a vertex buffer that some reads catch frames late). In the viewer the waist looks closed in the rest pose and in motion 62 at the frames tried, so the hole was not reproduced. Measured on `hel08` and `kas00`: triangle winding agrees with the stored normals on nearly every material, flag 0 or 1, so the back-face flag looks right: flag 1 hides back faces, and turning culling off shows linings from inside. Flags 5, 8 and 9 also occur, and are not culled.
+The viewer showed the inner side of materials that hide back faces, because DOA2U's triangles were wound against its renderer. `doa2u.rs` now reverses them. Found by comparing with a game screenshot of `hel08`: the skirt is white outside and purple inside, and the viewer had it the other way round, which looked like missing triangles at the waist.
+
+An earlier check here concluded the flag and winding were right, since winding agrees with the stored normals. That compared the two with each other and not with the renderer's front face, so it could not see this. Compared with the game: `hel08` only, by eye. Other costumes changed too and look right, including the torso of `kas00`, which the user had reported as see-through, but they were not compared.
+
+Material +0xC: 1 hides back faces. 0 does not. 5, 8 and 9 also occur, and are not culled, which is unverified.
 
 ## Not done
 
