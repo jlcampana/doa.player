@@ -59,7 +59,7 @@ const fn stage_lights(ambient: u8, lights: [([f32; 3], [f32; 3]); 4]) -> SceneLi
 
 /// Lights read from the game while it draws fighters, by stage. Names with a number are provisional: the number is the
 /// byte read at the time, which does not identify a stage. See `doa2u_lights.py`.
-pub const DOA2U_LIGHTS: [(&str, SceneLights); 5] = [
+pub const DOA2U_LIGHTS: [(&str, SceneLights); 6] = [
     ("Desert", stage_lights(0x5E, [
         ([-0.243, -0.049, -0.969], [0.6, 0.48, 0.45]),
         ([0.962, -0.195, -0.191], [0.78, 0.62, 0.53]),
@@ -91,6 +91,12 @@ pub const DOA2U_LIGHTS: [(&str, SceneLights); 5] = [
         ([0.998, -0.049, -0.049], [0.4, 0.52, 0.48]),
         ([-0.282, 0.243, 0.928], [0.23, 0.14, 0.08]),
         ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+    ])),
+    ("Cloudy", stage_lights(0x56, [
+        ([-0.988, -0.147, -0.049], [0.62, 0.54, 0.48]),
+        ([0.466, -0.147, 0.872], [0.52, 0.4, 0.36]),
+        ([-0.049, 0.049, -0.998], [0.18, 0.14, 0.24]),
+        ([0.894, 0.147, -0.423], [0.22, 0.24, 0.34]),
     ])),
 ];
 
