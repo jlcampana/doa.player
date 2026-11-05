@@ -156,6 +156,7 @@ pub struct MeshRenderer {
     culling_pipeline: wgpu::RenderPipeline,
     translucent_pipeline: wgpu::RenderPipeline,
     translucent_culling_pipeline: wgpu::RenderPipeline,
+    outline_pipeline: wgpu::RenderPipeline,
     blended_pipeline: wgpu::RenderPipeline,
     blended_culling_pipeline: wgpu::RenderPipeline,
     /// "Mesh only": fills depth without color, so that lines behind a surface stay hidden.
@@ -320,6 +321,50 @@ impl MeshRenderer {
         let culling_pipeline = make_pipeline(Some(wgpu::Face::Back), false, true);
         let translucent_pipeline = make_pipeline(None, true, false);
         let translucent_culling_pipeline = make_pipeline(Some(wgpu::Face::Back), true, false);
+        let outline_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Mesh Outline Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_outline",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2,
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_outline",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
         let blended_pipeline = make_pipeline(None, true, true);
         let blended_culling_pipeline = make_pipeline(Some(wgpu::Face::Back), true, true);
         let make_wire_pipeline = |lines: bool| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -391,6 +436,7 @@ impl MeshRenderer {
             culling_pipeline,
             translucent_pipeline,
             translucent_culling_pipeline,
+            outline_pipeline,
             blended_pipeline,
             blended_culling_pipeline,
             wire_depth_pipeline,
@@ -708,6 +754,22 @@ impl MeshRenderer {
             }
         }
         queue.write_buffer(&model.vertex_buffer, 0, bytemuck::cast_slice(&model.posed_vertices));
+    }
+
+    /// The ink line of "Anime shading", drawn before the model. Translucent layers get none.
+    pub fn draw_outline<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        let Some(model) = &self.model else { return };
+        if self.mesh_only {
+            return;
+        }
+        pass.set_pipeline(&self.outline_pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
+        pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for draw in model.draws.iter().filter(|draw| !draw.translucent) {
+            pass.set_bind_group(1, &draw.bind_group, &[]);
+            pass.draw_indexed(draw.indices.clone(), 0, 0..1);
+        }
     }
 
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
@@ -1040,6 +1102,73 @@ fn light_at(n: vec3<f32>) -> array<vec3<f32>, 2> {
     );
 }
 
+/// "Anime shading": cel shading from the scene's strongest light. Two shadow tones with clean
+/// edges, tinted cool rather than just darkened, a small hard highlight and a thin rim. None
+/// of this is from the games. The values are chosen by eye.
+fn cel_shaded(v: VertOut, texel: vec4<f32>, layer: vec4<f32>) -> vec4<f32> {
+    var base = texel.rgb;
+    var alpha = texel.a;
+    if material.flags.w > 0.5 {
+        base = mix(base, layer.rgb, layer.a);
+        alpha = mix(alpha, layer.a, layer.a);
+    }
+    // The strongest light, or a fixed one for models with none.
+    var to_light = normalize(vec3<f32>(0.5, 1.0, 0.7));
+    var tint = vec3<f32>(1.0);
+    var strongest = 0.0;
+    for (var i = 0; i < 4; i += 1) {
+        let c = u.light_diffuse[i].rgb;
+        let strength = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+        if material.flags.x > 0.5 && strength > strongest {
+            strongest = strength;
+            to_light = u.light_to[i].xyz;
+            tint = c / max(max(c.r, max(c.g, c.b)), 0.001);
+        }
+    }
+    let n = normalize(v.normal);
+    let to_eye = normalize((vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz);
+    let facing = dot(n, to_light);
+    // A small wrap, so that a surface turning away keeps its light up to the edge.
+    let lit = smoothstep(-0.06, -0.01, facing);
+    let not_deep = smoothstep(-0.56, -0.5, facing);
+    let shadow = mix(base * vec3<f32>(0.34, 0.28, 0.42), base * vec3<f32>(0.6, 0.52, 0.66), not_deep);
+    var color = mix(shadow, base, lit) * mix(vec3<f32>(1.0), tint, 0.25 * lit);
+    let half_way = normalize(to_light + to_eye);
+    let highlight = smoothstep(0.972, 0.98, dot(n, half_way)) * lit;
+    let rim = smoothstep(0.74, 0.8, 1.0 - max(dot(n, to_eye), 0.0)) * lit;
+    color += vec3<f32>(0.2) * highlight * max(material.flags.y, 0.25) + base * 0.16 * rim;
+    return vec4<f32>(color, alpha);
+}
+
+/// The ink line of "Anime shading": the back faces, pushed out along the normal by an amount
+/// that keeps about the same width on screen, up to a limit for close views.
+@vertex
+fn vs_outline(v: VertIn) -> VertOut {
+    var out: VertOut;
+    let world_pos = u.model * vec4<f32>(v.pos, 1.0);
+    let depth = (u.view_proj * world_pos).w;
+    let pushed = world_pos.xyz + normalize(v.normal) * min(0.0016 * depth, 0.006);
+    out.clip = u.view_proj * vec4<f32>(pushed, 1.0);
+    out.normal = v.normal;
+    out.uv = v.uv;
+    out.layer_uv = v.uv;
+    out.world = pushed;
+    return out;
+}
+
+@fragment
+fn fs_outline(v: VertOut) -> @location(0) vec4<f32> {
+    var texel = textureSample(color_texture, color_sampler, v.uv);
+    if u.anime_shading.z > 0.5 {
+        texel = vec4<f32>(u.plain_color.rgb, 1.0);
+    }
+    // Holes in a texture, such as hair's, get no line.
+    if texel.a < 0.5 {
+        discard;
+    }
+    return vec4<f32>(texel.rgb * vec3<f32>(0.14, 0.1, 0.16), 1.0);
+}
+
 // The game works on stored texture values, with no gamma. The viewer's textures and
 // window are sRGB, so colors go out to those values and back.
 fn to_stored(c: vec3<f32>) -> vec3<f32> {
@@ -1069,14 +1198,7 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
         if texel.a < 0.1 {
             discard;
         }
-        // Three flat bands instead of a smooth gradient.
-        var band = 0.55;
-        if diff > 0.75 {
-            band = 1.1;
-        } else if diff > 0.3 {
-            band = 0.85;
-        }
-        return vec4<f32>(texel.rgb * band, texel.a);
+        return cel_shaded(v, texel, layer);
     }
     if material.flags.x > 0.5 {
         var color = to_stored(texel.rgb);

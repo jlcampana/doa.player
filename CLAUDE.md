@@ -93,6 +93,8 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 
 ## Development notes
 
+- Anime shading (`cel_shaded`, `vs_outline` in `mesh.rs`) is the viewer's own and applies to all games: two cool shadow tones from the strongest light, a hard highlight, a thin rim, and an inverted hull ink line. The user asked for something more worked, in the style of Fire Emblem. Its values were chosen without seeing them against that game.
+
 - Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character. Validate close-ups on an adult, as the limit above says, not on Kasumi, which an older version of this note suggested.
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
@@ -111,7 +113,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags are read from code and `tools/re/doa2u_unlocks.py` prints their state, see "Unlocks" in the notes. What they open and what locks the CG gallery are not known. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
-6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Next, in the user's order (2026-11-05): a better anime shading, in the style of Fire Emblem, for the viewer. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
+6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
 
 ## Development principles
 

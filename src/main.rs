@@ -321,6 +321,9 @@ fn render_frame(app: &mut App, window: &Window) {
             occlusion_query_set: None,
         });
         app.grid.draw(&mut rpass);
+        if app.bg_panel.anime_shading {
+            app.mesh.draw_outline(&mut rpass);
+        }
         app.mesh.draw(&mut rpass);
         app.wireframe.draw(&mut rpass);
     }
