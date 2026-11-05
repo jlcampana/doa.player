@@ -356,7 +356,7 @@ impl MeshRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Front),
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -1192,7 +1192,7 @@ fn cel_shaded(v: VertOut, texel: vec4<f32>, layer: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(color, alpha);
 }
 
-/// The ink line of "Anime shading": the back faces, pushed out along the normal by an amount
+/// The ink line of "Anime shading": the shell's side facing away, pushed out along the normal by an amount
 /// that keeps about the same width on screen, up to a limit for close views.
 @vertex
 fn vs_outline(v: VertIn) -> VertOut {
@@ -1216,6 +1216,12 @@ fn fs_outline(v: VertOut) -> @location(0) vec4<f32> {
     }
     // Holes in a texture, such as hair's, get no line.
     if texel.a < 0.5 {
+        discard;
+    }
+    // Only the side turned away from the camera, whatever the triangles' winding: DOA3's strips
+    // alternate it, and culling by winding put parts of the shell in front of the model.
+    let to_eye = (vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz;
+    if dot(v.normal, to_eye) > 0.0 {
         discard;
     }
     return vec4<f32>(texel.rgb * vec3<f32>(0.14, 0.1, 0.16), 1.0);
