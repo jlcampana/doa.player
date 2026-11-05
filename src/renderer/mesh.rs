@@ -1127,7 +1127,12 @@ fn cel_shaded(v: VertOut, texel: vec4<f32>, layer: vec4<f32>) -> vec4<f32> {
     }
     let n = normalize(v.normal);
     let to_eye = normalize((vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz);
-    let facing = dot(n, to_light);
+    // Models without the game's lighting, DOA3's, may have normals that point inwards, which
+    // that is not worked out yet: they take either side, as the old bands did.
+    var facing = dot(n, to_light);
+    if material.flags.x < 0.5 {
+        facing = abs(facing);
+    }
     // A small wrap, so that a surface turning away keeps its light up to the edge.
     let lit = smoothstep(-0.06, -0.01, facing);
     let not_deep = smoothstep(-0.56, -0.5, facing);
