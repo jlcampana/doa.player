@@ -148,6 +148,13 @@ impl ApplicationHandler for Handler {
         }
     }
 
+    /// `run_app` drops the event loop and its Wayland connection when it returns. The clipboard
+    /// inside `App` borrows that connection, so it has to go first or its thread crashes on exit.
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.app = None;
+        self.window = None;
+    }
+
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
         if let Some(w) = &self.window {
             w.request_redraw();
