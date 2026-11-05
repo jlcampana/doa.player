@@ -83,7 +83,7 @@ Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 a
 
 Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
 
-GPU memory does not show in any process's memory use, and `--export-all` runs in one loop with no frames. Without a submit and a poll per costume it grew 28 MB per costume until the desktop froze (2026-11-05). When changing a bulk path, watch `MemAvailable` and `mem_info_vram_used`/`mem_info_gtt_used` under `/sys/class/drm/card*/device/`, and kill the run below a floor. The All costumes button goes through frames and was not measured.
+GPU memory does not show in any process's memory use, and `--export-all` runs in one loop with no frames. Without a submit and a poll per costume it grew 28 MB per costume until the desktop froze (2026-11-05). When changing a bulk path, watch `MemAvailable` and `mem_info_vram_used`/`mem_info_gtt_used` under `/sys/class/drm/card*/device/`, and kill the run below a floor. The All costumes button goes through frames: 49 costumes of Lei Fang left VRAM flat (805 to 861 MB).
 
 ## Development notes
 
@@ -103,7 +103,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 1. DOA2U: stages, other soft body kinds.
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals, 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
-4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Other unlockables were not looked for.
+4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags for hidden characters and others are read from code, see "Unlocks" in the notes; their state in this save and what locks the CG gallery are open. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
 
 ## Development principles

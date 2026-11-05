@@ -299,7 +299,14 @@ The `A0` series is DOA3's format, both `cat` (plain, starting with 1) and `xpr` 
 
 ## Unlocks
 
-Costumes offered in a slot come from a byte in the save, at +0x2ED8 from the save in memory (pointer at `0x87CFA8`), with slots by ID at `0x6959C0`, clamped to `0x6E0F08` (`sub_0011E410`). In this save, read from memory, all 15 are already at the maximum: 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 20, 20, 3, 6, 14. So nothing was changed. The save, `.recomp-storage/partition1/UDATA/54430006/*/ups.dat`, is 74056 bytes and looks encrypted, as the bytes in memory are not in it; its format was not read. Other unlockables, such as galleries, were not looked for. Characters and costumes the select screen does not offer are in the viewer anyway. DOA3's own tool is `tools/doa3_unlock_save.py`.
+Costumes offered in a slot come from a byte in the save, at +0x2ED8 from the save in memory (pointer at `0x87CFA8`), with slots by ID at `0x6959C0`, clamped to `0x6E0F08` (`sub_0011E410`). In this save, read from memory, all 15 are already at the maximum: 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 20, 20, 3, 6, 14. So nothing was changed. The save, `.recomp-storage/partition1/UDATA/54430006/*/ups.dat`, is 74056 bytes and looks encrypted, as the bytes in memory are not in it; its format was not read. Characters and costumes the select screen does not offer are in the viewer anyway.
+
+Other unlocks, read from the generated C only. Nothing here was checked in the running game or changed in the save, and the state of these bytes in this save was not read:
+
+- Hidden characters: `sub_00134330` builds the select list from 16 entries of 0x1C bytes at `0x6E20A0`, whose first word is a character ID. +0x2ED5 clear leaves out ID 11, and +0x2ED6 clear leaves out IDs 23 and 21. Those IDs are 11 Pdog and 23 `gok` by the viewer's inferred table, and 21 Hitomi as measured in a match, which sits oddly with Hitomi being selectable, so what the IDs mean here is open. `sub_000DC2D0` sets +0x2ED5 in mode 6 (`0x87CFA0`), on conditions not fully read.
+- Three more flags: +0x2ED2, +0x2ED3, +0x2ED4, read by `sub_00021410`, `sub_00021420`, `sub_00021430` (24, 33 and 30 calls) and by index in `sub_0011E5F0`. `sub_000DC100` sets +0x2ED2 once the bytes from +0x2EEC are all non-zero, and queues a message. What they open was not worked out. `sub_000DC840` increments +0x2EEC per character slot (`0x6959C0`).
+- Counters: 0x45 words at +0x2E48, capped at 9999, added from `0xDF4A10` by `sub_000C80E0`.
+- CG gallery: the executable names 364 images (`sprite\\cggallery_pic\\spPic*`) and 31 pages (`sprite\\cggallery\\spGal*`), named by a table around `0x695004`. What locks them was not found: nothing refers to that address directly. DOA3's own tool is `tools/doa3_unlock_save.py`.
 
 ## Not done
 
