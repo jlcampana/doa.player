@@ -467,6 +467,156 @@ pub fn bounds(xpr: &Xpr2) -> Result<(Vec3, Vec3)> {
     Ok((lo, hi))
 }
 
+/// The characters in the viewer: the adults only, as for DOAX. Kasumi (`ks`), Ayane (`ay`),
+/// Hitomi (`ht`) and Kokoro (`co`) are left out on purpose.
+pub const ROSTER: [(&str, &str); 5] = [
+    ("Tina Armstrong", "tn"),
+    ("Helena Douglas", "he"),
+    ("Lei Fang", "le"),
+    ("Lisa", "ls"),
+    ("Christie", "cr"),
+];
+
+/// A suit: which wear archive, the entry of its XPR2 (its CAT follows), and a label.
+#[derive(Debug, Clone)]
+pub struct Suit {
+    pub archive: usize,
+    pub entry: usize,
+    pub label: String,
+}
+
+/// The suits of a character in the wear archives, `v<code>_...`. Names repeat, an XPR2 then
+/// its CAT, so entries are taken in pairs and numbered within their name.
+pub fn suits(archives: &[Vec<String>], code: &str) -> Vec<Suit> {
+    let prefix = format!("v{code}_");
+    let mut out = Vec::new();
+    for (archive, names) in archives.iter().enumerate() {
+        let mut entry = 0;
+        while entry < names.len() {
+            let name = &names[entry];
+            if !name.starts_with(&prefix) || names.get(entry + 1) != Some(name) {
+                entry += 1;
+                continue;
+            }
+            let number = out.iter().filter(|s: &&Suit| s.label.starts_with(&name[4..])).count() + 1;
+            out.push(Suit { archive, entry, label: format!("{} {number}", &name[4..]) });
+            entry += 2;
+        }
+    }
+    out
+}
+
+/// A piece in a CAT draw list: the game's bone, the object, and the marker that follows the
+/// pair, if any (-4 eyes, -5 and -6 the two shapes of a foot, -7 toes).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placed {
+    pub slot: u32,
+    pub object: usize,
+    pub mark: Option<i32>,
+}
+
+/// The CAT's directory, at the offset in word 1: 8-byte entries, `0x0100`, the kind shifted by
+/// 8, and an offset, until a zero entry.
+fn cat_section(cat: &[u8], kind: u16) -> Option<usize> {
+    let mut at = be32(cat, 4).ok()? as usize;
+    while at + 8 <= cat.len() {
+        let (tag, k, offset) = (be16(cat, at).ok()?, be16(cat, at + 2).ok()?, be32(cat, at + 4).ok()?);
+        if tag == 0 {
+            return None;
+        }
+        if k >> 8 == kind {
+            return Some(offset as usize);
+        }
+        at += 8;
+    }
+    None
+}
+
+/// The draw lists of a CAT: section kind 2 holds their offsets, zero for none. Each list is
+/// (bone, object) pairs, a negative marker after some pairs, ended by -1. Bodies and heads
+/// have one list, at the table's fourth entry; suits have five, all whole sets of the suit's
+/// objects, not yet told apart.
+pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Placed>>> {
+    if cat.get(..4) != Some(&b"CAT\0"[..]) {
+        bail!("not a CAT");
+    }
+    let table = cat_section(cat, 2).context("no draw list table")?;
+    let mut lists = Vec::new();
+    // Six entries: in heads the next section follows right after; suits have five lists
+    // and zeros.
+    for k in 0..6 {
+        let offset = be32(cat, table + k * 4)?;
+        if offset < 0x18 || offset % 4 != 0 || offset as usize >= cat.len() {
+            continue;
+        }
+        let mut at = offset as usize;
+        let mut list: Vec<Placed> = Vec::new();
+        loop {
+            let value = be32(cat, at)? as i32;
+            if value == -1 {
+                break;
+            }
+            if value < 0 {
+                if let Some(last) = list.last_mut() {
+                    last.mark = Some(value);
+                }
+                at += 4;
+            } else {
+                list.push(Placed { slot: value as u32, object: be32(cat, at + 4)? as usize, mark: None });
+                at += 8;
+            }
+            if list.len() > 512 {
+                bail!("draw list at {offset:#x} does not end");
+            }
+        }
+        lists.push(list);
+    }
+    Ok(lists)
+}
+
+/// A model file ready to draw: its pieces with their nodes, its textures and rest pose.
+pub struct Loaded {
+    /// (piece, node) per drawn object; the piece's texture indices are the file's own.
+    pub pieces: Vec<(ModelPiece, usize, Placed)>,
+    pub textures: Vec<ModelTexture>,
+    pub rest: Vec<Mat4>,
+}
+
+/// The game bone the head file hangs from: the neck. The head's root node has no parent in
+/// its file, and its offset matches the body's head node from the neck (0.076 against 0.061 m
+/// up, 1.5 cm forward in both on Tina).
+pub const NECK_SLOT: u32 = 20;
+
+impl Loaded {
+    /// The node of the first piece on a game bone.
+    pub fn slot_node(&self, slot: u32) -> Option<usize> {
+        self.pieces.iter().find(|(_, _, placed)| placed.slot == slot).map(|(_, node, _)| *node)
+    }
+}
+
+/// Reads a model and the first draw list of its CAT. Of a foot's two shapes, the one on the
+/// leg (marker -5) is drawn and the one on the free foot nodes (-6) is left out.
+pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
+    let xpr = Xpr2::parse(tpr)?;
+    let objects = objects(&xpr)?;
+    let nodes = hierarchy(&xpr)?;
+    let rest = rest_pose(&nodes);
+    let placed_nodes = object_nodes(&nodes, objects.len());
+    let list = draw_lists(cat)?.into_iter().next().context("no draw list")?;
+    let mut pieces = Vec::new();
+    for placed in list {
+        if placed.mark == Some(-6) {
+            continue;
+        }
+        let (Some(object), Some(Some(node))) = (objects.get(placed.object), placed_nodes.get(placed.object)) else {
+            log::warn!("DOAX2: object {} is not in the model", placed.object);
+            continue;
+        };
+        pieces.push((object_piece(&xpr, object)?, *node, placed));
+    }
+    Ok(Loaded { pieces, textures: textures(&xpr), rest })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +630,43 @@ mod tests {
             for x in 0..w {
                 assert!(seen.insert(tiled_offset(x, y, w, 2)));
             }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn draw_lists_read() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for name in ["vtn1.cat", "vtnAA.cat"] {
+            println!("{name}: {:?}", draw_lists(&chr.read(name).unwrap()).unwrap());
+        }
+        let wear: Vec<LazyArchive> = ["werone", "wertwo"].iter().map(|n| LazyArchive::open(format!("assets/doax2/{n}.afs")).unwrap()).collect();
+        let names: Vec<Vec<String>> = wear.iter().map(|w| w.names().map(str::to_string).collect()).collect();
+        for (_, code) in ROSTER {
+            let suits = suits(&names, code);
+            println!("{code}: {} suits, {:?}", suits.len(), suits.iter().take(6).map(|s| &s.label).collect::<Vec<_>>());
+            for suit in suits.iter().take(2) {
+                let lists = draw_lists(&wear[suit.archive].read_index(suit.entry + 1).unwrap()).unwrap();
+                println!("  {}: {} lists, first {:?}", suit.label, lists.len(), lists.first());
+            }
+        }
+        let loaded = load(&chr.read("vtn1.tpr").unwrap(), &chr.read("vtn1.cat").unwrap()).unwrap();
+        println!("vtn1: {} pieces", loaded.pieces.len());
+        let file = chr.read("vtnAA.tpr").unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let nodes = hierarchy(&xpr).unwrap();
+        let rest = rest_pose(&nodes);
+        for (k, node) in nodes.iter().enumerate() {
+            println!("head node {k}: object {} parent {:?} children {:?} at {:?}", node.object, node.parent, node.children, rest[k].w_axis);
+        }
+        let loaded = load(&file, &chr.read("vtnAA.cat").unwrap()).unwrap();
+        for (piece, node, placed) in &loaded.pieces {
+            let (mut lo, mut hi) = (Vec3::splat(9.0), Vec3::splat(-9.0));
+            for v in &piece.vertices {
+                lo = lo.min(v.position.into());
+                hi = hi.max(v.position.into());
+            }
+            println!("head piece {placed:?} node {node}: {} vertices, local {lo:?} {hi:?}, {} draws", piece.vertices.len(), piece.materials.len());
         }
     }
 

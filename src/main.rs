@@ -185,6 +185,7 @@ fn render_frame(app: &mut App, window: &Window) {
         app::GameSource::Doa2U => &app.doa2u_characters,
         app::GameSource::Doa3  => &app.doa3_characters,
         app::GameSource::Doax  => &app.doax_characters,
+        app::GameSource::Doax2 => &app.doax2_characters,
     };
     // DOA2U's clips have names. DOA3's do not, and which is whose is unknown there.
     let voice_clips = if app.char_panel.selected_source == app::GameSource::Doa2U {
@@ -455,6 +456,7 @@ fn load_from_arguments(app: &mut App) {
                 app::GameSource::Doa2U => app.doa2u_characters.len(),
                 app::GameSource::Doa3 => app.doa3_characters.len(),
                 app::GameSource::Doax => app.doax_characters.len(),
+                app::GameSource::Doax2 => app.doax2_characters.len(),
             };
             for index in 0..count {
                 written += app.export_character(index, all_motions);
@@ -470,12 +472,13 @@ fn load_from_arguments(app: &mut App) {
     let number = |i: usize| rest.get(i).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
     let doa2u = args.iter().any(|a| a == "--doa2u");
     let doax = args.iter().any(|a| a == "--doax");
-    let characters = if doax { &app.doax_characters } else if doa2u { &app.doa2u_characters } else { &app.doa3_characters };
+    let doax2 = args.iter().any(|a| a == "--doax2");
+    let characters = if doax2 { &app.doax2_characters } else if doax { &app.doax_characters } else if doa2u { &app.doa2u_characters } else { &app.doa3_characters };
     let Some(index) = characters.iter().position(|c| c.display_name.eq_ignore_ascii_case(name)) else {
         log::warn!("Unknown character: {}", name);
         return;
     };
-    app.char_panel.selected_source = if doax { app::GameSource::Doax } else if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };
+    app.char_panel.selected_source = if doax2 { app::GameSource::Doax2 } else if doax { app::GameSource::Doax } else if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };
     app.char_panel.selected_char_idx = Some(index);
     app.char_panel.selected_costume_idx = number(0);
     if let Some(scale) = args.iter().position(|a| a == "--bounce").and_then(|i| args.get(i + 1)?.parse().ok()) {

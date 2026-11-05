@@ -3,7 +3,9 @@
 Xbox 360 game, played here through DOAX2 Recomp (`/home/pandi/Ports/Apps/DeadOrAliveXtreme2-DOAX2Recomp`).
 Its disc files are in `extracted game files here/`. The viewer reads copies in `assets/doax2/`:
 `chr.afs`, `mot.afs`, `itm.afs`, `cmn.afs`, `werone.afs`, `wertwo.afs`, `default.xex`. All data is
-big-endian. Nothing here is compared with the running game yet. Do not assume a format matches
+big-endian. Nothing here is compared with the running game yet. The viewer shows the body, the first head
+(`AA`) and a suit in the files' rest pose (T pose), with base textures; no motions, lights,
+skinning across bones or morphs yet. Do not assume a format matches
 DOAX or DOA3 because the names do.
 
 ## Archives
@@ -86,6 +88,17 @@ with markers: -5 and -6 before alternatives (the same foot in two shapes), -7 be
 pieces, -1 at the end. Objects 0, 1, 5, 8, 24 and 27 are not in the list: 0 is the chest, with
 morph shapes, the others are empty. Then two materials from 0x184 and a directory at the offset
 in word 1. Not read further yet.
+
+Section kind 2 of the directory is a table of draw list offsets (zero for none). Each list is
+(game bone, object) pairs ended by -1, with a negative marker after some pairs: -4 eyes, -5 and
+-6 the two shapes of the same foot (-5 on the leg nodes, -6 on the parentless nodes 1 to 4),
+-7 toes. Bodies and heads have one list, at the table's fourth entry; suits have up to five,
+each a whole set of the suit's objects, not told apart yet (the viewer draws the first).
+Bones seen: 0 chest, 1 head, 2 pelvis, 16 and 17 eyes, 18 and 21 collars, 20 neck, 23 spine.
+
+The head file's root node has no parent. Its offset matches the body's head node from the neck
+(0.076 m against 0.061 m up, 1.5 cm forward in both on Tina), so the viewer hangs the head from
+the body's bone 20. Suits carry their own copy of the body's node tree.
 
 Suit CATs are 200 to 600 KB. Suit models hold their own copy of the hierarchy and several
 variants of the chest and pelvis objects (187 objects in `vtn_tk_b_m`).
