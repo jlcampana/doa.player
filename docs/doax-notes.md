@@ -47,7 +47,7 @@ The evaluator is confirmed by `doax_tracks_match_capture`: two characters of a d
 
 A table starts four rows before `0x2CFD58 + table * 0x180`, with its rows 20 to 23. (live)
 
-Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2 pieces blend by the slot table: not compared with the game. Not done: morphs; soft bodies; mirrored motions; blending; hands.
+Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2 pieces blend by the slot table: not compared with the game. Hands: the first two morph sets of the `apv` section at CAT word 3, on objects 30 and 12, with 34 shapes and no normals, read by DOA2U's reader. Scripts are in `<name>.bin`, and for shared motions in `anime_cm.bin`, whose motion numbers have 0x2000 added: a table of 1000 offsets at word 0, then words of an operation and its arguments, sizes by the table at `0x2CF888`. 0 plays a motion, 1 waits for a frame, 12 and 13 set a hand (0, 1, or 2 for both) to a pose, 13 over some frames. `0x33EE38` gives each pose's shape: 0, 1, 4, 5, 17, 14, 8, 11. (code) Live, the poses' rest shapes matched that table, 0 to 5. The viewer blends straight from shape to shape, by frame. The game passes through shapes in between on some changes, seen live, and it adds a step for scenes through `0x5D8AA8`'s records, neither of which the viewer does. Not compared frame by frame. Not done: morphs other than hands; soft bodies; mirrored motions; blending; hands.
 
 ## In the viewer
 

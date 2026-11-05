@@ -263,6 +263,13 @@ impl PoseHand {
     }
 
     /// The same hand on pose 0, as a motion starts it for exporting.
+    /// Sets the blend directly, for games whose hands are worked out from the frame.
+    pub fn set_blend(&mut self, from: usize, to: usize, weight: f32) {
+        self.from = from;
+        self.to = to;
+        self.weight = weight;
+    }
+
     pub fn at_rest(&self) -> Self {
         Self { from: 0, to: 0, weight: 1.0, ..self.clone() }
     }

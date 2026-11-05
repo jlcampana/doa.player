@@ -444,6 +444,14 @@ pub struct DoaxPose {
     /// Each animation entry's file and motion.
     motions: Vec<(usize, doax::Motion)>,
     playing: Option<usize>,
+    /// Each file's events by motion: the character's own, or the shared ones under their flag.
+    events: std::collections::HashMap<u16, Vec<doax::HandEvent>>,
+    shared_events: std::collections::HashMap<u16, Vec<doax::HandEvent>>,
+    /// Which files are the shared ones.
+    shared_files: Vec<bool>,
+    pose_shapes: Vec<usize>,
+    /// (slot in the scripts, the hand's shapes, its piece).
+    hands: Vec<(u16, crate::formats::doa3_morphs::PoseHand, usize)>,
 }
 
 pub struct Doa3Pose {
@@ -791,6 +799,7 @@ impl App {
         let nodes = doax::rest_pose(&rows);
 
         let mut files = Vec::new();
+        let mut shared_files = Vec::new();
         let mut motions = Vec::new();
         let mut animations = Vec::new();
         for file in doax::motion_files(&code) {
@@ -804,10 +813,27 @@ impl App {
                     doa3_motion_id: motion.id,
                 });
             }
+            shared_files.push(file.contains("comon"));
             files.push(data);
         }
+        let events_of = |name: &str| -> std::collections::HashMap<u16, Vec<doax::HandEvent>> {
+            dvd.read(name).ok().and_then(|bin| doax::hand_events(&bin, &xbe).map_err(|e| log::warn!("{name}: {e:#}")).ok()).unwrap_or_default()
+        };
+        let events = doax::motion_files(&code).first().map_or_else(Default::default, |own| events_of(&own.replace(".mot", ".bin")));
+        let shared_events = events_of("anime_cm.bin");
+        let pose_shapes = doax::pose_shapes(&xbe)?;
+        // Scripts count hand 0 as the first morph set's and hand 1 as the second's.
+        let hands: Vec<_> = doa2u::hands(&body_cat)?
+            .into_iter()
+            .rev()
+            .enumerate()
+            .filter_map(|(slot, hand)| {
+                let piece = rigid_objects.iter().position(|&object| object == hand.object)?;
+                Some((slot as u16, hand, piece))
+            })
+            .collect();
         self.doa3_pose = None;
-        self.doax_pose = Some(DoaxPose { rows, files, motions, playing: None });
+        self.doax_pose = Some(DoaxPose { rows, files, motions, playing: None, events, shared_events, shared_files, pose_shapes, hands });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
@@ -1634,9 +1660,23 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
-        if let Some(pose) = &self.doax_pose {
+        if let Some(pose) = &mut self.doax_pose {
             let Some(index) = pose.playing else { return };
             let (file, motion) = pose.motions[index];
+            let events = if pose.shared_files[file] {
+                pose.shared_events.get(&(motion.id as u16 | doax::SHARED_MOTION_FLAG))
+            } else {
+                pose.events.get(&(motion.id as u16))
+            };
+            let events = events.map_or(&[][..], Vec::as_slice);
+            for (slot, hand, piece) in &mut pose.hands {
+                let (from, to, weight) = doax::hand_blend(events, *slot, self.anim_time, &pose.pose_shapes);
+                hand.set_blend(from, to, weight);
+                self.mesh.set_rest_positions(
+                    *piece,
+                    hand.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))),
+                );
+            }
             match doax::eval_motion(&pose.files[file], &motion, self.anim_time) {
                 Ok(values) => {
                     let nodes = doax::solve_pose(&values, &pose.rows);

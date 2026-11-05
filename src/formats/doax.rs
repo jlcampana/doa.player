@@ -281,6 +281,94 @@ pub fn rest_pose(rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
 
 pub const TRACK_COUNT: usize = 60;
 
+/// A hand pose change in a motion's script: hand 0, 1 or 2 for both, over `time` frames.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HandEvent {
+    pub frame: u16,
+    pub hand: u16,
+    pub pose: u16,
+    pub time: u16,
+}
+
+const SCRIPT_OPS_VA: u32 = 0x2C_F888;
+const SCRIPT_OP_COUNT: usize = 0x4B;
+const POSE_SHAPES_VA: u32 = 0x33_EE38;
+const SCRIPT_TABLE_ENTRIES: usize = 1000;
+/// The motion of a script in `anime_cm.bin` is this plus its number in the shared `.mot` files.
+pub const SHARED_MOTION_FLAG: u16 = 0x2000;
+
+/// The hand events of each motion in a `.bin`. Word 0 gives a table of 1000 script offsets. A
+/// script is 16 bit words: an operation, then as many arguments as the table at 0x2CF888
+/// says, up to 0xFF. 0 plays a motion, 1 waits for a frame, 12 sets a hand and 13 does so over
+/// some frames (`0x000B22F0`).
+pub fn hand_events(bin: &[u8], xbe: &[u8]) -> Result<std::collections::HashMap<u16, Vec<HandEvent>>> {
+    let ops = xbe_offset(xbe, SCRIPT_OPS_VA).context("no script table")?;
+    let mut sizes = std::collections::HashMap::new();
+    for i in 0..SCRIPT_OP_COUNT {
+        let entry = xbe.get(ops + i * 6..ops + i * 6 + 4).context("short script table")?;
+        sizes.insert(u16::from_le_bytes([entry[0], entry[1]]), entry[2] as usize);
+    }
+    let table = read_u32(bin, 0)? as usize;
+    let mut starts: Vec<usize> =
+        (0..SCRIPT_TABLE_ENTRIES).filter_map(|i| read_u32(bin, table + i * 4).ok()).map(|v| v as usize).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let word = |at: usize| Some(u16::from_le_bytes([*bin.get(at)?, *bin.get(at + 1)?]));
+    let mut events: std::collections::HashMap<u16, Vec<HandEvent>> = std::collections::HashMap::new();
+    for start in starts {
+        let (mut at, mut motion, mut frame) = (start, None, 0);
+        while let Some(op) = word(at) {
+            let Some(&size) = sizes.get(&op) else { break };
+            if op == 0xFF {
+                break;
+            }
+            let argument = |i: usize| word(at + 2 + i * 2);
+            match op {
+                0 => {
+                    motion = argument(0);
+                    frame = 0;
+                    // The first script to play a motion decides its events.
+                    if let Some(motion) = motion {
+                        events.entry(motion).or_default();
+                    }
+                }
+                1 => frame = argument(0).unwrap_or(frame),
+                12 | 13 => {
+                    if let (Some(motion), Some(hand), Some(pose)) = (motion, argument(0), argument(1)) {
+                        let time = if op == 13 { argument(2).unwrap_or(0) } else { 0 };
+                        events.entry(motion).or_default().push(HandEvent { frame, hand, pose, time });
+                    }
+                }
+                _ => {}
+            }
+            at += 2 + size * 2;
+        }
+    }
+    Ok(events)
+}
+
+/// The shape each hand pose rests on, from the table at 0x33EE38, 8 bytes a pose.
+pub fn pose_shapes(xbe: &[u8]) -> Result<Vec<usize>> {
+    let table = xbe_offset(xbe, POSE_SHAPES_VA).context("no pose table")?;
+    (0..32).map(|i| Ok(read_u32(xbe, table + i * 8)? as usize)).collect()
+}
+
+/// Where a hand is at a frame: shapes to blend and how far along. The game also passes through
+/// shapes in between on some changes, by the table's second word, which this leaves out.
+pub fn hand_blend(events: &[HandEvent], slot: u16, t: f32, shapes: &[usize]) -> (usize, usize, f32) {
+    let shape = |pose: u16| shapes.get(pose as usize).copied().unwrap_or(0);
+    let (mut from, mut to, mut weight) = (shape(0), shape(0), 1.0);
+    for event in events.iter().filter(|e| e.hand == slot || e.hand == 2) {
+        if event.frame as f32 > t {
+            break;
+        }
+        from = to;
+        to = shape(event.pose);
+        weight = if event.time == 0 { 1.0 } else { ((t - event.frame as f32) / event.time as f32).min(1.0) };
+    }
+    (from, to, weight)
+}
+
 /// A character's `.mot` files in `datadvd.afs`, by her code. Going by their names: `gokei` is
 /// taken to be Christie, as nothing else fits her.
 pub fn motion_files(code: &str) -> Vec<String> {
@@ -694,6 +782,22 @@ mod tests {
             let (_, rotation, _) = self.to_scale_rotation_translation();
             Mat4::from_quat(rotation)
         }
+    }
+
+    #[test]
+    fn hands_blend_between_their_events() {
+        let shapes = [0, 1, 4, 5];
+        let events = [
+            HandEvent { frame: 10, hand: 0, pose: 2, time: 20 },
+            HandEvent { frame: 50, hand: 2, pose: 3, time: 0 },
+        ];
+        assert_eq!(hand_blend(&events, 0, 5.0, &shapes), (0, 0, 1.0));
+        assert_eq!(hand_blend(&events, 0, 20.0, &shapes), (0, 4, 0.5));
+        assert_eq!(hand_blend(&events, 0, 40.0, &shapes), (0, 4, 1.0));
+        assert_eq!(hand_blend(&events, 0, 60.0, &shapes), (4, 5, 1.0));
+        // Only the event for both hands reaches the other one.
+        assert_eq!(hand_blend(&events, 1, 40.0, &shapes), (0, 0, 1.0));
+        assert_eq!(hand_blend(&events, 1, 60.0, &shapes), (0, 5, 1.0));
     }
 
     #[test]
