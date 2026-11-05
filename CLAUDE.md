@@ -109,7 +109,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 ## Backlog
 
 1. DOA2U: stages, other soft body kinds.
-2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals (the file's disagree with their surfaces by over 60 degrees on 40 to 53 percent of vertices, with no sign or axis swap that fixes them; the viewer works them out from the triangles for models without the game's lighting, in `smooth_normals`), 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
+2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals (the file's disagree with their surfaces by over 60 degrees on 40 to 53 percent of vertices, with no sign or axis swap that fixes them; the viewer works them out from the posed triangles each frame for materials without the game's lighting, over the whole model, in `smooth_normals`), 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags are read from code and `tools/re/doa2u_unlocks.py` prints their state, see "Unlocks" in the notes. What they open and what locks the CG gallery are not known. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.

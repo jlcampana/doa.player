@@ -119,6 +119,10 @@ struct LoadedModel {
     /// Vertices in bone space. Posed copies are uploaded every frame.
     rest_vertices: Vec<MeshVertex>,
     posed_vertices: Vec<MeshVertex>,
+    /// Triangles of materials without the game's lighting, DOA3's. Their file normals disagree
+    /// with the surface on about half of the vertices, so their normals are worked out from the
+    /// posed triangles each frame, over the whole model so that seams between pieces stay smooth.
+    unlit_triangles: Vec<u32>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     /// Each triangle edge once, for "Mesh only".
@@ -551,26 +555,10 @@ impl MeshRenderer {
                 Some(base)
             })
             .collect();
-        let (mut checked, mut disagreeing) = (0usize, 0usize);
+        let mut unlit_triangles = Vec::new();
         for input in inputs {
             let base = rest_vertices.len();
             rest_vertices.extend_from_slice(input.vertices);
-            // Models without the game's lighting, DOA3's, have normals that disagree with their
-            // surfaces in places, which shading shows as dark patches. They get normals worked
-            // out from the triangles instead, turned to agree with most of the file's.
-            if input.draws.iter().all(|draw| draw.3.is_none()) {
-                let triangles: Vec<u32> = input.draws.iter().flat_map(|draw| draw.0.iter().copied()).collect();
-                let smooth = smooth_normals(input.vertices, &triangles);
-                for (vertex, normal) in rest_vertices[base..].iter_mut().zip(&smooth) {
-                    if normal.length_squared() > 0.0 {
-                        checked += 1;
-                        if glam::Vec3::from(vertex.normal).normalize_or_zero().dot(*normal) < 0.5 {
-                            disagreeing += 1;
-                        }
-                        vertex.normal = normal.to_array();
-                    }
-                }
-            }
             pieces.push(PosedPiece {
                 node: input.node,
                 vertices: base..rest_vertices.len(),
@@ -587,6 +575,9 @@ impl MeshRenderer {
             for (triangles, texture, cull_back, look) in &input.draws {
                 let first_index = indices.len() as u32;
                 indices.extend(triangles.iter().map(|i| i + base as u32));
+                if look.is_none() {
+                    unlit_triangles.extend(triangles.iter().map(|i| i + base as u32));
+                }
                 let view = texture.and_then(|t| views.get(t)).unwrap_or(&self.white_view);
                 let layer = look.and_then(|l| l.layer).and_then(|t| views.get(t));
                 let bind_group = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), look.as_ref().map(|l| (l, layer.is_some())));
@@ -612,14 +603,12 @@ impl MeshRenderer {
             contents: bytemuck::cast_slice(&lines),
             usage: wgpu::BufferUsages::INDEX,
         });
-        if checked > 0 {
-            log::info!("Normals worked out from triangles: {disagreeing} of {checked} file normals disagreed by over 60 degrees");
-        }
         self.model = Some(LoadedModel {
             line_buffer,
             line_count: lines.len() as u32,
             triangle_count: indices.len() as u32,
             posed_vertices: rest_vertices.clone(),
+            unlit_triangles,
             rest_vertices,
             vertex_buffer,
             index_buffer,
@@ -773,6 +762,14 @@ impl MeshRenderer {
                 out.normal = matrix.transform_vector3(rest.normal.into()).normalize_or_zero().into();
             }
         }
+        if !model.unlit_triangles.is_empty() {
+            let positions: Vec<glam::Vec3> = model.posed_vertices.iter().map(|v| glam::Vec3::from(v.position)).collect();
+            for (vertex, normal) in model.posed_vertices.iter_mut().zip(smooth_normals(&positions, &model.unlit_triangles)) {
+                if let Some(normal) = normal {
+                    vertex.normal = normal.to_array();
+                }
+            }
+        }
         queue.write_buffer(&model.vertex_buffer, 0, bytemuck::cast_slice(&model.posed_vertices));
     }
 
@@ -831,33 +828,25 @@ impl MeshRenderer {
     }
 }
 
-/// Normals from a piece's triangles, area weighted and shared by vertices at the same place, so
-/// that seams stay smooth. The winding's sign is the one most of the given normals agree with.
-/// Vertices in no triangle get zero.
-fn smooth_normals(vertices: &[MeshVertex], triangles: &[u32]) -> Vec<glam::Vec3> {
-    use glam::Vec3;
-    let key = |p: [f32; 3]| p.map(|c| (c * 10000.0).round() as i64);
-    let mut sums: std::collections::HashMap<[i64; 3], Vec3> = std::collections::HashMap::new();
-    let mut agreement = 0.0;
+/// Normals from triangles, area weighted and shared by vertices at the same place, so that
+/// seams stay smooth. Their sign follows the winding, which shading of these models ignores.
+/// Vertices in none of the triangles get none.
+fn smooth_normals(positions: &[glam::Vec3], triangles: &[u32]) -> Vec<Option<glam::Vec3>> {
+    let key = |p: glam::Vec3| [p.x, p.y, p.z].map(|c| (c * 10000.0).round() as i64);
+    let mut sums: std::collections::HashMap<[i64; 3], glam::Vec3> = std::collections::HashMap::new();
+    let mut used = vec![false; positions.len()];
     for triangle in triangles.chunks_exact(3) {
-        let [Some(a), Some(b), Some(c)] = [0, 1, 2].map(|i| vertices.get(triangle[i] as usize)) else { continue };
-        let face = (Vec3::from(b.position) - Vec3::from(a.position)).cross(Vec3::from(c.position) - Vec3::from(a.position));
-        for vertex in [a, b, c] {
-            *sums.entry(key(vertex.position)).or_default() += face;
-            agreement += face.dot(Vec3::from(vertex.normal));
+        let [Some(&a), Some(&b), Some(&c)] = [0, 1, 2].map(|i| positions.get(triangle[i] as usize)) else { continue };
+        let face = (b - a).cross(c - a);
+        for &index in triangle {
+            used[index as usize] = true;
+            *sums.entry(key(positions[index as usize])).or_default() += face;
         }
     }
-    let sign = if agreement < 0.0 { -1.0 } else { 1.0 };
-    let used: std::collections::HashSet<u32> = triangles.iter().copied().collect();
-    vertices
+    positions
         .iter()
-        .enumerate()
-        .map(|(i, vertex)| {
-            if !used.contains(&(i as u32)) {
-                return Vec3::ZERO;
-            }
-            sums.get(&key(vertex.position)).map_or(Vec3::ZERO, |sum| (*sum * sign).normalize_or_zero())
-        })
+        .zip(used)
+        .map(|(&p, used)| used.then(|| sums.get(&key(p)).map_or(glam::Vec3::ZERO, |sum| sum.normalize_or_zero())))
         .collect()
 }
 
@@ -1304,25 +1293,19 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn smooth_normals_point_out_of_a_closed_shape() {
-        // A tetrahedron with all file normals pointing inwards except one, wound outwards.
-        let corners = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    fn smooth_normals_follow_the_winding_and_join_seams() {
+        // A tetrahedron wound outwards, with one corner split in two, as a seam between pieces.
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, Vec3::ZERO];
         let center = Vec3::splat(0.25);
-        let vertices: Vec<MeshVertex> = corners
-            .iter()
-            .enumerate()
-            .map(|(i, &p)| {
-                let outward = (Vec3::from(p) - center).normalize();
-                MeshVertex { position: p, normal: (if i == 0 { outward } else { -outward }).to_array(), uv: [0.0; 2] }
-            })
-            .collect();
-        let triangles = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3];
-        let normals = smooth_normals(&vertices, &triangles);
-        // Most file normals point inwards, so the result does too, consistently.
+        let triangles = [0, 2, 1, 4, 1, 3, 0, 3, 2, 1, 2, 3];
+        let normals = smooth_normals(&corners, &triangles);
         for (i, n) in normals.iter().enumerate() {
-            let outward = (Vec3::from(corners[i]) - center).normalize();
-            assert!(n.dot(outward) < -0.5, "{i}: {n:?}");
+            let outward = (corners[i] - center).normalize();
+            assert!(n.unwrap().dot(outward) > 0.5, "{i}: {n:?}");
         }
+        // Both halves of the seam get the same normal.
+        assert_eq!(normals[0], normals[4]);
+        assert_eq!(smooth_normals(&corners, &[0, 1, 2])[3], None);
     }
 
     #[test]
