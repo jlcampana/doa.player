@@ -983,6 +983,22 @@ mod tests {
         assert!((found.1.lights[0].0[0] + 0.528).abs() < 0.002, "{:?}", found.1.lights[0].0);
     }
 
+    /// Lists the chest sets a body and a suit give. Reads the game's files.
+    #[test]
+    #[ignore]
+    fn chest_sets_are_found() {
+        let dvd = LazyArchive::open("assets/doax/datadvd.afs").unwrap();
+        let hdd = LazyArchive::open("assets/doax/datahdd.afs").unwrap();
+        let body = dvd.read("vtn00.cat").unwrap();
+        for entry in 0..super::super::doa2u::morph_set_count(&body) {
+            let set = super::super::doa2u::morph_set(&body, entry);
+            println!("body set {entry}: {:?}", set.as_ref().map(|s| s.as_ref().map(|s| (s.object, s.shapes.len()))));
+        }
+        let suit = hdd.read("mdAy00tn.cat").unwrap();
+        println!("body chest sets {:?}", chest_sets(&body, true).iter().map(|s| s.object).collect::<Vec<_>>());
+        println!("suit chest sets {:?}", chest_sets(&suit, false).iter().map(|s| s.object).collect::<Vec<_>>());
+    }
+
     #[test]
     fn chest_weights_match_live_reads() {
         // Values and weights read together from the running game.
