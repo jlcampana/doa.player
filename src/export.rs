@@ -14,7 +14,7 @@ use std::path::Path;
 use crate::formats::doa3::{JointBlend, SkinVertex, NODE_COUNT, NODE_EYES};
 use crate::formats::doa3_morphs::PoseHand;
 use crate::formats::model::{MaterialLook, ModelTexture, ModelVertex};
-use crate::renderer::mesh::{PieceInput, VertexBend};
+use crate::renderer::mesh::{MultiBend, PieceInput, VertexBend};
 
 /// Each node's parent, from how the pose solves build them. Nodes with none hang from the
 /// armature. See `solve_pose` in `doa3.rs` and `doa2u.rs`.
@@ -64,6 +64,11 @@ fn bone_name(node: usize) -> String {
     }
 }
 
+/// The parents and names of DOA3's and DOA2U's nodes.
+pub fn standard_skeleton() -> (Vec<Option<usize>>, Vec<String>) {
+    (BONE_PARENTS.to_vec(), (0..NODE_COUNT).map(bone_name).collect())
+}
+
 /// A draw of a piece, owned.
 #[derive(Clone)]
 pub struct ExportDraw {
@@ -82,6 +87,7 @@ pub struct ExportPiece {
     pub draws: Vec<ExportDraw>,
     pub skin: Option<(JointBlend, Vec<SkinVertex>)>,
     pub bend: Option<VertexBend>,
+    pub multi: Option<MultiBend>,
     pub welds: Vec<(usize, usize, usize)>,
     pub translucent: bool,
 }
@@ -113,6 +119,7 @@ impl ExportModel {
                     .collect(),
                 skin: input.skin.map(|(blend, vertices)| (blend, vertices.to_vec())),
                 bend: input.bend.clone(),
+                multi: input.multi.clone(),
                 welds: input.welds.clone(),
                 translucent: input.translucent,
             })
@@ -125,7 +132,7 @@ impl ExportModel {
 pub struct ExportClip {
     pub name: String,
     /// The solve's node matrices, per frame.
-    pub frames: Vec<[Mat4; NODE_COUNT]>,
+    pub frames: Vec<Vec<Mat4>>,
     /// Per frame and per hand of `Export::hands`: from, to and progress.
     pub hands: Vec<Vec<(usize, usize, f32)>>,
 }
@@ -139,7 +146,10 @@ pub struct ExportHand<'a> {
 pub struct Export<'a> {
     pub model: &'a ExportModel,
     /// The nodes of the rest pose.
-    pub bind: [Mat4; NODE_COUNT],
+    pub bind: Vec<Mat4>,
+    /// Each node's parent and name.
+    pub parents: Vec<Option<usize>>,
+    pub names: Vec<String>,
     pub clips: &'a [ExportClip],
     pub hands: &'a [ExportHand<'a>],
 }
@@ -160,9 +170,9 @@ struct BoundVertex {
     weights: [f32; 4],
 }
 
-fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4; NODE_COUNT]) -> Vec<BoundVertex> {
+fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<BoundVertex> {
     let piece = &pieces[index];
-    let node = piece.node.min(NODE_COUNT - 1);
+    let node = piece.node.min(bind.len() - 1);
     let matrix = bind[node];
     let normals = Mat3::from_mat4(matrix);
     let mut bound: Vec<BoundVertex> = piece
@@ -186,7 +196,32 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4; NODE_COUNT
             }
         }
     }
-    let parent_node = piece.parent.min(NODE_COUNT - 1);
+    if let Some(multi) = &piece.multi {
+        let matrices: Vec<Mat4> = multi
+            .groups
+            .iter()
+            .map(|&(node, offset)| bind.get(node).copied().unwrap_or(matrix) * Mat4::from_translation(offset))
+            .collect();
+        for ((out, vertex), weights) in bound.iter_mut().zip(&piece.vertices).zip(&multi.weights) {
+            let (position, normal) = (Vec3::from(vertex.position), Vec3::from(vertex.normal));
+            let (mut joints, mut shares) = ([0u8; 4], [0f32; 4]);
+            let mut left = 1.0;
+            let (mut blended, mut blended_normal) = (Vec3::ZERO, Vec3::ZERO);
+            for (k, matrix) in matrices.iter().enumerate().take(4) {
+                let share = weights.get(k).copied().unwrap_or(left);
+                left -= share;
+                joints[k] = multi.groups[k].0 as u8;
+                shares[k] = share;
+                blended += matrix.transform_point3(position) * share;
+                blended_normal += matrix.transform_vector3(normal) * share;
+            }
+            out.position = blended;
+            out.normal = blended_normal.normalize_or_zero();
+            out.joints = joints;
+            out.weights = shares;
+        }
+    }
+    let parent_node = piece.parent.min(bind.len() - 1);
     if let Some((blend, skin)) = &piece.skin {
         let parent = &bind[parent_node];
         for vertex in skin {
@@ -208,7 +243,7 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4; NODE_COUNT
     for &(source_piece, source, target) in &piece.welds {
         let (Some(from), Some(out)) = (pieces.get(source_piece), bound.get_mut(target)) else { continue };
         let Some(rest) = from.vertices.get(source) else { continue };
-        let source_node = from.node.min(NODE_COUNT - 1);
+        let source_node = from.node.min(bind.len() - 1);
         out.position = bind[source_node].transform_point3(rest.position.into());
         out.normal = bind[source_node].transform_vector3(rest.normal.into());
         out.joints = [source_node as u8, 0, 0, 0];
@@ -272,7 +307,8 @@ fn png_bytes(texture: &ModelTexture) -> Result<Vec<u8>> {
 
 /// Builds the file's bytes.
 pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
-    let Export { model, bind, clips, hands } = export;
+    let Export { model, bind, parents, names, clips, hands } = export;
+    let bone_count = bind.len();
     let mut writer = Writer::default();
 
     // Textures and materials.
@@ -308,17 +344,17 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
     // Nodes: first the bones, indexed by node, then a node per piece.
     let joints: Vec<Mat4> = bind.iter().map(joint).collect();
     let local = |frame: &[Mat4], node: usize| -> Mat4 {
-        match BONE_PARENTS[node] {
+        match parents[node] {
             Some(parent) => frame[parent].inverse() * frame[node],
             None => frame[node],
         }
     };
-    let mut nodes: Vec<Value> = (0..NODE_COUNT)
+    let mut nodes: Vec<Value> = (0..bone_count)
         .map(|node| {
             let (_, rotation, translation) = local(&joints, node).to_scale_rotation_translation();
-            let children: Vec<usize> = (0..NODE_COUNT).filter(|&c| BONE_PARENTS[c] == Some(node)).collect();
+            let children: Vec<usize> = (0..bone_count).filter(|&c| parents[c] == Some(node)).collect();
             let mut value = json!({
-                "name": bone_name(node),
+                "name": names[node],
                 "translation": translation.to_array(),
                 "rotation": rotation.normalize().to_array(),
             });
@@ -329,9 +365,9 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         })
         .collect();
     let inverse_binds: Vec<[f32; 16]> = joints.iter().map(|j| j.inverse().to_cols_array()).collect();
-    let inverse_binds = writer.accessor(bytemuck::cast_slice(&inverse_binds), FLOAT, "MAT4", NODE_COUNT, None);
+    let inverse_binds = writer.accessor(bytemuck::cast_slice(&inverse_binds), FLOAT, "MAT4", bone_count, None);
     let armature = nodes.len();
-    let roots: Vec<usize> = (0..NODE_COUNT).filter(|&n| BONE_PARENTS[n].is_none()).collect();
+    let roots: Vec<usize> = (0..bone_count).filter(|&n| parents[n].is_none()).collect();
     nodes.push(json!({"name": "Armature", "children": roots}));
 
     // Pieces.
@@ -359,7 +395,7 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         let mut targets = Vec::new();
         let mut default_weights = Vec::new();
         if let Some(hand) = hand.map(|h| hands[h].hand) {
-            let matrix = bind[piece.node.min(NODE_COUNT - 1)];
+            let matrix = bind[piece.node.min(bone_count - 1)];
             for (t, shape) in hand.shapes.iter().enumerate() {
                 let mut moved = vec![Vec3::ZERO; piece.vertices.len()];
                 for (group, value) in hand.vertices.iter().zip(shape) {
@@ -413,7 +449,7 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         let time = writer.accessor(bytemuck::cast_slice(&times), FLOAT, "SCALAR", times.len(), Some((vec![0.0], vec![last])));
         let (mut samplers, mut channels) = (Vec::new(), Vec::new());
         let frames: Vec<Vec<Mat4>> = clip.frames.iter().map(|frame| frame.iter().map(joint).collect()).collect();
-        for node in 0..NODE_COUNT {
+        for node in 0..bone_count {
             let mut translations = Vec::with_capacity(frames.len());
             let mut rotations: Vec<Quat> = Vec::with_capacity(frames.len());
             for frame in &frames {
@@ -466,7 +502,7 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         }
     }
 
-    let joint_nodes: Vec<usize> = (0..NODE_COUNT).collect();
+    let joint_nodes: Vec<usize> = (0..bone_count).collect();
     let mut scene_nodes = vec![armature];
     scene_nodes.extend(piece_nodes);
     let mut gltf = json!({
@@ -551,7 +587,7 @@ mod tests {
         nodes
     }
 
-    fn skin(vertex: &BoundVertex, bind: &[Mat4; NODE_COUNT], now: &[Mat4; NODE_COUNT]) -> Vec3 {
+    fn skin(vertex: &BoundVertex, bind: &[Mat4], now: &[Mat4]) -> Vec3 {
         (0..4)
             .map(|i| {
                 let node = vertex.joints[i] as usize;
@@ -568,6 +604,7 @@ mod tests {
             draws: vec![ExportDraw { indices: vec![0, 0, 0], texture: None, cull_back: true, look: None }],
             skin: None,
             bend: None,
+            multi: None,
             welds: Vec::new(),
             translucent: false,
         }
@@ -606,8 +643,8 @@ mod tests {
             pieces: vec![piece(0)],
             textures: vec![ModelTexture { width: 1, height: 1, rgba: vec![255, 0, 0, 255] }],
         };
-        let clips = [ExportClip { name: "motion".into(), frames: vec![pose(0.1, 1.0), pose(0.2, 1.1)], hands: vec![Vec::new(); 2] }];
-        let bytes = glb_bytes(&Export { model: &model, bind: pose(0.0, 1.0), clips: &clips, hands: &[] }).unwrap();
+        let clips = [ExportClip { name: "motion".into(), frames: vec![pose(0.1, 1.0).to_vec(), pose(0.2, 1.1).to_vec()], hands: vec![Vec::new(); 2] }];
+        let bytes = glb_bytes(&Export { model: &model, bind: pose(0.0, 1.0).to_vec(), parents: standard_skeleton().0, names: standard_skeleton().1, clips: &clips, hands: &[] }).unwrap();
         assert_eq!(&bytes[..4], b"glTF");
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize, bytes.len());
         let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;

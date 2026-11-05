@@ -31,7 +31,8 @@ EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"              
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
-target/fast/doa_player --export-all                                                 # every costume, no visible window, about 3.5 minutes
+target/fast/doa_player --export-all                                                 # every costume, no visible window; DOA2U and DOA3 about 3.5 minutes, DOAX about 7 more
+target/fast/doa_player --export-all --doax                                          # only DOAX
 target/release/doa_player --install-icon                                            # icon and desktop entry in ~/.local/share, needed on Wayland
 ```
 
@@ -82,6 +83,8 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 `src/export.rs` writes a `.glb` per costume: a mesh per piece, an armature of 25 bones with the pose solve's hierarchy, skin weights, embedded PNG textures, and baked motions at 60 frames per second. `exports/` is gitignored: the files hold game data and must not be committed or published. The Costume and All costumes buttons are in the character panel, and All costumes does one costume per frame so the window keeps responding. Checked by importing in `blender -b`: DOA2U, an `A0` model and DOA3, and all 698 motions of `zac00` (25 MB, 8 s); a frame of `zac00` was compared with the viewer by eye.
 
+DOAX exports its 32 bones from the rest pose, arms out, with hands as shape keys and blended pieces by their weights. Checked in `blender -b` on two costumes, and one frame of `tina 0077` by eye against the viewer. Bulk export over DOAX was measured for 97 s only: 227 costumes, memory flat.
+
 Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is not exported for anyone. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
 
 Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
@@ -108,7 +111,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags are read from code and `tools/re/doa2u_unlocks.py` prints their state, see "Unlocks" in the notes. What they open and what locks the CG gallery are not known. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
-6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Next, in the user's order (2026-11-05): export DOAX to Blender, DOAX lights, then a better anime shading, in the style of Fire Emblem, for the viewer. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
+6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Next, in the user's order (2026-11-05): DOAX lights, then a better anime shading, in the style of Fire Emblem, for the viewer. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
 
 ## Development principles
 

@@ -839,7 +839,7 @@ impl App {
         self.anim_time = 0.0;
         self.loaded_name = ("DOAX".to_string(), display_name.clone(), stem.clone());
         self.mesh.set_lights(Some(self.current_stage_lights()));
-        self.export_source = Default::default();
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
@@ -1499,6 +1499,37 @@ impl App {
         use anyhow::Context;
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
+        if let Some(pose) = &self.doax_pose {
+            let hands: Vec<ExportHand> = pose.hands.iter().map(|(_, hand, piece)| ExportHand { piece: *piece, hand }).collect();
+            let chosen: Vec<usize> = if all_motions {
+                (0..pose.motions.len()).collect()
+            } else {
+                self.anim_panel.selected_anim_idx.into_iter().collect()
+            };
+            let mut clips = Vec::new();
+            for index in chosen {
+                let Some(&(file, motion)) = pose.motions.get(index) else { continue };
+                let events = if pose.shared_files[file] {
+                    pose.shared_events.get(&(motion.id as u16 | doax::SHARED_MOTION_FLAG))
+                } else {
+                    pose.events.get(&(motion.id as u16))
+                };
+                let events = events.map_or(&[][..], Vec::as_slice);
+                let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
+                for frame in 0..motion.frames {
+                    let values = doax::eval_motion(&pose.files[file], &motion, frame as f32)?;
+                    frames.push(doax::solve_pose(&values, &pose.rows).to_vec());
+                    hand_frames.push(pose.hands.iter().map(|(slot, _, _)| doax::hand_blend(events, *slot, frame as f32, &pose.pose_shapes)).collect());
+                }
+                clips.push(ExportClip { name: self.current_animations[index].name.clone(), frames, hands: hand_frames });
+            }
+            let (game, character, costume) = &self.loaded_name;
+            let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
+            let (parents, names) = doax::skeleton();
+            let bind = doax::rest_pose(&pose.rows).to_vec();
+            write_glb(&Export { model: &self.export_source, bind, parents, names, clips: &clips, hands: &hands }, &path)?;
+            return Ok(path);
+        }
         let pose = self.doa3_pose.as_ref().context("no costume loaded")?;
         let archive = self.motion_archive().context("no motion archive")?;
         let solve = |values: &[f32; doa3::TRACK_COUNT]| match pose.doa2u_style {
@@ -1535,7 +1566,7 @@ impl App {
             let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
             for frame in 0..=doa3::motion_length(data, tracks) {
                 let values = doa3::eval_motion(data, tracks, frame as f32)?;
-                frames.push(solve(&values));
+                frames.push(solve(&values).to_vec());
                 for (hand, state) in hands.iter().zip(&mut states) {
                     let index = soft.pose_hands.iter().position(|h| std::ptr::eq(h, hand.hand)).unwrap_or(0);
                     let script_hand = index ^ 1;
@@ -1548,7 +1579,8 @@ impl App {
         }
         let (game, character, costume) = &self.loaded_name;
         let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
-        write_glb(&Export { model: &self.export_source, bind, clips: &clips, hands: &hands }, &path)?;
+        let (parents, names) = crate::export::standard_skeleton();
+        write_glb(&Export { model: &self.export_source, bind: bind.to_vec(), parents, names, clips: &clips, hands: &hands }, &path)?;
         Ok(path)
     }
 

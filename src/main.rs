@@ -422,7 +422,8 @@ fn build_ui(
 /// `--doa2u` looks the name up among DOA2U characters instead.
 /// `--doax` does so among DOAX's.
 /// `--install-icon` writes the icon and a desktop entry to the user's folders, and exits.
-/// `--export-all` writes every costume of both games, without `--load`, and exits.
+/// `--export-all` writes every costume of all games, without `--load`, and exits. With `--doax`,
+/// only that game's.
 /// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
 /// `--all-motions`, all of them.
 /// Also takes `--anime`, `--no-textures`, `--mesh-only`, `--wind`, `--bounce <scale>`, `--motion-id <id>` and
@@ -439,9 +440,18 @@ fn load_from_arguments(app: &mut App) {
     if args.iter().any(|a| a == "--export-all") {
         let all_motions = args.iter().any(|a| a == "--all-motions");
         let mut written = 0;
-        for source in [app::GameSource::Doa2U, app::GameSource::Doa3] {
+        // With `--doax`, only DOAX, whose suits take far longer than the other two games.
+        let only_doax = args.iter().any(|a| a == "--doax");
+        for source in [app::GameSource::Doa2U, app::GameSource::Doa3, app::GameSource::Doax] {
+            if only_doax && source != app::GameSource::Doax {
+                continue;
+            }
             app.char_panel.selected_source = source;
-            let count = if source == app::GameSource::Doa2U { app.doa2u_characters.len() } else { app.doa3_characters.len() };
+            let count = match source {
+                app::GameSource::Doa2U => app.doa2u_characters.len(),
+                app::GameSource::Doa3 => app.doa3_characters.len(),
+                app::GameSource::Doax => app.doax_characters.len(),
+            };
             for index in 0..count {
                 written += app.export_character(index, all_motions);
             }

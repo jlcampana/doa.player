@@ -218,6 +218,38 @@ fn xbe_offset(xbe: &[u8], wanted: u32) -> Option<usize> {
     })
 }
 
+/// The parents and names of the bones, for exporting.
+pub fn skeleton() -> (Vec<Option<usize>>, Vec<String>) {
+    let mut parents = vec![None; BONE_COUNT];
+    for (bone, parent, _) in BONE_LINKS {
+        parents[bone] = Some(parent);
+    }
+    for (bone, base) in BONES_ON_BONES {
+        parents[bone] = Some(base);
+    }
+    let names = (0..BONE_COUNT)
+        .map(|bone| match bone {
+            2 => "hips".to_string(),
+            23 => "waist".to_string(),
+            0 => "chest".to_string(),
+            19 => "neck".to_string(),
+            1 => "head".to_string(),
+            16 | 20 => format!("collar_{bone}"),
+            8 | 14 => format!("arm_upper_{bone}"),
+            4 | 10 => format!("arm_lower_{bone}"),
+            5 | 11 => format!("hand_{bone}"),
+            6 | 12 => format!("leg_upper_{bone}"),
+            7 | 13 => format!("leg_lower_{bone}"),
+            3 | 9 => format!("foot_{bone}"),
+            18 | 22 => format!("toes_{bone}"),
+            17 | 21 => format!("eye_{bone}"),
+            15 => "root".to_string(),
+            _ => format!("twist_{bone}"),
+        })
+        .collect();
+    (parents, names)
+}
+
 /// A bone's offset from its parent at rest.
 fn bone_offset(bone: usize, rows: &[Vec3; 24]) -> Vec3 {
     BONE_LINKS.iter().find(|link| link.0 == bone).map_or(Vec3::ZERO, |link| rows[link.2])
