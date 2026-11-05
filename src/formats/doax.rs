@@ -222,32 +222,49 @@ pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
 
 /// A body's joint pieces. The records read as DOA2U's, from the table at CAT word 4, except that
 /// a hand's parent is the one its record names: the DOA3 parser's special case for hands
-/// points at nodes that are other bones here.
+/// points at nodes that are other bones here. Ankles come in two versions and toes have their
+/// own: this keeps the ones marked by bit 3 of the record's top byte, which go with the whole
+/// foot of group 2, as the viewer draws. The port's docs say a mode selects them, which was
+/// not read.
 pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
     let table = read_u32(cat, 0x10)? as usize;
+    let mut flags_of = std::collections::HashMap::new();
+    for i in 0.. {
+        let entry = read_u32(cat, table + i * 4)?;
+        if entry == 0 {
+            break;
+        }
+        if entry != 1 {
+            let flags = read_u32(cat, table + entry as usize + 8)?;
+            flags_of.insert((flags & 0xFF) as usize, flags);
+        }
+    }
     let mut skins = super::doa3::parse_sparse_joint_skins(cat, table);
+    skins.retain(|skin| {
+        let marked = flags_of.get(&skin.object).is_some_and(|flags| flags >> 24 & 8 != 0);
+        match skin.node {
+            3 | 9 => marked,
+            18 | 22 => false,
+            _ => true,
+        }
+    });
     for skin in &mut skins {
-        let mut i = 0;
-        while let Ok(entry) = read_u32(cat, table + i * 4) {
-            i += 1;
-            if entry == 0 {
-                break;
-            }
-            let Ok(flags) = read_u32(cat, table + entry as usize + 8) else { continue };
-            if entry != 1 && (flags & 0xFF) as usize == skin.object {
-                skin.parent = ((flags >> 16) & 0xFF) as usize;
-            }
+        if let Some(flags) = flags_of.get(&skin.object) {
+            skin.parent = ((flags >> 16) & 0xFF) as usize;
         }
     }
     Ok(skins)
 }
 
-/// A thigh's bend towards the hips: its parent and its offset in rest, by its bone. Weights come
-/// from the object's extra float. The other weighted pieces hold 2 or 3 floats, not worked out.
+/// The bend of a thigh towards the hips or a knee towards the thigh: the parent and the offset
+/// in rest, by bone. Weights come from the object's extra float. The other weighted pieces
+/// hold 2 or 3 floats, not worked out.
 pub fn bend_of_bone(bone: usize, rows: &[Vec3; 24]) -> Option<(usize, Vec3)> {
     match bone {
         6 => Some((2, rows[2])),
         12 => Some((2, rows[8])),
+        7 => Some((6, rows[3])),
+        13 => Some((12, rows[9])),
         _ => None,
     }
 }
