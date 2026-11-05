@@ -4,7 +4,7 @@
 //! and the body is not offered without one.
 
 use anyhow::{bail, Context, Result};
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec3};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -26,7 +26,7 @@ const BONE_LINKS: [(usize, usize, usize); 22] = [
     (17, 1, 13), (21, 1, 17),
 ];
 
-/// Bones that sit on another in the game's matrices, and turn with it.
+/// Bones at the origin of another in the game's matrices, at rest with its axes.
 const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27, 14), (28, 5), (29, 11), (30, 8), (31, 14)];
 
 /// Height of the foot bone above the ground in the game's matrices, about 0.1.
@@ -462,6 +462,23 @@ const LIMBS: [Limb; 4] = [
         axes: [[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]], arm: false },
 ];
 
+/// `frame` turned by the shortest arc until its x axis is `onto`'s, at `onto`'s origin
+/// (`0x0017C8D0`).
+fn aligned_frame(frame: Mat4, onto: Mat4) -> Mat4 {
+    let arc = Quat::from_rotation_arc(frame.x_axis.truncate().normalize(), onto.x_axis.truncate().normalize());
+    let mut aligned = Mat4::from_quat(arc) * frame;
+    aligned.w_axis = onto.w_axis;
+    aligned
+}
+
+/// Halfway from one rotation to another, at the first's origin (`0x0017C780`).
+fn halfway_frame(from: Mat4, to: Mat4) -> Mat4 {
+    let (a, b) = (Quat::from_mat4(&from), Quat::from_mat4(&to));
+    let mut halfway = Mat4::from_quat(a.slerp(b, 0.5));
+    halfway.w_axis = from.w_axis;
+    halfway
+}
+
 /// A frame's bones in the game's space, under the character's root. Formulas measured on the
 /// running game, see the notes. The hips' x and z are left out, as the root holds them.
 fn solve_game_space(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
@@ -509,20 +526,26 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BO
         bones[limb.end] = Mat4::from_translation(end_position) * euler(&values[3..6]);
         let bend = upper_angle + lower_angle;
         bones[limb.mid] = if limb.arm {
-            let turned = upper * at(limb.mid_row) * Mat4::from_rotation_y(if limb.negate { bend } else { -bend });
-            // The forearm takes about half of the hand's roll, within 0.08 radians as measured.
-            let hand = turned.inverse().transform_vector3(bones[limb.end].z_axis.truncate());
-            turned * Mat4::from_rotation_x(0.5 * (-hand.y).atan2(hand.z))
+            upper * at(limb.mid_row) * Mat4::from_rotation_y(if limb.negate { bend } else { -bend })
         } else {
             upper * at(limb.mid_row) * Mat4::from_rotation_x(bend)
         };
     }
 
-    bones[18] = bones[3] * at(14) * Mat4::from_rotation_y(tracks[57]) * Mat4::from_rotation_x(tracks[56]);
-    bones[22] = bones[9] * at(18) * Mat4::from_rotation_y(tracks[59]) * Mat4::from_rotation_x(tracks[58]);
-    // Bones 26, 27, 30 and 31 roll along the upper arm by an amount that was not worked out.
-    for (bone, base) in BONES_ON_BONES {
-        bones[bone] = bones[base];
+    // Measured within 0.0002. Tracks 56 to 59 were zero in those samples, and their use by
+    // `0x000B20A0` was not read.
+    bones[18] = bones[3] * at(14) * Mat4::from_rotation_x(tracks[55]);
+    bones[22] = bones[9] * at(18) * Mat4::from_rotation_x(tracks[54]);
+    // `0x000B17D0`: arm bones share the roll of the bone after them, half each. The aligned
+    // bones hold that bone's frame turned to lie along this one, at this one's origin.
+    for (upper, collar, aligned, halfway) in [(8, 16, 26, 30), (14, 20, 27, 31)] {
+        bones[aligned] = aligned_frame(bones[collar], bones[upper]);
+        bones[halfway] = halfway_frame(bones[upper], bones[aligned]);
+    }
+    for (mid, hand, twist, aligned) in [(4, 5, 24, 28), (10, 11, 25, 29)] {
+        bones[aligned] = aligned_frame(bones[hand], bones[mid]);
+        bones[mid] = halfway_frame(bones[mid], bones[aligned]);
+        bones[twist] = bones[mid];
     }
     bones
 }
@@ -549,8 +572,7 @@ pub fn bone_rows(xbe: &[u8], table: u32) -> Result<[Vec3; 24]> {
 mod tests {
     use super::*;
 
-    /// Compares the solve with `tools/re/doax_capture.py`. DOAX_CAPTURE is its file. Bones 26,
-    /// 27, 30 and 31 are left out: their roll is not worked out.
+    /// Compares the solve with `tools/re/doax_capture.py`. DOAX_CAPTURE is its file.
     #[test]
     #[ignore]
     fn doax_pose_matches_capture() {
@@ -558,6 +580,7 @@ mod tests {
         let xbe = std::fs::read("assets/doax/default.xbe").unwrap();
         const CHECKED: [usize; 20] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 19, 20, 23, 17];
         let tables: Vec<[Vec3; 24]> = (0..8).map(|t| bone_rows(&xbe, t).unwrap()).collect();
+        let mut skipped = 0;
         let mut worst = [0f32; BONE_COUNT];
         let mut chosen = std::collections::BTreeMap::<(String, usize), usize>::new();
         for line in text.lines() {
@@ -574,12 +597,17 @@ mod tests {
             };
             let total = |rows: &[Vec3; 24]| { let e = errors(rows); CHECKED.iter().map(|&b| e[b]).sum::<f32>() };
             let best = (0..8).min_by(|&a, &b| total(&tables[a]).total_cmp(&total(&tables[b]))).unwrap();
+            // In menus and some scenes the matrices do not come from these tracks.
+            if errors(&tables[best])[2] > 0.002 {
+                skipped += 1;
+                continue;
+            }
             *chosen.entry((character, best)).or_default() += 1;
             for (slot, error) in worst.iter_mut().zip(errors(&tables[best])) {
                 *slot = slot.max(error);
             }
         }
-        println!("tables chosen: {chosen:?}");
+        println!("tables chosen: {chosen:?}, {skipped} samples skipped");
         for (bone, error) in worst.iter().enumerate() {
             println!("bone {bone}: worst {error:.4}");
         }
