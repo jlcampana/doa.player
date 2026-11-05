@@ -105,6 +105,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags for hidden characters and others are read from code, see "Unlocks" in the notes; their state in this save and what locks the CG gallery are open. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
+6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. Not looked at yet. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies to it too.
 
 ## Development principles
 
