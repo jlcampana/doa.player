@@ -13,6 +13,7 @@ use super::model::read_u32;
 pub const BONE_COUNT: usize = 32;
 const BONE_ROWS_VA: u32 = 0x2C_FD58;
 const BONE_ROWS_STRIDE: u32 = 0x180;
+const SLOT_TABLE_VA: u32 = 0x33_F988;
 
 /// Bone, parent and row of its offset, matched against the running game's matrices. Bone 2,
 /// the hips, is the root. Where two rows hold the same value, the row is taken by symmetry.
@@ -124,24 +125,8 @@ pub struct Placed {
     pub replaced_by_suit: bool,
     /// Reaches over the waist. The body's own waist is left out under a suit that has one.
     pub waist: bool,
-}
-
-/// The bone of a kind 2 slot, going by each object's size and side. Not from the game's table.
-fn weighted_bone(slot: u8) -> Option<usize> {
-    Some(match slot {
-        0 => 23,
-        // On suits, by where their pieces reach over all of the suits.
-        0x0A | 0x0D => 0,
-        0x0B | 0x0C | 0x0E => 2,
-        2 => 8,
-        3 => 14,
-        6 => 6,
-        7 => 12,
-        8 => 7,
-        9 => 13,
-        0x0F => 19,
-        _ => return None,
-    })
+    /// A kind 2 slot: the piece blends between bones, by `multi_bend`.
+    pub slot: Option<u8>,
 }
 
 /// Reads the pieces of a CAT. Records from +0x14 are (kind, value), and kind 4 is the list: a
@@ -187,13 +172,10 @@ pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
                 // Slots from 0x80 are bone 24 and up, as in DOA2U.
                 let bone = if slot >= 0x80 { slot as usize - 0x80 + 24 } else { slot as usize };
                 if bone < BONE_COUNT {
-                    placed.push(Placed { object, bone, replaced_by_suit: kind == 1 && (bone == 0 || bone == 2), waist: false });
+                    placed.push(Placed { object, bone, replaced_by_suit: kind == 1 && (bone == 0 || bone == 2), waist: false, slot: None });
                 }
             }
-            2 => match weighted_bone(slot) {
-                Some(bone) => placed.push(Placed { object, bone, replaced_by_suit: false, waist: matches!(slot, 0 | 0x0B | 0x0C) }),
-                None => log::warn!("Object {object} uses unknown slot {slot}"),
-            },
+            2 => placed.push(Placed { object, bone: 0, replaced_by_suit: false, waist: matches!(slot, 0 | 0x0B | 0x0C), slot: Some(slot) }),
             _ => {}
         }
     }
@@ -256,17 +238,63 @@ pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
     Ok(skins)
 }
 
-/// The bend of a thigh towards the hips or a knee towards the thigh: the parent and the offset
-/// in rest, by bone. Weights come from the object's extra float. The other weighted pieces
-/// hold 2 or 3 floats, not worked out.
-pub fn bend_of_bone(bone: usize, rows: &[Vec3; 24]) -> Option<(usize, Vec3)> {
-    match bone {
-        6 => Some((2, rows[2])),
-        12 => Some((2, rows[8])),
-        7 => Some((6, rows[3])),
-        13 => Some((12, rows[9])),
-        _ => None,
+/// The file offset of an address in the executable.
+fn xbe_offset(xbe: &[u8], wanted: u32) -> Option<usize> {
+    let base = read_u32(xbe, 0x104).ok()?;
+    let count = read_u32(xbe, 0x11C).ok()? as usize;
+    let headers = (read_u32(xbe, 0x120).ok()? - base) as usize;
+    (0..count).find_map(|i| {
+        let at = headers + i * 56;
+        let (va, raw, raw_size) = (read_u32(xbe, at + 4).ok()?, read_u32(xbe, at + 12).ok()?, read_u32(xbe, at + 16).ok()?);
+        (va..va + raw_size).contains(&wanted).then(|| (raw + wanted - va) as usize)
+    })
+}
+
+/// A bone's offset from its parent at rest.
+fn bone_offset(bone: usize, rows: &[Vec3; 24]) -> Vec3 {
+    BONE_LINKS.iter().find(|link| link.0 == bone).map_or(Vec3::ZERO, |link| rows[link.2])
+}
+
+/// The groups of a kind 2 slot, from the table at 0x33F988, 16 bytes a slot: a count, then that
+/// many lists ended by 0xFF. A list is a bone, then offsets: 0x80 + a bone adds its offset and
+/// 0x40 + a bone takes it away.
+pub fn slot_groups(xbe: &[u8], slot: u8, rows: &[Vec3; 24]) -> Option<Vec<(usize, Vec3)>> {
+    let entry = xbe.get(xbe_offset(xbe, SLOT_TABLE_VA + slot as u32 * 16)?..)?.get(..16)?;
+    let mut lists = entry[1..].split(|&b| b == 0xFF);
+    (0..entry[0])
+        .map(|_| {
+            let (&bone, offsets) = lists.next()?.split_first()?;
+            let offset = offsets.iter().fold(Vec3::ZERO, |sum, &op| {
+                let other = bone_offset((op & 0x3F) as usize, rows);
+                if op >= 0x80 { sum + other } else { sum - other }
+            });
+            Some((bone as usize, offset))
+        })
+        .collect()
+}
+
+/// A kind 2 piece's blend: its slot's groups and each vertex's extra floats, one fewer than
+/// the groups.
+pub fn multi_bend(xpr: &[u8], placed: &Placed, xbe: &[u8], rows: &[Vec3; 24]) -> Option<crate::renderer::mesh::MultiBend> {
+    let mut groups = slot_groups(xbe, placed.slot?, rows)?;
+    let record = read_u32(xpr, 0x28 + placed.object * 4).ok()? as usize;
+    let extra = read_u32(xpr, record + 4).ok()? as usize;
+    let count = read_u32(xpr, record + 0x20).ok()? as usize;
+    let vertices = read_u32(xpr, record + 0x24).ok()? as usize;
+    // Slot 15, the neck, counts 4 lists but holds 3, and its pieces have weights for 3.
+    if extra + 1 > groups.len() {
+        log::warn!("Object {} has {extra} weights for {} groups", placed.object, groups.len());
+        return None;
     }
+    groups.truncate(extra + 1);
+    let weights = (0..count)
+        .map(|v| {
+            (0..extra)
+                .map(|w| read_u32(xpr, vertices + v * (32 + extra * 4) + 12 + w * 4).map(f32::from_bits).ok())
+                .collect::<Option<Vec<f32>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(crate::renderer::mesh::MultiBend { groups, weights })
 }
 
 /// The rest pose's matrices from a character's offsets, arms out, standing on the ground.
@@ -523,17 +551,7 @@ pub fn solve_pose(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BONE
 
 /// Reads a character's offsets from the executable.
 pub fn bone_rows(xbe: &[u8], table: u32) -> Result<[Vec3; 24]> {
-    let base = read_u32(xbe, 0x104)?;
-    let count = read_u32(xbe, 0x11C)? as usize;
-    let headers = (read_u32(xbe, 0x120)? - base) as usize;
-    let wanted = BONE_ROWS_VA + table * BONE_ROWS_STRIDE;
-    let start = (0..count)
-        .find_map(|i| {
-            let at = headers + i * 56;
-            let (va, raw, raw_size) = (read_u32(xbe, at + 4).ok()?, read_u32(xbe, at + 12).ok()?, read_u32(xbe, at + 16).ok()?);
-            (va..va + raw_size).contains(&wanted).then(|| (raw + wanted - va) as usize)
-        })
-        .context("bone offsets are not in the executable")?;
+    let start = xbe_offset(xbe, BONE_ROWS_VA + table * BONE_ROWS_STRIDE).context("bone offsets are not in the executable")?;
     let mut rows = [Vec3::ZERO; 24];
     for (i, row) in rows.iter_mut().enumerate() {
         // A table starts four rows before `BONE_ROWS_VA + table * stride`, with its rows 20 to 23.
@@ -641,6 +659,23 @@ mod tests {
     }
 
     #[test]
+    fn slot_lists_add_and_take_away_offsets() {
+        // A count of 2: bone 23 with bone 0's offset, then bone 2 taking away bone 23's.
+        let mut xbe = vec![0u8; 0x400];
+        xbe[0x104..0x108].copy_from_slice(&0x10000u32.to_le_bytes());
+        xbe[0x11C..0x120].copy_from_slice(&1u32.to_le_bytes());
+        xbe[0x120..0x124].copy_from_slice(&0x10200u32.to_le_bytes());
+        xbe[0x204..0x208].copy_from_slice(&SLOT_TABLE_VA.to_le_bytes());
+        xbe[0x20C..0x210].copy_from_slice(&0x300u32.to_le_bytes());
+        xbe[0x210..0x214].copy_from_slice(&0x100u32.to_le_bytes());
+        xbe[0x300..0x307].copy_from_slice(&[2, 23, 0x80, 0xFF, 2, 0x40 + 23, 0xFF]);
+        let mut rows = [Vec3::ZERO; 24];
+        rows[20] = Vec3::Y;
+        rows[19] = Vec3::X;
+        assert_eq!(slot_groups(&xbe, 0, &rows).unwrap(), [(23, Vec3::Y), (2, -Vec3::X)]);
+    }
+
+    #[test]
     fn suits_are_found_for_their_wearer_only() {
         let names = ["mdTn00tn.xpr", "mdTn00tn.cat", "mdKs01tn.xpr", "mdTn00ht.xpr", "mdSun1tn.bin", "vtn00.xpr"];
         assert_eq!(costumes(names.into_iter(), "tn"), ["mdKs01tn", "mdTn00tn"]);
@@ -656,10 +691,10 @@ mod tests {
         cat.extend_from_slice(&[1, 0xFE, 0xFE, 0xFE, 1, 0x02, 3, 0x0A, 0, 1, 3, 9, 0x0A, 2, 1, 3, 10, 0x0B, 2, 0, 39, 6, 4, 7, 0]);
         let placed = placed_objects(&cat).unwrap();
         assert_eq!(placed, [
-            Placed { object: 3, bone: 2, replaced_by_suit: true, waist: false },
-            Placed { object: 10, bone: 3, replaced_by_suit: false, waist: false },
-            Placed { object: 39, bone: 23, replaced_by_suit: false, waist: true },
-            Placed { object: 7, bone: 4, replaced_by_suit: false, waist: false },
+            Placed { object: 3, bone: 2, replaced_by_suit: true, waist: false, slot: None },
+            Placed { object: 10, bone: 3, replaced_by_suit: false, waist: false, slot: None },
+            Placed { object: 39, bone: 0, replaced_by_suit: false, waist: true, slot: Some(0) },
+            Placed { object: 7, bone: 4, replaced_by_suit: false, waist: false, slot: None },
         ]);
     }
 

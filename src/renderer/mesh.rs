@@ -5,6 +5,14 @@ use crate::formats::doa3::{ChestMorphGroup, JointBlend, SkinVertex};
 use crate::formats::model::{ModelTexture, ModelVertex as MeshVertex};
 use wgpu::util::DeviceExt;
 
+/// Vertices blended between up to four matrices: each group is a node with an offset in its
+/// space. Each vertex holds a weight for all groups but the last, which takes what is left.
+#[derive(Debug, Clone)]
+pub struct MultiBend {
+    pub groups: Vec<(usize, glam::Vec3)>,
+    pub weights: Vec<Vec<f32>>,
+}
+
 /// One piece of a model: a range of the shared vertex buffer, moved by a node.
 struct PosedPiece {
     node: usize,
@@ -12,6 +20,7 @@ struct PosedPiece {
     parent: usize,
     skin: Option<(JointBlend, Vec<SkinVertex>)>,
     bend: Option<VertexBend>,
+    multi: Option<MultiBend>,
     /// (rest vertex of a rigid piece, its node, vertex of this piece), in the shared buffer.
     welds: Vec<(usize, usize, usize)>,
 }
@@ -133,6 +142,7 @@ pub struct PieceInput<'a> {
     pub parent: usize,
     pub skin: Option<(JointBlend, &'a [SkinVertex])>,
     pub bend: Option<VertexBend>,
+    pub multi: Option<MultiBend>,
     /// (input index of a rigid piece, its vertex, this piece's vertex)
     pub welds: Vec<(usize, usize, usize)>,
     /// Blended over everything else, without writing depth.
@@ -504,6 +514,7 @@ impl MeshRenderer {
                 parent: input.parent,
                 skin: input.skin.map(|(blend, vertices)| (blend, vertices.to_vec())),
                 bend: input.bend.clone(),
+                multi: input.multi.clone(),
                 welds: input
                     .welds
                     .iter()
@@ -644,6 +655,30 @@ impl MeshRenderer {
                         let own_normal = normal_matrix * normal;
                         out.normal = own_normal.lerp(moved_normals * normal, 1.0 - weight).normalize_or_zero().into();
                     }
+                }
+            }
+
+            if let Some(multi) = &piece.multi {
+                let matrices: Vec<glam::Mat4> = multi
+                    .groups
+                    .iter()
+                    .map(|&(node, offset)| nodes.get(node).copied().unwrap_or(glam::Mat4::IDENTITY) * glam::Mat4::from_translation(offset))
+                    .collect();
+                for ((out, vertex), weights) in posed.iter_mut().zip(rest).zip(&multi.weights) {
+                    let position = glam::Vec3::from(vertex.position);
+                    let normal = glam::Vec3::from(vertex.normal);
+                    let (mut blended, mut blended_normal, mut left) = (glam::Vec3::ZERO, glam::Vec3::ZERO, 1.0);
+                    for (matrix, &weight) in matrices.iter().zip(weights) {
+                        blended += matrix.transform_point3(position) * weight;
+                        blended_normal += matrix.transform_vector3(normal) * weight;
+                        left -= weight;
+                    }
+                    if let Some(last) = matrices.get(weights.len()) {
+                        blended += last.transform_point3(position) * left;
+                        blended_normal += last.transform_vector3(normal) * left;
+                    }
+                    out.position = blended.into();
+                    out.normal = blended_normal.normalize_or_zero().into();
                 }
             }
 

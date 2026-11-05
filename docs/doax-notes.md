@@ -11,7 +11,7 @@ Status of each statement below: "live" was measured on the running game, "file" 
 - Objects 40 to 58 of `vtn00` span -1 in z: probably shadow volumes (guess). Objects 0 to 39 are in their bone's space. (file)
 - CAT: +4 is the base, 0x14. Records from the base are (kind, value), the other way round from DOA2U, ending with kind 0. Kind 1, value + base: 8 byte (count, offset) pairs. Kind 3: material colors. Kind 4: a list, read next. (file)
 - Kind 4 on a body: 10 header bytes, then triples of (kind, slot, object). Kind 1 is rigid on bone `slot`, where 0x80 is a flag; kind 6 and kind 2 are other piece kinds; 2 goes with objects that have extra floats. Two-byte `0A n` entries divide it into groups. Meaning of the header, of the groups and of kinds 2 and 6 is not read. (file, guess on meaning)
-- A kind 4 list also has `0B`, one byte, dividing it further. Slots from 0x80 are bones 24 and up. Kind 2 slots on bodies and suits are placed by where their pieces reach over 1039 adult suits, not from a table: 0 waist (bone 23), 0x0A and 0x0D chest (0), 0x0B, 0x0C and 0x0E hips (2), 0x0F neck (19), 2, 3 upper arms (8, 14), 6, 7 thighs (6, 12), 8, 9 knees (7, 13). Kind 6 slots are read as bones. (guess, from sizes)
+- A kind 4 list also has `0B`, one byte, dividing it further. Slots from 0x80 are bones 24 and up. Kind 2 slots come from the table at `0x33F988`, 16 bytes a slot, as DOA2U's at `0x64C8B0`: a count, then lists ended by 0xFF, each a bone followed by 0x80 + a bone to add that bone's offset or 0x40 + a bone to take it away. A piece's vertices hold one extra float less than the count, a weight per list, and the last list takes what is left. (file; the weights' meaning fits the pieces' shapes) Slot 15, the neck, counts 4 lists but holds 3. Kind 6 pieces are joints, which the records at CAT word 4 describe.
 - Group 0 holds feet in two pieces with toes, and group 2 whole feet. The viewer draws group 2. Which one the game draws, and when, is not read. (guess)
 - `.mot`: a table of 1000 words, 0xFA4 for unused IDs. A motion's block is a word, frames in the low half and 60 tracks in the high half, then 60 track offsets relative to the block. Keys read as DOA3's: the sizes walk exactly to each track's end on the tracks tried. (file)
 
@@ -45,7 +45,7 @@ The evaluator is confirmed by `doax_tracks_match_capture`: two characters of a d
 
 A table starts four rows before `0x2CFD58 + table * 0x180`, with its rows 20 to 23. (live)
 
-Joint pieces read with DOA2U's parser, with each record's own parent, and thighs bend by their one weight: not compared with the game. Not done: other weighted pieces; morphs; soft bodies; mirrored motions; blending; hands.
+Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2 pieces blend by the slot table: not compared with the game. Not done: morphs; soft bodies; mirrored motions; blending; hands.
 
 ## In the viewer
 

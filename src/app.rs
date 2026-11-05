@@ -716,21 +716,22 @@ impl App {
         // The same object can be listed twice: a joint record takes over from a plain place.
         let mut rigid_objects: Vec<usize> = Vec::new();
         for placed in body_pieces.iter().filter(|p| (!p.replaced_by_suit || p.bone == 0) && !(p.waist && suit_has_waist)) {
-            if skins.iter().any(|skin| skin.object == placed.object) || rigid_objects.contains(&placed.object) {
+            // Knees are listed twice: as a joint with no record, and with a slot, which is the one to use.
+            let has_slot_entry = placed.slot.is_none() && body_pieces.iter().any(|p| p.object == placed.object && p.slot.is_some());
+            if has_slot_entry || skins.iter().any(|skin| skin.object == placed.object) || rigid_objects.contains(&placed.object) {
                 continue;
             }
             let Some(piece) = body.pieces.get(placed.object) else { continue };
-            let bend = doax::bend_of_bone(placed.bone, &rows).zip(body.weights[placed.object].clone()).map(|((parent, offset), weights)| {
-                crate::renderer::mesh::VertexBend { parent, offset, weights }
-            });
+            let multi = doax::multi_bend(&body_xpr, placed, &xbe, &rows);
             rigid_objects.push(placed.object);
             inputs.push(PieceInput {
-                node: placed.bone,
+                node: multi.as_ref().map_or(placed.bone, |m| m.groups[0].0),
                 vertices: &piece.vertices,
                 draws: draws_of(piece, 0, body_textures),
                 parent: placed.bone,
                 skin: None,
-                bend,
+                bend: None,
+                multi,
                 welds: Vec::new(),
                 translucent: false,
             });
@@ -754,20 +755,22 @@ impl App {
                 draws: draws_of(piece, 0, body_textures),
                 parent: skin.parent,
                 skin: Some((skin.blend, skin.vertices.as_slice())),
-                bend: None,
+                bend: None, multi: None,
                 welds,
                 translucent: false,
             });
         }
         for placed in suit_pieces {
             let Some(piece) = suit.pieces.get(placed.object) else { continue };
+            let multi = doax::multi_bend(&suit_xpr, &placed, &xbe, &rows);
             inputs.push(PieceInput {
-                node: placed.bone,
+                node: multi.as_ref().map_or(placed.bone, |m| m.groups[0].0),
                 vertices: &piece.vertices,
                 draws: draws_of(piece, body_textures, suit_textures),
                 parent: placed.bone,
                 skin: None,
                 bend: None,
+                multi,
                 welds: Vec::new(),
                 translucent: false,
             });
@@ -907,6 +910,7 @@ impl App {
                     parent: placed.node,
                     skin: None,
                     bend,
+                    multi: None,
                     welds: Vec::new(),
                     translucent: false,
                 })
@@ -940,7 +944,7 @@ impl App {
                 draws: draws_of(piece, texture_count),
                 parent: skin.parent,
                 skin: Some((skin.blend, skin.vertices.as_slice())),
-                bend: None,
+                bend: None, multi: None,
                 welds,
                 translucent: false,
             });
@@ -966,7 +970,7 @@ impl App {
                     draws: draws_of(piece, texture_count),
                     parent: chain.bone,
                     skin: None,
-                    bend: None,
+                    bend: None, multi: None,
                     welds: Vec::new(),
                     translucent: false,
                 });
@@ -985,7 +989,7 @@ impl App {
                 draws: draws_of(piece, texture_count),
                 parent: extra.prop.bone,
                 skin: None,
-                bend: None,
+                bend: None, multi: None,
                 welds: Vec::new(),
                 translucent: extra.translucent,
             });
@@ -1110,7 +1114,7 @@ impl App {
         };
         let rigid = nodes.rigid.iter().filter_map(|&(node, object)| {
             let (vertices, draws) = draws_of(object)?;
-            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None })
+            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None })
         });
         let rigid_input = |object: usize| nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object);
         let skins = nodes.skins.iter().filter_map(|skin| {
@@ -1125,7 +1129,7 @@ impl App {
                     source < count && target < vertices.len()
                 })
                 .collect();
-            Some(PieceInput { node: skin.node, vertices, draws, parent: skin.parent, skin: Some((skin.blend, skin.vertices.as_slice())), welds, translucent: false, bend: None })
+            Some(PieceInput { node: skin.node, vertices, draws, parent: skin.parent, skin: Some((skin.blend, skin.vertices.as_slice())), welds, translucent: false, bend: None, multi: None })
         });
         let mut inputs: Vec<PieceInput> = rigid.chain(skins).collect();
 
@@ -1150,7 +1154,7 @@ impl App {
                 }
                 let Some((vertices, draws)) = draws_of(target.object) else { continue };
                 chain_pieces[target.object] = Some((inputs.len(), chain.bone));
-                inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, bend: None });
+                inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
             }
         }
         for (prop, translucent) in props.iter().map(|prop| (prop, false)).chain(overlays.iter().map(|overlay| (&overlay.prop, overlay.translucent))) {
@@ -1159,7 +1163,7 @@ impl App {
             }
             let Some((vertices, draws)) = draws_of(prop.object) else { continue };
             chain_pieces[prop.object] = Some((inputs.len(), prop.bone));
-            inputs.push(PieceInput { node: prop.bone, vertices, draws, parent: prop.bone, skin: None, welds: Vec::new(), translucent, bend: None });
+            inputs.push(PieceInput { node: prop.bone, vertices, draws, parent: prop.bone, skin: None, welds: Vec::new(), translucent, bend: None, multi: None });
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
@@ -1271,7 +1275,7 @@ impl App {
         };
         let rigid = nodes.rigid.iter().filter_map(|&(node, object)| {
             let (vertices, draws) = draws_of(object)?;
-            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None })
+            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None })
         });
         let rigid_input = |object: usize| {
             nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object)
@@ -1305,7 +1309,7 @@ impl App {
                 skin: Some((skin.blend, skin.vertices.as_slice())),
                 welds,
                 translucent: false,
-                bend: None,
+                bend: None, multi: None,
             })
         });
         let mut inputs: Vec<PieceInput> = rigid.chain(skins).collect();
@@ -1352,7 +1356,7 @@ impl App {
                     skin: None,
                     welds: Vec::new(),
                     translucent: false,
-                    bend: None,
+                    bend: None, multi: None,
                 });
             }
         }
@@ -1373,7 +1377,7 @@ impl App {
                 skin: None,
                 welds: Vec::new(),
                 translucent,
-                bend: None,
+                bend: None, multi: None,
             });
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
