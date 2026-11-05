@@ -739,7 +739,10 @@ impl SoftChain {
                 moved = true;
             }
         }
-        if moved {
+        if moved && self.wind_factor.is_some() {
+            // DOA2U leaves the moved tip where it is, as on cloth (`sub_0004BFE0`).
+            target - point
+        } else if moved {
             with_length(target - point, self.segment_length)
         } else {
             segment
@@ -905,7 +908,10 @@ mod tests {
                     let phase = (*record * 3) & 7;
                     let index = (head as i64 - phase as i64 - 1).rem_euclid(64) as usize * 4;
                     chain.step(&nodes[fighter], Vec3::new(ring[index], ring[index + 1], ring[index + 2]));
-                    if (chain.particles[0].position - after[0].position).length() < 0.0005 {
+                    // A pair more than a step apart can still have the root in place. Its last
+                    // pull, which the step computes from the root alone, gives it away.
+                    let one_step = (chain.particles[0].last_pull - after[0].last_pull).length() < 1e-4;
+                    if (chain.particles[0].position - after[0].position).length() < 0.0005 && one_step {
                         let error = |list: &[Particle]| list.iter().zip(&after).map(|(a, b)| (a.segment - b.segment).length()).sum::<f32>() / after.len() as f32 * 1000.0;
                         let worst = chain.particles.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0, f32::max) * 1000.0;
                         results.entry(k).or_default().push((error(&chain.particles), error(&before), worst));
