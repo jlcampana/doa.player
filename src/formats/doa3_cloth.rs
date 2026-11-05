@@ -93,6 +93,8 @@ struct JointFold {
     /// The component that runs along the tube. Z in DOA3's code; DOA2U's update chooses
     /// it from the same field as `axes`, and its leg bones run along Y.
     length_axis: usize,
+    /// DOA2U's form of the limit, in `limit_tip`.
+    moved_centre: bool,
 }
 
 impl JointFold {
@@ -115,6 +117,7 @@ impl JointFold {
             limit: read_f32(cat, at + 0x28)?,
             stiffness_factor: read_f32(cat, at + 0x30)?,
             length_axis: 2,
+            moved_centre: false,
         })
     }
 
@@ -133,8 +136,16 @@ impl JointFold {
     /// Keeps a segment's tip within an angle and a radius of the tube's axis.
     fn limit_tip(&self, rest_angle: i32, point: Vec3, segment: &mut Vec3) {
         let (u, v) = self.axes;
-        let mut a = point[u] + segment[u] - self.centre.0;
-        let mut b = point[v] + segment[v] - self.centre.1;
+        // DOA2U measures from a centre moved towards the column by the small radius, with
+        // only an outer limit (`sub_0004DF20`).
+        let centre = if self.moved_centre {
+            let (sin, cos) = from_angle(rest_angle).sin_cos();
+            (self.centre.0 + cos * self.min_radius, self.centre.1 + sin * self.min_radius)
+        } else {
+            self.centre
+        };
+        let mut a = point[u] + segment[u] - centre.0;
+        let mut b = point[v] + segment[v] - centre.1;
         let delta = wrap_angle(to_angle(b.atan2(a)) - rest_angle);
         let turn = if delta > self.max_angle {
             Some(self.max_angle - delta)
@@ -150,6 +161,9 @@ impl JointFold {
         let radius = (a * a + b * b).sqrt();
         let scale = if radius == 0.0 {
             None
+        } else if self.moved_centre {
+            let reach = self.max_radius - self.min_radius;
+            (radius > reach).then(|| reach / radius)
         } else if radius > self.max_radius {
             Some(self.max_radius / radius)
         } else if radius < self.min_radius {
@@ -161,8 +175,8 @@ impl JointFold {
             return;
         }
         let scale = scale.unwrap_or(1.0);
-        segment[u] = a * scale - point[u] + self.centre.0;
-        segment[v] = b * scale - point[v] + self.centre.1;
+        segment[u] = a * scale - point[u] + centre.0;
+        segment[v] = b * scale - point[v] + centre.1;
     }
 }
 
@@ -264,6 +278,7 @@ pub fn parse_cloth_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
             resolve_limb_slots(&mut cloth.shapes);
             if let Some(fold) = &mut cloth.fold {
                 fold.length_axis = 3 - fold.axes.0 - fold.axes.1;
+                fold.moved_centre = true;
             }
             let all_flags = read_u32(cat, at + 8)?;
             let high_flags = (all_flags >> 8) as u8;
@@ -916,6 +931,7 @@ mod tests {
         let use_wind = std::env::var("DOA2U_NO_WIND").is_err();
         let mut totals: std::collections::BTreeMap<usize, Vec<(f32, f32, f32)>> = Default::default();
         let mut roots: std::collections::BTreeMap<usize, Vec<f32>> = Default::default();
+        let mut apart: std::collections::BTreeMap<usize, usize> = Default::default();
         for line in text.lines() {
             let mut words = line.split_whitespace();
             let kind = words.next().unwrap();
@@ -989,7 +1005,13 @@ mod tests {
                             }
                         }
                     }
-                    if root_error < 0.0005 {
+                    // A pair more than a step apart can still have row 0 in place. Its last
+                    // pull, which the step computes from the root alone, gives it away.
+                    let one_step = (0..cloth.columns).all(|c| (cloth.particles()[c * rows].last_pull - after[c * rows].last_pull).length() < 1e-4);
+                    if !one_step {
+                        apart.entry(k).and_modify(|n| *n += 1).or_insert(1);
+                    }
+                    if root_error < 0.0005 && one_step {
                         let error = |list: &[ClothParticle]| list.iter().zip(&after).map(|(a, b)| (a.segment - b.segment).length()).sum::<f32>() / after.len() as f32;
                         let worst = cloth.particles().iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0, f32::max);
                         let total = totals.entry(k).or_insert_with(Vec::new);
@@ -1018,8 +1040,8 @@ mod tests {
             let mut still: Vec<f32> = samples.iter().map(|s| s.1).collect();
             let mut worst: Vec<f32> = samples.drain(..).map(|s| s.2).collect();
             println!(
-                "record {k} {:?}: {count} of {} pairs usable, median row 0 error {:.2} mm; segment error {:.2} mm, without stepping {:.2} mm, worst position {:.2} mm",
-                records[*k], list.len(), list[list.len() / 2] * 1000.0, median(&mut ours), median(&mut still), median(&mut worst)
+                "record {k} {:?}: {count} of {} pairs usable, {} not one step apart, median row 0 error {:.2} mm; segment error {:.2} mm, without stepping {:.2} mm, worst position {:.2} mm",
+                records[*k], list.len(), apart.get(k).copied().unwrap_or(0), list[list.len() / 2] * 1000.0, median(&mut ours), median(&mut still), median(&mut worst)
             );
         }
     }
