@@ -1,11 +1,10 @@
 //! Dead or Alive Xtreme Beach Volleyball, read as far as `docs/doax-notes.md` says.
 //!
-//! So far a character stands in the rest pose, with no motions, soft bodies, morphs or joint
-//! bending. A costume is always a swimsuit on a body: the suit's pieces take the place of the
+//! A character moves as rigid pieces, without soft bodies, morphs or joint bending. A costume is always a swimsuit on a body: the suit's pieces take the place of the
 //! body's torso and hips, and the body is not offered without one.
 
 use anyhow::{bail, Context, Result};
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -232,7 +231,226 @@ pub fn rest_pose(rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
         positions[bone] = positions[base];
     }
     positions[15] = Vec3::new(positions[2].x, 0.0, positions[2].z);
-    positions.map(Mat4::from_translation)
+    positions.map(|position| Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0)) * Mat4::from_translation(position))
+}
+
+pub const TRACK_COUNT: usize = 60;
+
+/// A character's `.mot` files in `datadvd.afs`, by her code. Going by their names: `gokei` is
+/// taken to be Christie, as nothing else fits her.
+pub fn motion_files(code: &str) -> Vec<String> {
+    let stem = match code {
+        "tn" => "tina",
+        "he" => "hika",
+        "le" => "leifang",
+        "cr" => "gokei",
+        "ls" => "lisa",
+        _ => return Vec::new(),
+    };
+    [stem.to_string(), format!("m_{stem}"), format!("m_{stem}2"), format!("m_{stem}3"), "comon".to_string(), "m_comon".to_string(), "m_comon2".to_string(), "m_comon3".to_string()]
+        .map(|name| format!("{name}.mot"))
+        .to_vec()
+}
+
+/// A motion in a `.mot`: where its block is and how long it runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Motion {
+    pub id: usize,
+    pub block: usize,
+    pub frames: u32,
+}
+
+/// Lists a `.mot`'s motions: 1000 words of block offsets, the first the unused placeholder. A
+/// block is a word, frames in its low half and the track count in its high half, then the
+/// tracks' offsets from the block.
+pub fn list_motions(data: &[u8]) -> Vec<Motion> {
+    let Ok(placeholder) = read_u32(data, 0) else { return Vec::new() };
+    (0..1000)
+        .filter_map(|id| {
+            let block = read_u32(data, id * 4).ok()?;
+            if block == placeholder {
+                return None;
+            }
+            let head = read_u32(data, block as usize).ok()?;
+            (head >> 16 == TRACK_COUNT as u32).then_some(Motion { id, block: block as usize, frames: head & 0xFFFF })
+        })
+        .collect()
+}
+
+/// Builds a float from a packed value's sign, exponent and mantissa. Zero stays zero.
+fn unpack(raw: u32, sign_bit: u32, exponent: u32, mantissa: u32) -> f32 {
+    if raw == 0 {
+        return 0.0;
+    }
+    f32::from_bits((((raw >> sign_bit) & 1) << 31) | (exponent << 23) | mantissa)
+}
+
+/// A key's value: 20 bits, the head's top four and 16 more (`0x000AE980`).
+fn key_value(data: &[u8], at: usize) -> Option<f32> {
+    let head = u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32;
+    let low = u16::from_le_bytes([*data.get(at + 2)?, *data.get(at + 3)?]) as u32;
+    let raw = ((head & 0xF000) << 4) | low;
+    Some(unpack(raw, 19, ((raw >> 16) & 7) + 0x7E, (raw & 0xFFFF) << 7))
+}
+
+/// A 24 bit slope (`0x000AE9F0`).
+fn key_slope(raw: u32) -> f32 {
+    unpack(raw, 23, ((raw >> 19) & 0xF) + 0x70, (raw & 0x7FFFF) << 4)
+}
+
+/// A 16 bit slope (`0x000AE910`).
+fn key_short_slope(raw: u32) -> f32 {
+    unpack(raw, 15, ((raw >> 12) & 7) + 0x71, (raw & 0xFFF) << 11)
+}
+
+/// Evaluates a track at a frame. Keys start with a head: low two bits the kind, then ten of
+/// duration, with the table at 0x2D1248 giving each kind's function and size. Kind 0 is a
+/// cubic with two slopes, 1 a line, 2 a parabola and 3 a constant. A head with no kind or
+/// duration ends the track. Kinds 0 to 2 end at the next key's value.
+fn eval_track(data: &[u8], start: usize, t: f32) -> Option<f32> {
+    let u16_at = |at: usize| Some(u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32);
+    let (mut at, mut segment_start) = (start, 0f32);
+    loop {
+        let head = u16_at(at)?;
+        let (kind, dt) = (head & 3, ((head >> 2) & 0x3FF) as f32);
+        if (kind == 0 && dt == 0.0) || kind == 3 {
+            return key_value(data, at);
+        }
+        let size = [10, 4, 6][kind as usize];
+        if t < segment_start + dt {
+            let (v0, v1) = (key_value(data, at)?, key_value(data, at + size)?);
+            let x = t - segment_start;
+            let slope = (v1 - v0) / dt;
+            return Some(match kind {
+                0 => {
+                    let m0 = key_slope(u16_at(at + 4)? | ((*data.get(at + 8)? as u32) << 16));
+                    let m1 = key_slope(u16_at(at + 6)? | ((*data.get(at + 9)? as u32) << 16));
+                    let c2 = (3.0 * slope - 2.0 * m0 - m1) / dt;
+                    let c3 = (m0 + m1 - 2.0 * slope) / (dt * dt);
+                    ((c3 * x + c2) * x + m0) * x + v0
+                }
+                1 => slope * x + v0,
+                _ => {
+                    let m = key_short_slope(u16_at(at + 4)?);
+                    ((-m * x) + (slope + m * dt)) * x + v0
+                }
+            });
+        }
+        segment_start += dt;
+        at += size;
+    }
+}
+
+/// Evaluates a motion's tracks. Their order in the file is the order in memory, unless a
+/// motion is mirrored, which swaps sides by the table at 0x2D1360.
+pub fn eval_motion(data: &[u8], motion: &Motion, frame: f32) -> Result<[f32; TRACK_COUNT]> {
+    let mut values = [0f32; TRACK_COUNT];
+    for (i, value) in values.iter_mut().enumerate() {
+        let offset = read_u32(data, motion.block + 4 + i * 4)? as usize;
+        *value = eval_track(data, motion.block + offset, frame).context("motion track out of bounds")?;
+    }
+    Ok(values)
+}
+
+fn euler(values: &[f32]) -> Mat4 {
+    Mat4::from_rotation_z(values[2]) * Mat4::from_rotation_y(values[1]) * Mat4::from_rotation_x(values[0])
+}
+
+struct Limb {
+    upper: usize,
+    mid: usize,
+    end: usize,
+    parent: usize,
+    upper_row: usize,
+    mid_row: usize,
+    end_row: usize,
+    first_track: usize,
+    /// The angles' sign, as in DOA3's solve.
+    negate: bool,
+    /// From the frame the solve builds, with z towards the target, to the bone's. Measured.
+    axes: [[f32; 3]; 3],
+    arm: bool,
+}
+
+const LIMBS: [Limb; 4] = [
+    Limb { upper: 14, mid: 10, end: 11, parent: 20, upper_row: 10, mid_row: 6, end_row: 7, first_track: 12, negate: true,
+        axes: [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]], arm: true },
+    Limb { upper: 8, mid: 4, end: 5, parent: 16, upper_row: 4, mid_row: 0, end_row: 1, first_track: 20, negate: false,
+        axes: [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]], arm: true },
+    Limb { upper: 12, mid: 13, end: 9, parent: 2, upper_row: 8, mid_row: 9, end_row: 5, first_track: 28, negate: true,
+        axes: [[0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0]], arm: false },
+    Limb { upper: 6, mid: 7, end: 3, parent: 2, upper_row: 2, mid_row: 3, end_row: 5, first_track: 36, negate: false,
+        axes: [[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]], arm: false },
+];
+
+/// A frame's bones in the game's space, under the character's root. Formulas measured on the
+/// running game, see the notes. The hips' x and z are left out, as the root holds them.
+fn solve_game_space(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
+    let at = |row: usize| Mat4::from_translation(rows[row]);
+    let mut bones = [Mat4::IDENTITY; BONE_COUNT];
+    bones[2] = Mat4::from_translation(Vec3::Y * tracks[1]) * euler(&tracks[3..6]);
+    bones[23] = bones[2] * at(19) * euler(&tracks[44..47]);
+    bones[0] = bones[23] * at(20) * euler(&tracks[6..9]);
+    bones[19] = bones[0] * at(15) * euler(&tracks[47..50]);
+    bones[1] = bones[19] * at(21) * euler(&tracks[9..12]);
+    bones[17] = bones[1] * at(13);
+    bones[21] = bones[1] * at(17);
+    bones[16] = bones[0] * at(12) * Mat4::from_rotation_y(tracks[53]) * Mat4::from_rotation_z(tracks[52]);
+    bones[20] = bones[0] * at(16) * Mat4::from_rotation_y(tracks[51]) * Mat4::from_rotation_z(tracks[50]);
+
+    for limb in &LIMBS {
+        let values = &tracks[limb.first_track..limb.first_track + 8];
+        let target = Vec3::new(values[0], values[1], values[2]);
+        let (pole_a, pole_b) = (values[6], values[7]);
+        let upper_length = rows[limb.mid_row].length();
+        let lower_length = rows[limb.end_row].length();
+        let reach = upper_length + lower_length;
+        let origin = bones[limb.parent].transform_point3(rows[limb.upper_row]);
+        let to_target = target - origin;
+        let distance = to_target.length().max(1e-6);
+        let z = to_target / distance;
+        let (end_position, upper_angle, lower_angle) = if distance >= reach {
+            (origin + z * reach, 0.0, 0.0)
+        } else {
+            let cosine = |near: f32, far: f32| {
+                ((distance * distance + near * near - far * far) / (2.0 * near * distance)).clamp(-1.0, 1.0).acos()
+            };
+            (target, cosine(upper_length, lower_length), cosine(lower_length, upper_length))
+        };
+        let signed = if limb.negate { -upper_angle } else { upper_angle };
+        let pole = Vec3::new(pole_b.sin() * pole_a.cos(), -pole_a.sin(), pole_b.cos() * pole_a.cos());
+        let y = (pole - z * pole.dot(z)).normalize_or_zero();
+        let x = y.cross(z);
+        let axes = Mat3::from_cols_array_2d(&limb.axes);
+        let upper = Mat4::from_translation(origin)
+            * Mat4::from_mat3(Mat3::from_cols(x, y, z))
+            * Mat4::from_rotation_y(signed)
+            * Mat4::from_mat3(axes);
+        bones[limb.upper] = upper;
+        bones[limb.end] = Mat4::from_translation(end_position) * euler(&values[3..6]);
+        let bend = upper_angle + lower_angle;
+        bones[limb.mid] = if limb.arm {
+            let turned = upper * at(limb.mid_row) * Mat4::from_rotation_y(if limb.negate { bend } else { -bend });
+            // The forearm takes about half of the hand's roll, within 0.08 radians as measured.
+            let hand = turned.inverse().transform_vector3(bones[limb.end].z_axis.truncate());
+            turned * Mat4::from_rotation_x(0.5 * (-hand.y).atan2(hand.z))
+        } else {
+            upper * at(limb.mid_row) * Mat4::from_rotation_x(bend)
+        };
+    }
+
+    bones[18] = bones[3] * at(14) * Mat4::from_rotation_y(tracks[57]) * Mat4::from_rotation_x(tracks[56]);
+    bones[22] = bones[9] * at(18) * Mat4::from_rotation_y(tracks[59]) * Mat4::from_rotation_x(tracks[58]);
+    // Bones 26, 27, 30 and 31 roll along the upper arm by an amount that was not worked out.
+    for (bone, base) in BONES_ON_BONES {
+        bones[bone] = bones[base];
+    }
+    bones
+}
+
+/// A frame's bones for the renderer, which works with the game's z flipped.
+pub fn solve_pose(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
+    solve_game_space(tracks, rows).map(|bone| Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0)) * bone)
 }
 
 /// Reads a character's offsets from the executable.
@@ -250,7 +468,9 @@ pub fn bone_rows(xbe: &[u8], table: u32) -> Result<[Vec3; 24]> {
         .context("bone offsets are not in the executable")?;
     let mut rows = [Vec3::ZERO; 24];
     for (i, row) in rows.iter_mut().enumerate() {
-        let float = |c: usize| read_u32(xbe, start + i * 16 + c * 4).map(f32::from_bits);
+        // A table starts four rows before `BONE_ROWS_VA + table * stride`, with its rows 20 to 23.
+        let at = if i >= 20 { start + i * 16 - BONE_ROWS_STRIDE as usize } else { start + i * 16 };
+        let float = |c: usize| read_u32(xbe, at + c * 4).map(f32::from_bits);
         *row = Vec3::new(float(0)?, float(1)?, float(2)?);
     }
     Ok(rows)
@@ -259,6 +479,94 @@ pub fn bone_rows(xbe: &[u8], table: u32) -> Result<[Vec3; 24]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compares the solve with `tools/re/doax_capture.py`. DOAX_CAPTURE is its file. Bones 26,
+    /// 27, 30 and 31 are left out: their roll is not worked out.
+    #[test]
+    #[ignore]
+    fn doax_pose_matches_capture() {
+        let text = std::fs::read_to_string(std::env::var("DOAX_CAPTURE").expect("DOAX_CAPTURE")).unwrap();
+        let xbe = std::fs::read("assets/doax/default.xbe").unwrap();
+        const CHECKED: [usize; 20] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 19, 20, 23, 17];
+        let tables: Vec<[Vec3; 24]> = (0..8).map(|t| bone_rows(&xbe, t).unwrap()).collect();
+        let mut worst = [0f32; BONE_COUNT];
+        let mut chosen = std::collections::BTreeMap::<(String, usize), usize>::new();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let character = words.nth(1).unwrap().to_string();
+            let floats: Vec<f32> = words.skip(1).map(|w| w.parse().unwrap()).collect();
+            let tracks: [f32; TRACK_COUNT] = floats[..TRACK_COUNT].try_into().unwrap();
+            let game: Vec<Mat4> = floats[TRACK_COUNT..].chunks_exact(16).map(Mat4::from_cols_slice).collect();
+            let errors = |rows: &[Vec3; 24]| -> [f32; BONE_COUNT] {
+                let solved = solve_game_space(&tracks, rows);
+                std::array::from_fn(|bone| {
+                    (game[bone] - solved[bone]).to_cols_array().iter().fold(0f32, |a, b| a.max(b.abs()))
+                })
+            };
+            let total = |rows: &[Vec3; 24]| { let e = errors(rows); CHECKED.iter().map(|&b| e[b]).sum::<f32>() };
+            let best = (0..8).min_by(|&a, &b| total(&tables[a]).total_cmp(&total(&tables[b]))).unwrap();
+            *chosen.entry((character, best)).or_default() += 1;
+            for (slot, error) in worst.iter_mut().zip(errors(&tables[best])) {
+                *slot = slot.max(error);
+            }
+        }
+        println!("tables chosen: {chosen:?}");
+        for (bone, error) in worst.iter().enumerate() {
+            println!("bone {bone}: worst {error:.4}");
+        }
+    }
+
+    /// Finds which motion and frame each capture line was playing, by its tracks, and prints how
+    /// far each track is from it. DOAX_CAPTURE is the file of `tools/re/doax_capture.py`.
+    #[test]
+    #[ignore]
+    fn doax_tracks_match_capture() {
+        let text = std::fs::read_to_string(std::env::var("DOAX_CAPTURE").expect("DOAX_CAPTURE")).unwrap();
+        let archive = LazyArchive::open("assets/doax/datadvd.afs").unwrap();
+        let files: Vec<(String, Vec<u8>)> = archive
+            .names()
+            .filter(|n| n.ends_with(".mot"))
+            .map(|n| (n.to_string(), archive.read(n).unwrap()))
+            .collect();
+        let distance = |track: usize, a: f32, b: f32| {
+            let d = (a - b).abs();
+            let _ = track;
+            let wrapped = d % std::f32::consts::TAU;
+            d.min(wrapped).min(std::f32::consts::TAU - wrapped)
+        };
+        for line in text.lines().step_by(9).take(8) {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let live: Vec<f32> = words[3..3 + TRACK_COUNT].iter().map(|w| w.parse().unwrap()).collect();
+            let mut best = (f32::MAX, String::new(), 0, 0, [0f32; TRACK_COUNT]);
+            for (name, data) in &files {
+                for motion in list_motions(data) {
+                    for frame in 0..motion.frames {
+                        let Ok(values) = eval_motion(data, &motion, frame as f32) else { continue };
+                        let e: f32 = (3..TRACK_COUNT).map(|t| distance(t, values[t], live[t]).min(1.0)).sum();
+                        if e < best.0 {
+                            best = (e, name.clone(), motion.id, frame, values);
+                        }
+                    }
+                }
+            }
+            let worst: Vec<(usize, f32)> = {
+                let mut all: Vec<(usize, f32)> = (0..TRACK_COUNT).map(|t| (t, distance(t, best.4[t], live[t]))).collect();
+                all.sort_by(|a, b| b.1.total_cmp(&a.1));
+                all.into_iter().take(6).map(|(t, e)| (t, (e * 1000.0).round() / 1000.0)).collect()
+            };
+            println!("char {} sum {:.2} {} id {} frame {} worst {:?}", words[1], best.0, best.1, best.2, best.3, worst);
+        }
+    }
+
+    #[test]
+    fn packed_values_unpack_as_the_game_does() {
+        assert_eq!(unpack(0, 19, 0x7E, 0), 0.0);
+        // Head 0x0058 and low 0xE7DF: exponent 0x7E, so 0.5 times 1.906.
+        let value = key_value(&[0x58, 0x00, 0xDF, 0xE7], 0).unwrap();
+        assert!((value - 0.9525).abs() < 1e-3, "{value}");
+        // The head's top bit is the sign.
+        assert!(key_value(&[0x00, 0x80, 0x00, 0x10], 0).unwrap() < 0.0);
+    }
 
     #[test]
     fn suits_are_found_for_their_wearer_only() {

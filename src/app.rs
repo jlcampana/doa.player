@@ -392,6 +392,8 @@ pub struct App {
     pub char_panel: CharSelectPanel,
     pub app_icon: Option<ModelTexture>,
     pub doax_characters: Vec<CharacterEntry>,
+    /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
+    doax_pose: Option<DoaxPose>,
     doax_hdd: Option<doax::LazyArchive>,
     doax_dvd: Option<doax::LazyArchive>,
     pub anim_panel: AnimPanel,
@@ -436,6 +438,14 @@ pub struct App {
 }
 
 /// What is needed to pose the loaded DOA3 character.
+pub struct DoaxPose {
+    rows: [glam::Vec3; 24],
+    files: Vec<Vec<u8>>,
+    /// Each animation entry's file and motion.
+    motions: Vec<(usize, doax::Motion)>,
+    playing: Option<usize>,
+}
+
 pub struct Doa3Pose {
     /// Set for DOA2U costumes, which have their own solve.
     pub doa2u_style: Option<doa2u::PoseStyle>,
@@ -600,6 +610,7 @@ impl App {
             char_panel,
             app_icon,
             doax_characters,
+            doax_pose: None,
             doax_hdd,
             doax_dvd,
             anim_panel: AnimPanel::new(),
@@ -637,6 +648,7 @@ impl App {
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {
+        self.doax_pose = None;
         match self.char_panel.selected_source {
             GameSource::Doa2U => self.load_doa2u_character(char_idx, costume_idx),
             GameSource::Doa3  => self.load_doa3_character(char_idx, costume_idx),
@@ -727,15 +739,39 @@ impl App {
         let xbe = std::fs::read(asset_path(DOAX_XBE_PATH))?;
         let nodes = doax::rest_pose(&doax::bone_rows(&xbe, table)?);
 
+        let rows = doax::bone_rows(&xbe, table)?;
+        let mut files = Vec::new();
+        let mut motions = Vec::new();
+        let mut animations = Vec::new();
+        for file in doax::motion_files(&code) {
+            let Ok(data) = dvd.read(&file) else { continue };
+            for motion in doax::list_motions(&data) {
+                motions.push((files.len(), motion));
+                animations.push(AnimationEntry {
+                    name: format!("{} {:04} ({} frames)", file.trim_end_matches(".mot"), motion.id, motion.frames),
+                    file_key: file.clone(),
+                    doa3_motion: None,
+                    doa3_motion_id: motion.id,
+                });
+            }
+            files.push(data);
+        }
         self.doa3_pose = None;
-        self.current_animations = Vec::new();
+        self.doax_pose = Some(DoaxPose { rows, files, motions, playing: None });
+        self.current_animations = animations;
+        self.anim_panel.selected_anim_idx = None;
+        self.anim_time = 0.0;
         self.loaded_name = ("DOAX".to_string(), display_name.clone(), stem.clone());
         self.mesh.set_lights(Some(self.current_stage_lights()));
         self.export_source = Default::default();
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
-        Ok(format!("DOAX: {display_name} - {stem}, rest pose, no motions yet"))
+        let count = self.current_animations.len();
+        if count > 0 {
+            self.select_motion(0);
+        }
+        Ok(format!("DOAX: {display_name} - {stem}, {count} motions, rigid pieces"))
     }
 
     fn load_doa2u_character(&mut self, char_idx: usize, costume_idx: usize) {
@@ -1522,6 +1558,16 @@ impl App {
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.
     pub fn select_motion(&mut self, index: usize) {
+        if let Some(pose) = &mut self.doax_pose {
+            if index < pose.motions.len() {
+                pose.playing = Some(index);
+                self.anim_panel.selected_anim_idx = Some(index);
+                self.anim_panel.playing = true;
+                self.anim_time = 0.0;
+                self.update_doa3_pose();
+            }
+            return;
+        }
         let Some(pose) = &mut self.doa3_pose else { return };
         let Some(entry) = self.current_animations.get(index) else { return };
         let id = entry.doa3_motion_id;
@@ -1537,6 +1583,18 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
+        if let Some(pose) = &self.doax_pose {
+            let Some(index) = pose.playing else { return };
+            let (file, motion) = pose.motions[index];
+            match doax::eval_motion(&pose.files[file], &motion, self.anim_time) {
+                Ok(values) => {
+                    let nodes = doax::solve_pose(&values, &pose.rows);
+                    self.mesh.apply_pose(&self.ctx.queue, &nodes);
+                }
+                Err(e) => log::warn!("Could not evaluate the motion: {e:#}"),
+            }
+            return;
+        }
         let Some(pose) = &self.doa3_pose else { return };
         let Some(motion) = &pose.motion else { return };
         let Some(data) = self.motion_archive().and_then(|a| a.get_by_index(motion.afs_entry)) else {
@@ -1756,7 +1814,8 @@ impl App {
         self.game_clock += dt * self.anim_panel.speed * 60.0;
         if self.anim_panel.playing {
             self.anim_time += dt * self.anim_panel.speed * 60.0;
-            let length = self.doa3_pose.as_ref().and_then(|p| p.motion.as_ref()).map_or(0.0, |m| m.length);
+            let doax_length = self.doax_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32));
+            let length = doax_length.unwrap_or_else(|| self.doa3_pose.as_ref().and_then(|p| p.motion.as_ref()).map_or(0.0, |m| m.length));
             if length > 0.0 && self.anim_time > length {
                 if self.anim_panel.loop_anim {
                     self.anim_time %= length;

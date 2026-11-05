@@ -27,7 +27,7 @@ EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
 cargo build --profile fast                              # quick test build, target/fast/doa_player
 cargo test --profile fast                               # quick tests; build.sh stays optimized
 BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
-EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"                 # a DOAX suit, rest pose
+EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"                 # a DOAX suit and motion
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
@@ -108,7 +108,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
 4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags are read from code and `tools/re/doa2u_unlocks.py` prints their state, see "Unlocks" in the notes. What they open and what locks the CG gallery are not known. The save file is encrypted and its format was not read.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
-6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits in the rest pose, data in `assets/doax/`. Next: motions, measured with `tools/re/doax_live.py`. Findings in `docs/doax-notes.md`. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
+6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, as rigid pieces, data in `assets/doax/`. Next: joint bending, then confirming the motion evaluator against the game. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
 
 ## Development principles
 
