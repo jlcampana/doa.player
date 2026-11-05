@@ -201,7 +201,8 @@ pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
     Ok(placed)
 }
 
-/// Keeps the triangles of a body's chest piece that lie wholly above `SHOULDERS_FROM`. A suit's
+/// Keeps the triangles of a body's chest piece that lie wholly above `SHOULDERS_FROM` or wholly
+/// on the back. Faces look towards +z. A suit's
 /// top is only the top: the shoulders and upper chest around it are this piece's. The game was
 /// not seen to cut it, this is so that only those parts of the body show around the suit.
 pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
@@ -209,7 +210,10 @@ pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
         let kept: Vec<u32> = material
             .indices
             .chunks_exact(3)
-            .filter(|t| t.iter().all(|&v| piece.vertices[v as usize].position[1] >= SHOULDERS_FROM))
+            .filter(|t| {
+                t.iter().all(|&v| piece.vertices[v as usize].position[1] >= SHOULDERS_FROM)
+                    || t.iter().all(|&v| piece.vertices[v as usize].position[2] <= 0.0)
+            })
             .flatten()
             .copied()
             .collect();

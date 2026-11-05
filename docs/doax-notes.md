@@ -13,7 +13,7 @@ Status of each statement below: "live" was measured on the running game, "file" 
 - Kind 4 on a body: 10 header bytes, then triples of (kind, slot, object). Kind 1 is rigid on bone `slot`, where 0x80 is a flag; kind 6 and kind 2 are other piece kinds; 2 goes with objects that have extra floats. Two-byte `0A n` entries divide it into groups. Meaning of the header, of the groups and of kinds 2 and 6 is not read. (file, guess on meaning)
 - A kind 4 list also has `0B`, one byte, dividing it further. Slots from 0x80 are bones 24 and up. Kind 2 slots on bodies and suits are placed by where their pieces reach over 1039 adult suits, not from a table: 0 waist (bone 23), 0x0A and 0x0D chest (0), 0x0B, 0x0C and 0x0E hips (2), 0x0F neck (19), 2, 3 upper arms (8, 14), 6, 7 thighs (6, 12), 8, 9 knees (7, 13). Kind 6 slots are read as bones. (guess, from sizes)
 - Group 0 holds feet in two pieces with toes, and group 2 whole feet. The viewer draws group 2. Which one the game draws, and when, is not read. (guess)
-- `.mot`: a table of 1000 words, 0xFA4 for unused IDs. A motion's block holds a word, then ascending track offsets, like DOA3's but with a leading word, so the DOA3 reader may not fit as it is. (file)
+- `.mot`: a table of 1000 words, 0xFA4 for unused IDs. A motion's block is a word, frames in the low half and 60 tracks in the high half, then 60 track offsets relative to the block. Keys read as DOA3's: the sizes walk exactly to each track's end on the tracks tried. (file)
 
 ## Skeleton
 
@@ -33,9 +33,15 @@ Bone offsets are 24 rows of 16 bytes per table, tables 0x180 apart from `0x2CFD5
 
 Where two rows hold the same value, the row is taken by symmetry, not measured. Bones 24 to 31 sit on 4, 10, 8, 14, 5, 11, 8, 14 and turn with them, so they look like twists. Bone 15 sits on the ground under the hips.
 
+## Motions, not done
+
+`0x000B01E0` builds a pose through `0x000B02E0` (position), `0x000B0370` (body), `0x000B1B50`, `0x000B20A0` and `0x000B0B20`, which were not read. In `0x000B0370` the values are floats from `edi`. Assuming +0xC is track 0, which makes these fit DOA3's layout: track 1 is height, 3 to 5 the hips, 44 to 46 bone 23 (not in DOA3), 6 to 8 the chest, and pairs at 50, 51 and 52, 53 turn something next, likely the collars. (code, the track numbering is a guess)
+
+DOA3's limb solve cannot be used as it is. In the game's matrices the forearm's length runs along local x (bone 4 to 5 matches its x axis, live), while DOA3's solve builds limbs along z. Nothing here has been compared with a running motion.
+
 ## In the viewer
 
-`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit in the rest pose, arms out, for 5 characters. A suit's pieces replace the body's hips and chest, and its waist when the suit has one, inferred from their sizes. Of the body's chest piece, only the triangles above 0.17 in bone space are drawn, for the shoulders and upper chest around the suit's top. The game was not seen to cut it: what it really draws under a suit is not read, and should be checked in `sub_00064300`'s area or by a capture. The viewer never shows a body without a suit.
+`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit in the rest pose, arms out, for 5 characters. A suit's pieces replace the body's hips and chest, and its waist when the suit has one, inferred from their sizes. Of the body's chest piece, only the triangles above 0.17 in bone space or on the back are drawn, for the shoulders, back and upper chest around the suit's top. The game was not seen to cut it: what it really draws under a suit is not read, and should be checked in `sub_00064300`'s area or by a capture. The viewer never shows a body without a suit.
 
 Not done: motions, joint bending (joint pieces just sit on one bone), morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Lights use DOA2U's list as a stand-in. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
 
