@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read-only memory oracle for the running DOA2U recompilation. Never writes to the game."""
-import re, struct, subprocess, sys
+import os, re, struct, subprocess, sys
 
-XBE = '/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2.xbe'
+XBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets', 'doa2u', 'DOA2.xbe')
 
 
 def xbe_sections(path=XBE):

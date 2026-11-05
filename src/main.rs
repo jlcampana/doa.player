@@ -187,7 +187,7 @@ fn render_frame(app: &mut App, window: &Window) {
         let selected = app.char_panel.selected_char_idx.and_then(|i| app.doa2u_characters.get(i)).map(|c| c.display_name.clone());
         let character = if app.voice_panel.show_others { None } else { selected };
         if app.voice_panel.show_others || character.is_some() {
-            app.voices.clips(app::DOA2U_VOICE_PATH, character.as_deref())
+            app.voices.clips(app::doa2u_voice_path(), character.as_deref())
         } else {
             Vec::new()
         }
@@ -219,7 +219,7 @@ fn render_frame(app: &mut App, window: &Window) {
 
     // Apply actions after UI is built
     if let Some(entry) = actions.play_voice {
-        if let Err(e) = app.voices.play(app::DOA2U_VOICE_PATH, entry) {
+        if let Err(e) = app.voices.play(app::doa2u_voice_path(), entry) {
             app.status_msg = format!("Could not play the clip: {e:#}");
         }
     }

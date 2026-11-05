@@ -1,6 +1,6 @@
-import struct,sys,collections
+import os,struct,sys,collections
 import numpy as np
-BASE='/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/'
+BASE=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','assets','doa2u','')
 def ks(seed,n):
     m=np.zeros(624,dtype=np.uint64); 
     x=seed&0xffffffff; L=[x]

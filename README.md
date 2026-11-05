@@ -17,7 +17,7 @@ cargo test
 
 ## Game data
 
-DOA3 is read from `assets/doa3/`, which git ignores. DOA2U is read from a fixed path to a local install, set by the constants at the top of `src/app.rs`.
+DOA3 is read from `assets/doa3/` and DOA2U from `assets/doa2u/`, which git ignores. DOA2U needs `DOA2.xbe`, `datahdd.afs`, `datahdd2.afs`, `datadvd.afs` and `voice.afs`, about 1.1 GB, copied from your own copy of the game.
 
 ## The assets folder
 

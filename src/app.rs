@@ -68,16 +68,11 @@ pub struct BackgroundOption {
 
 // ─── App paths ────────────────────────────────────────────────────────────────
 
-const DOA2U_XBE_PATH: &str =
-    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2.xbe";
-const DOA2U_HDD_PATH: &str =
-    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datahdd.afs";
-const DOA2U_HDD2_PATH: &str =
-    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datahdd2.afs";
-pub const DOA2U_VOICE_PATH: &str =
-    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/voice.afs";
-const DOA2U_DVD_PATH: &str =
-    "/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/play-disc/DOA2/datadvd.afs";
+const DOA2U_XBE_PATH: &str = "doa2u/DOA2.xbe";
+const DOA2U_HDD_PATH: &str = "doa2u/datahdd.afs";
+const DOA2U_HDD2_PATH: &str = "doa2u/datahdd2.afs";
+const DOA2U_VOICE_PATH: &str = "doa2u/voice.afs";
+const DOA2U_DVD_PATH: &str = "doa2u/datadvd.afs";
 const DOA3_LOAD_PATH: &str = "doa3/loadfile.afs";
 const DOA3_XBE_PATH: &str = "doa3/default.xbe";
 const CHARACTERS_CONFIG: &str = "characters.toml";
@@ -99,6 +94,12 @@ fn project_file(name: &str) -> PathBuf {
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// Where DOA2U's voices are. The window asks every frame, so this looks once.
+pub fn doa2u_voice_path() -> &'static str {
+    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| asset_path(DOA2U_VOICE_PATH).to_string_lossy().into_owned())
 }
 
 /// Finds a file inside the project's `assets` folder, searching upwards from
@@ -288,7 +289,7 @@ fn doa2u_animations(bin_id: &str, archive: &AfsArchive) -> Vec<AnimationEntry> {
 /// cloudy stage use what was read from the running game, which differs from the table.
 fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
     use crate::renderer::mesh::{SceneLights, CLOUDY_LIGHTS, FALLBACK_LIGHTS, SNOWY_NIGHT_LIGHTS};
-    let areas = std::fs::read(DOA2U_XBE_PATH).map_err(anyhow::Error::from).and_then(Xbe::from_bytes).and_then(|xbe| doa2u::area_lights(&xbe));
+    let areas = std::fs::read(asset_path(DOA2U_XBE_PATH)).map_err(anyhow::Error::from).and_then(Xbe::from_bytes).and_then(|xbe| doa2u::area_lights(&xbe));
     let mut list: Vec<(String, SceneLights)> = match areas {
         Ok(areas) => areas
             .into_iter()
@@ -473,14 +474,14 @@ impl App {
 
         let background_options = background_options();
         let stage_lights = load_stage_lights();
-        let hdd2_archive = match AfsArchive::from_file(DOA2U_HDD2_PATH) {
+        let hdd2_archive = match AfsArchive::from_file(asset_path(DOA2U_HDD2_PATH)) {
             Ok(a) => Some(a),
             Err(e) => {
                 log::warn!("Could not load DOA2U datahdd2.afs: {}", e);
                 None
             }
         };
-        let dvd_archive = match AfsArchive::from_file(DOA2U_DVD_PATH) {
+        let dvd_archive = match AfsArchive::from_file(asset_path(DOA2U_DVD_PATH)) {
             Ok(a) => Some(a),
             Err(e) => {
                 log::warn!("Could not load DOA2U datadvd.afs: {}", e);
@@ -490,7 +491,7 @@ impl App {
         let costume_archives: Vec<&AfsArchive> = hdd2_archive.iter().chain(dvd_archive.iter()).collect();
         let doa2u_characters = doa2u_characters(&costume_archives);
 
-        let hdd_archive = match AfsArchive::from_file(DOA2U_HDD_PATH) {
+        let hdd_archive = match AfsArchive::from_file(asset_path(DOA2U_HDD_PATH)) {
             Ok(a) => {
                 log::info!("Loaded DOA2U datahdd.afs: {} files", a.entries().len());
                 Some(a)
@@ -609,7 +610,7 @@ impl App {
         let doa3_character = a0_doa3_character(&entry.id);
 
         if self.doa2u_xbe.is_none() {
-            self.doa2u_xbe = Some(Xbe::from_bytes(std::fs::read(DOA2U_XBE_PATH)?)?);
+            self.doa2u_xbe = Some(Xbe::from_bytes(std::fs::read(asset_path(DOA2U_XBE_PATH))?)?);
         }
         let xbe = self.doa2u_xbe.as_ref().context("DOA2.xbe not loaded")?;
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();

@@ -13,14 +13,15 @@ Native Linux viewer in Rust (wgpu 22, winit 0.30, egui 0.29, glam) for Dead or A
 - `docs/doa2u-notes.md`: DOA2U formats and cipher. `docs/doa3-internals.md`: DOA3 internals. `docs/viewer-mode-feasibility.md`: reading live memory.
 - `src/formats/doa2u.rs`, `doa3*.rs`, `model.rs`: parsers. `src/app.rs`: roster and loading. `src/renderer/mesh.rs`: pose and skinning.
 - `tools/re/`: `doa2u_crypt.py` (decrypt, AFS), `doa2u_obj_dump.py` (dump an OBJ), `doa2u_live.py` and `doa3_live.py` (read-only memory oracles; more under "Tools for this work"), `shot.sh` (render to PNG).
-- DOA2U install: `/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/`. `play-disc/DOA2/` has the archives, `program/runtime-sources/recomp_00NN.c` the generated C. The user's builds may rewrite `generated`. The public repo github.com/NoRain211/doa2u-re has no game code.
+- DOA2U data the viewer reads: `assets/doa2u/` (`DOA2.xbe`, `datahdd.afs`, `datahdd2.afs`, `datadvd.afs`, `voice.afs`), copied from the install. Other archives, such as `bgm.afs`, are only in the install.
+- DOA2U install: `/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/`, through a link to the Stuff disk, which is slower. `play-disc/DOA2/` has the archives, `program/runtime-sources/recomp_00NN.c` the generated C. The user's builds may rewrite `generated`. The public repo github.com/NoRain211/doa2u-re has no game code.
 - DOA3 generated C: github.com/parkerallan/doa3-recomp, `doa3/src/game/recomp/gen`.
 
 ## Commands
 
 ```bash
 cargo test
-DOA2U_DISC=<dir> cargo test -- --ignored --nocapture    # all encrypted costumes
+DOA2U_DISC=assets/doa2u cargo test -- --ignored --nocapture    # all encrypted costumes
 ./build.sh --run --load "Zack" 0 --doa2u
 EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
 cargo build --profile fast                              # quick test build, target/fast/doa_player
