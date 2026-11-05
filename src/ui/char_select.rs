@@ -79,18 +79,28 @@ impl CharSelectPanel {
                 // Each list scrolls on its own, so that long costume lists stay reachable.
                 let list_height = (ui.available_height() * 0.5).max(80.0);
                 egui::ScrollArea::vertical().id_salt("characters").max_height(list_height).auto_shrink([false, true]).show(ui, |ui| {
-                    for (i, entry) in characters.iter().enumerate() {
-                        if !filter_lower.is_empty()
-                            && !entry.display_name.to_lowercase().contains(&filter_lower)
-                        {
-                            continue;
-                        }
-                        let selected = self.selected_char_idx == Some(i);
-                        if ui.selectable_label(selected, &entry.display_name).clicked() {
-                            if !selected {
-                                self.selected_char_idx = Some(i);
-                                self.selected_costume_idx = 0;
-                                on_char_selected(i, crate::app::DEFAULT_COSTUME);
+                    // Fighters first, then the others under their own heading.
+                    for intro in [false, true] {
+                        let mut heading_shown = !intro;
+                        for (i, entry) in characters.iter().enumerate() {
+                            if entry.intro != intro
+                                || (!filter_lower.is_empty()
+                                    && !entry.display_name.to_lowercase().contains(&filter_lower))
+                            {
+                                continue;
+                            }
+                            if !heading_shown {
+                                ui.separator();
+                                ui.weak("Intro and others");
+                                heading_shown = true;
+                            }
+                            let selected = self.selected_char_idx == Some(i);
+                            if ui.selectable_label(selected, &entry.display_name).clicked() {
+                                if !selected {
+                                    self.selected_char_idx = Some(i);
+                                    self.selected_costume_idx = 0;
+                                    on_char_selected(i, crate::app::DEFAULT_COSTUME);
+                                }
                             }
                         }
                     }

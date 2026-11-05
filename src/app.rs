@@ -49,6 +49,8 @@ pub struct CharacterEntry {
     pub doa3: Option<RosterEntry>,
     /// DOA2U only: the character's ID in the game's tables
     pub doa2u_id: Option<usize>,
+    /// Not a fighter: listed apart. Some are the intro's, as the user recognized them.
+    pub intro: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +185,7 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
             afs_indices: vec![],
             doa3: None,
             doa2u_id: Some(*id),
+            intro: ["mam", "pdg", "wba", "lor", "hks", "yti"].contains(&prefixes[0]),
         })
         .collect()
 }
@@ -242,6 +245,7 @@ pub fn doa3_characters(xbe: &Xbe, archive: &AfsArchive) -> Vec<CharacterEntry> {
                     .collect(),
                 afs_indices: models,
                 doa2u_id: None,
+                intro: false,
                 doa3: Some(entry),
             }
         })
