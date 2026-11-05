@@ -22,12 +22,15 @@ const BONE_LINKS: [(usize, usize, usize); 22] = [
     (16, 0, 12), (8, 16, 4), (4, 8, 0), (5, 4, 1),
     (20, 0, 16), (14, 20, 10), (10, 14, 6), (11, 10, 7),
     (6, 2, 2), (7, 6, 3), (3, 7, 5), (18, 3, 14),
-    (12, 2, 8), (13, 12, 9), (9, 13, 11), (22, 9, 18),
+    (12, 2, 8), (13, 12, 9), (9, 13, 5), (22, 9, 18),
     (17, 1, 13), (21, 1, 17),
 ];
 
 /// Bones that sit on another in the game's matrices, and turn with it.
 const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27, 14), (28, 5), (29, 11), (30, 8), (31, 14)];
+
+/// Height in the chest bone's space from which its piece is drawn under a suit.
+const SHOULDERS_FROM: f32 = 0.17;
 
 /// Height of the foot bone above the ground in the game's matrices, about 0.1.
 const FOOT_HEIGHT: f32 = 0.1;
@@ -131,8 +134,8 @@ fn weighted_bone(slot: u8) -> Option<usize> {
         // On suits, by where their pieces reach over all of the suits.
         0x0A | 0x0D => 0,
         0x0B | 0x0C | 0x0E => 2,
-        2 => 4,
-        3 => 10,
+        2 => 8,
+        3 => 14,
         6 => 6,
         7 => 12,
         8 => 7,
@@ -196,6 +199,22 @@ pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
         }
     }
     Ok(placed)
+}
+
+/// Keeps the triangles of a body's chest piece that lie wholly above `SHOULDERS_FROM`. A suit's
+/// top is only the top: the shoulders and upper chest around it are this piece's. The game was
+/// not seen to cut it, this is so that only those parts of the body show around the suit.
+pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
+    for material in &mut piece.materials {
+        let kept: Vec<u32> = material
+            .indices
+            .chunks_exact(3)
+            .filter(|t| t.iter().all(|&v| piece.vertices[v as usize].position[1] >= SHOULDERS_FROM))
+            .flatten()
+            .copied()
+            .collect();
+        material.indices = kept;
+    }
 }
 
 /// The rest pose's matrices from a character's offsets, arms out, standing on the ground.
@@ -265,8 +284,7 @@ mod tests {
         let mut rows = [Vec3::ZERO; 24];
         rows[3] = Vec3::Y * -0.4;
         rows[5] = Vec3::Y * -0.4;
-        rows[11] = Vec3::Y * -0.4;
-        rows[9] = Vec3::Y * -0.4;
+            rows[9] = Vec3::Y * -0.4;
         let pose = rest_pose(&rows);
         assert!((pose[3].w_axis.y - FOOT_HEIGHT).abs() < 1e-5);
         assert!((pose[9].w_axis.y - FOOT_HEIGHT).abs() < 1e-5);

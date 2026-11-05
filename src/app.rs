@@ -669,7 +669,7 @@ impl App {
 
         let (body_xpr, body_cat) = (dvd.read(&format!("v{code}00.xpr"))?, dvd.read(&format!("v{code}00.cat"))?);
         let (suit_xpr, suit_cat) = (hdd.read(&format!("{stem}.xpr"))?, hdd.read(&format!("{stem}.cat"))?);
-        let body = doa2u::parse_model(&body_xpr)?;
+        let mut body = doa2u::parse_model(&body_xpr)?;
         let suit = doa2u::parse_model(&suit_xpr)?;
         let mut textures = parse_xpr_textures(&body_xpr)?;
         let body_textures = textures.len();
@@ -692,7 +692,13 @@ impl App {
         let mut inputs: Vec<PieceInput> = Vec::new();
         let suit_pieces = doax::placed_objects(&suit_cat)?;
         let suit_has_waist = suit_pieces.iter().any(|p| p.waist);
-        for placed in doax::placed_objects(&body_cat)?.iter().filter(|p| !p.replaced_by_suit && !(p.waist && suit_has_waist)) {
+        let body_pieces = doax::placed_objects(&body_cat)?;
+        for placed in body_pieces.iter().filter(|p| p.replaced_by_suit && p.bone == 0) {
+            if let Some(piece) = body.pieces.get_mut(placed.object) {
+                doax::keep_shoulders(piece);
+            }
+        }
+        for placed in body_pieces.iter().filter(|p| (!p.replaced_by_suit || p.bone == 0) && !(p.waist && suit_has_waist)) {
             let Some(piece) = body.pieces.get(placed.object) else { continue };
             inputs.push(PieceInput {
                 node: placed.bone,
