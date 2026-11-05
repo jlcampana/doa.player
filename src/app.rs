@@ -2,6 +2,7 @@ use crate::formats::config::CharacterConfigs;
 use std::collections::HashMap;
 
 use crate::formats::doa2u;
+use crate::formats::doax;
 use crate::formats::doa3::{self, ChestMorphGroup, ChestSpring, MotionTracks, RosterEntry, Xbe};
 use crate::formats::doa3_chains::{self, SoftChain};
 use crate::formats::doa3_cloth::{self, SoftCloth};
@@ -33,6 +34,7 @@ pub struct ExportQueue {
 pub enum GameSource {
     Doa2U,
     Doa3,
+    Doax,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +80,9 @@ const DOA2U_DVD_PATH: &str = "doa2u/datadvd.afs";
 /// The app's icon, from the game's files, so that it stays out of the repository: Popularity in
 /// the ranking menu. 20 is Popularity (tag).
 const APP_ICON_SPRITE: (&str, usize) = ("spOptrnk.xpr", 19);
+const DOAX_XBE_PATH: &str = "doax/default.xbe";
+const DOAX_HDD_PATH: &str = "doax/datahdd.afs";
+const DOAX_DVD_PATH: &str = "doax/datadvd.afs";
 const DOA3_LOAD_PATH: &str = "doa3/loadfile.afs";
 const DOA3_XBE_PATH: &str = "doa3/default.xbe";
 const CHARACTERS_CONFIG: &str = "characters.toml";
@@ -386,6 +391,9 @@ pub struct App {
     // UI panels
     pub char_panel: CharSelectPanel,
     pub app_icon: Option<ModelTexture>,
+    pub doax_characters: Vec<CharacterEntry>,
+    doax_hdd: Option<doax::LazyArchive>,
+    doax_dvd: Option<doax::LazyArchive>,
     pub anim_panel: AnimPanel,
     pub bg_panel: BgSelectPanel,
 
@@ -527,6 +535,23 @@ impl App {
                 None
             }
         };
+        let doax_hdd = doax::LazyArchive::open(asset_path(DOAX_HDD_PATH)).map_err(|e| log::info!("No DOAX: {e:#}")).ok();
+        let doax_dvd = doax::LazyArchive::open(asset_path(DOAX_DVD_PATH)).map_err(|e| log::info!("No DOAX: {e:#}")).ok();
+        let doax_characters: Vec<CharacterEntry> = doax_hdd
+            .iter()
+            .flat_map(|archive| {
+                doax::ROSTER.iter().map(move |(name, code, _)| CharacterEntry {
+                    id: code.to_string(),
+                    bin_id: String::new(),
+                    display_name: name.to_string(),
+                    costumes: doax::costumes(archive.names(), code),
+                    afs_indices: vec![],
+                    doa3: None,
+                    doa2u_id: None,
+                    intro: false,
+                })
+            })
+            .collect();
         let app_icon = read_app_icon(hdd_archive.as_ref());
         let mut char_panel = CharSelectPanel::new();
         if let Some(icon) = &app_icon {
@@ -574,6 +599,9 @@ impl App {
             egui_renderer,
             char_panel,
             app_icon,
+            doax_characters,
+            doax_hdd,
+            doax_dvd,
             anim_panel: AnimPanel::new(),
             bg_panel: BgSelectPanel::new(),
             doa2u_characters,
@@ -612,7 +640,96 @@ impl App {
         match self.char_panel.selected_source {
             GameSource::Doa2U => self.load_doa2u_character(char_idx, costume_idx),
             GameSource::Doa3  => self.load_doa3_character(char_idx, costume_idx),
+            GameSource::Doax  => {
+                self.status_msg = match self.try_load_doax_character(char_idx, costume_idx) {
+                    Ok(status) => status,
+                    Err(e) => {
+                        log::warn!("Could not load DOAX character: {e:#}");
+                        self.mesh.clear_model();
+                        format!("DOAX: could not load character: {e:#}")
+                    }
+                };
+            }
         }
+    }
+
+    /// A DOAX costume: the character's body with a suit, standing in the rest pose.
+    fn try_load_doax_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
+        use anyhow::Context;
+
+        let costume_idx = if costume_idx == DEFAULT_COSTUME { 0 } else { costume_idx };
+        self.char_panel.selected_costume_idx = costume_idx;
+        let entry = self.doax_characters.get(char_idx).context("unknown character")?;
+        let display_name = entry.display_name.clone();
+        let code = entry.id.clone();
+        let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
+        let table = doax::ROSTER.iter().find(|r| r.1 == code).context("not in the roster")?.2;
+        let hdd = self.doax_hdd.as_ref().context("no DOAX datahdd.afs")?;
+        let dvd = self.doax_dvd.as_ref().context("no DOAX datadvd.afs")?;
+
+        let (body_xpr, body_cat) = (dvd.read(&format!("v{code}00.xpr"))?, dvd.read(&format!("v{code}00.cat"))?);
+        let (suit_xpr, suit_cat) = (hdd.read(&format!("{stem}.xpr"))?, hdd.read(&format!("{stem}.cat"))?);
+        let body = doa2u::parse_model(&body_xpr)?;
+        let suit = doa2u::parse_model(&suit_xpr)?;
+        let mut textures = parse_xpr_textures(&body_xpr)?;
+        let body_textures = textures.len();
+        textures.extend(parse_xpr_textures(&suit_xpr)?);
+
+        fn draws_of(piece: &crate::formats::model::ModelPiece, first: usize, count: usize) -> Vec<(&[u32], Option<usize>, bool, Option<crate::formats::model::MaterialLook>)> {
+            piece
+                .materials
+                .iter()
+                .map(|m| {
+                    let mut look = m.look;
+                    if let Some(look) = &mut look {
+                        look.layer = look.layer.map(|t| t + first);
+                    }
+                    (m.indices.as_slice(), m.base_texture(count).map(|t| t + first), m.cull_back, look)
+                })
+                .collect()
+        }
+        let suit_textures = textures.len() - body_textures;
+        let mut inputs: Vec<PieceInput> = Vec::new();
+        let suit_pieces = doax::placed_objects(&suit_cat)?;
+        let suit_has_waist = suit_pieces.iter().any(|p| p.waist);
+        for placed in doax::placed_objects(&body_cat)?.iter().filter(|p| !p.replaced_by_suit && !(p.waist && suit_has_waist)) {
+            let Some(piece) = body.pieces.get(placed.object) else { continue };
+            inputs.push(PieceInput {
+                node: placed.bone,
+                vertices: &piece.vertices,
+                draws: draws_of(piece, 0, body_textures),
+                parent: placed.bone,
+                skin: None,
+                bend: None,
+                welds: Vec::new(),
+                translucent: false,
+            });
+        }
+        for placed in suit_pieces {
+            let Some(piece) = suit.pieces.get(placed.object) else { continue };
+            inputs.push(PieceInput {
+                node: placed.bone,
+                vertices: &piece.vertices,
+                draws: draws_of(piece, body_textures, suit_textures),
+                parent: placed.bone,
+                skin: None,
+                bend: None,
+                welds: Vec::new(),
+                translucent: false,
+            });
+        }
+        let xbe = std::fs::read(asset_path(DOAX_XBE_PATH))?;
+        let nodes = doax::rest_pose(&doax::bone_rows(&xbe, table)?);
+
+        self.doa3_pose = None;
+        self.current_animations = Vec::new();
+        self.loaded_name = ("DOAX".to_string(), display_name.clone(), stem.clone());
+        self.mesh.set_lights(Some(self.current_stage_lights()));
+        self.export_source = Default::default();
+        self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
+        drop(inputs);
+        self.mesh.apply_pose(&self.ctx.queue, &nodes);
+        Ok(format!("DOAX: {display_name} - {stem}, rest pose, no motions yet"))
     }
 
     fn load_doa2u_character(&mut self, char_idx: usize, costume_idx: usize) {
@@ -1321,6 +1438,7 @@ impl App {
         let costumes = match self.char_panel.selected_source {
             GameSource::Doa2U => self.doa2u_characters.get(char_idx),
             GameSource::Doa3 => self.doa3_characters.get(char_idx),
+            GameSource::Doax => self.doax_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
@@ -1373,6 +1491,7 @@ impl App {
         let costumes = match self.char_panel.selected_source {
             GameSource::Doa2U => self.doa2u_characters.get(char_idx),
             GameSource::Doa3 => self.doa3_characters.get(char_idx),
+            GameSource::Doax => self.doax_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         let mut written = 0;

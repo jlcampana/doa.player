@@ -184,6 +184,7 @@ fn render_frame(app: &mut App, window: &Window) {
     let characters: &[app::CharacterEntry] = match app.char_panel.selected_source {
         app::GameSource::Doa2U => &app.doa2u_characters,
         app::GameSource::Doa3  => &app.doa3_characters,
+        app::GameSource::Doax  => &app.doax_characters,
     };
     // DOA2U's clips have names. DOA3's do not, and which is whose is unknown there.
     let voice_clips = if app.char_panel.selected_source == app::GameSource::Doa2U {
@@ -419,6 +420,7 @@ fn build_ui(
 /// `doa_player --load "Jann Lee" 0 [motion] [yaw degrees] [distance] [target height]`
 /// opens with a DOA3 character loaded, optionally paused with the camera placed.
 /// `--doa2u` looks the name up among DOA2U characters instead.
+/// `--doax` does so among DOAX's.
 /// `--install-icon` writes the icon and a desktop entry to the user's folders, and exits.
 /// `--export-all` writes every costume of both games, without `--load`, and exits.
 /// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
@@ -453,12 +455,13 @@ fn load_from_arguments(app: &mut App) {
     }
     let number = |i: usize| rest.get(i).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
     let doa2u = args.iter().any(|a| a == "--doa2u");
-    let characters = if doa2u { &app.doa2u_characters } else { &app.doa3_characters };
+    let doax = args.iter().any(|a| a == "--doax");
+    let characters = if doax { &app.doax_characters } else if doa2u { &app.doa2u_characters } else { &app.doa3_characters };
     let Some(index) = characters.iter().position(|c| c.display_name.eq_ignore_ascii_case(name)) else {
         log::warn!("Unknown character: {}", name);
         return;
     };
-    app.char_panel.selected_source = if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };
+    app.char_panel.selected_source = if doax { app::GameSource::Doax } else if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };
     app.char_panel.selected_char_idx = Some(index);
     app.char_panel.selected_costume_idx = number(0);
     if let Some(scale) = args.iter().position(|a| a == "--bounce").and_then(|i| args.get(i + 1)?.parse().ok()) {
