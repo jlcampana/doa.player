@@ -1326,6 +1326,11 @@ impl App {
                 }
                 Err(error) => log::warn!("Export of costume {costume} failed: {error:#}"),
             }
+            // The command line exports in one loop, with no frames to do this. wgpu keeps
+            // uploads and dropped models until a submit and a poll, and over the whole roster
+            // that filled the machine's memory.
+            self.ctx.queue.submit(std::iter::empty());
+            self.ctx.device.poll(wgpu::Maintain::Wait);
         }
         written
     }

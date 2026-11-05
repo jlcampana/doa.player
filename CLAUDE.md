@@ -29,7 +29,7 @@ BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
-target/fast/doa_player --export-all                                                 # every costume, no visible window, about 10 minutes
+target/fast/doa_player --export-all                                                 # every costume, no visible window, about 3.5 minutes
 ```
 
 ## Current state of DOA2U (2026-11-04)
@@ -81,6 +81,8 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is not exported for anyone. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
 
 Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
+
+GPU memory does not show in any process's memory use, and `--export-all` runs in one loop with no frames. Without a submit and a poll per costume it grew 28 MB per costume until the desktop froze (2026-11-05). When changing a bulk path, watch `MemAvailable` and `mem_info_vram_used`/`mem_info_gtt_used` under `/sys/class/drm/card*/device/`, and kill the run below a floor. The All costumes button goes through frames and was not measured.
 
 ## Development notes
 
