@@ -169,6 +169,8 @@ pub struct MeshRenderer {
     wire_pipeline: wgpu::RenderPipeline,
     /// Draws the triangles' edges and nothing else.
     pub mesh_only: bool,
+    /// Width of the anime shading's ink line, 1 as drawn by default.
+    pub outline_width: f32,
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     placeholder_vb: wgpu::Buffer,
@@ -447,6 +449,7 @@ impl MeshRenderer {
             wire_depth_pipeline,
             wire_pipeline,
             mesh_only: false,
+            outline_width: 1.0,
             uniform_buf,
             bind_group,
             placeholder_vb,
@@ -523,6 +526,7 @@ impl MeshRenderer {
             }
         }
         buf[36..52].copy_from_slice(&view.to_cols_array());
+        buf[107] = self.outline_width;
         if let Some(lights) = &self.lights {
             buf[52..55].copy_from_slice(&lights.ambient);
             for (i, (direction, diffuse, specular)) in lights.lights.iter().enumerate() {
@@ -1199,7 +1203,8 @@ fn vs_outline(v: VertIn) -> VertOut {
     var out: VertOut;
     let world_pos = u.model * vec4<f32>(v.pos, 1.0);
     let depth = (u.view_proj * world_pos).w;
-    let pushed = world_pos.xyz + normalize(v.normal) * min(0.0016 * depth, 0.006);
+    // The width is in plain_color's w, from the slider.
+    let pushed = world_pos.xyz + normalize(v.normal) * min(0.0016 * depth, 0.006) * u.plain_color.w;
     out.clip = u.view_proj * vec4<f32>(pushed, 1.0);
     out.normal = v.normal;
     out.uv = v.uv;

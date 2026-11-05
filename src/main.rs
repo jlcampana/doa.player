@@ -295,6 +295,7 @@ fn render_frame(app: &mut App, window: &Window) {
     }
     app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief, app.bg_panel.no_textures.then_some(app.bg_panel.plain_color));
     app.mesh.mesh_only = app.bg_panel.mesh_only;
+    app.mesh.outline_width = app.bg_panel.outline_width;
     app.wireframe.update_camera(&app.ctx.queue, &vp);
 
     let mut encoder = app.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

@@ -15,13 +15,15 @@ pub struct BgSelectPanel {
     pub lights: usize,
     /// The optional bump from textures. 0 is what the game draws.
     pub relief: f32,
+    /// Width of the anime shading's ink line, 1 as drawn by default.
+    pub outline_width: f32,
     /// A part of the character to frame, asked for this frame.
     pub frame_request: Option<crate::renderer::mesh::FramePart>,
 }
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
+        Self { selected: 0, outline_width: 1.0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool, light_names: &[String]) {
@@ -46,8 +48,18 @@ impl BgSelectPanel {
                         }
                     }
                 });
-                ui.separator();
+            });
+        // Shading and lights in a window of their own, below.
+        egui::Window::new("Shading")
+            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 300.0])
+            .resizable(false)
+            .show(ctx, |ui| {
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
+                if self.anime_shading {
+                    ui.indent("outline", |ui| {
+                        ui.add(egui::Slider::new(&mut self.outline_width, 0.0..=4.0).text("Outline"));
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.no_textures, "No textures");
                     ui.color_edit_button_srgb(&mut self.plain_color);
