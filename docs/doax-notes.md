@@ -53,7 +53,13 @@ Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2
 
 `src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit and motions, for 5 characters. The up and down keys walk the costume list, for any game. The body's chest, hips and waist are in the common part of the list, so the game draws them whatever the suit, with the suit over them, and so does the viewer. (code) The viewer offers no way of removing the suit.
 
-Not done: morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Lights use DOA2U's list as a stand-in. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
+Not done: morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
+
+## Lights
+
+D3D's fixed function lights, as DOA2U: `tools/re/doax_lights.py` lists the ones enabled, from the list at device `+0x398`, device pointer at `0x1F2978`, ambient at `0x1F2D54`. Live: 4 directional lights, specular 0.3 of diffuse. The sets are in the executable, records of 0x58 bytes around `0x287000` to `0x2C0000`, listed by `tools/re/doax_stage_lights.py`, and stage functions such as `0x00177800` name them by address. Each run has the stage's four, with points, then four directional: one live set, of (0.9, 0.88, 0.88), matches there in color, direction and ambient, in test `table_holds_a_set_read_from_the_game`. Other live sets were not found in that form, and some have a direction the table's does not give, so some come from elsewhere, or change at run time.
+
+The viewer's list has the three sets most often seen in a demo first, by hand, then the table's. Which set is a character's during a frame was not settled: a check on the world transform passes nearly always, so it told nothing. Which set belongs to which stage and time of day is not known. Sets are not tied to a stage in the viewer. Not done: stages themselves, sun shadows, fog. Not compared with the game's picture.
 
 ## Limits
 

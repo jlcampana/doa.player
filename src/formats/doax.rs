@@ -9,6 +9,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::model::read_u32;
+use crate::renderer::mesh::SceneLights;
 
 pub const BONE_COUNT: usize = 32;
 const BONE_ROWS_VA: u32 = 0x2C_FD58;
@@ -219,6 +220,98 @@ pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
         }
     }
     Ok(skins)
+}
+
+const LIGHTS_START_VA: u32 = 0x28_7000;
+const LIGHTS_END_VA: u32 = 0x2C_0000;
+const LIGHT_RECORD: usize = 0x58;
+
+/// One light record of the executable: +0 kind (1 directional, 2 point), +8 color, +0x18
+/// diffuse, +0x24 and +0x28 angles, 65536 per turn, +0x2C position, +0x38 attenuation, +0x44
+/// range, +0x54 specular factor. Returns its color and the light as seen from the stage's
+/// center. Points are made directional there, as for DOA2U.
+fn light_record(record: &[u8]) -> Option<([f32; 3], ([f32; 3], [f32; 3], [f32; 3]))> {
+    let word = |at: usize| Some(u32::from_le_bytes(record.get(at..at + 4)?.try_into().ok()?));
+    let float = |at: usize| word(at).map(f32::from_bits);
+    let triple = |at: usize| Some(Vec3::new(float(at)?, float(at + 4)?, float(at + 8)?));
+    let kind = word(0)?;
+    let (color, diffuse, factor) = (triple(8)?, triple(0x18)?, float(0x54)?);
+    let in_range = |v: Vec3| v.min_element() >= -0.01 && v.max_element() <= 4.0;
+    let (a, b) = (word(0x24)? as i32, word(0x28)? as i32);
+    if !matches!(kind, 1 | 2) || !in_range(color) || !in_range(diffuse) || !(0.0..=2.0).contains(&factor) || a.abs() > 0x10000 || b.abs() > 0x10000 {
+        return None;
+    }
+    let turn = std::f32::consts::TAU / 65536.0;
+    let (a, b) = (a as f32 * turn, b as f32 * turn);
+    let mut direction = Vec3::new(-a.cos() * b.sin(), -a.sin(), -a.cos() * b.cos());
+    let mut scale = 1.0;
+    if kind == 2 {
+        let offset = Vec3::Y - triple(0x2C)?;
+        let distance = offset.length();
+        direction = offset.normalize_or_zero();
+        let attenuation = triple(0x38)?;
+        let denominator = attenuation.x + attenuation.y * distance + attenuation.z * distance * distance;
+        scale = if distance <= float(0x44)? && denominator > 0.0 { 1.0 / denominator } else { 0.0 };
+    }
+    let diffuse = diffuse * scale;
+    Some((color.to_array(), (direction.to_array(), diffuse.to_array(), (diffuse * factor).to_array())))
+}
+
+/// A set with the game's usual specular, 0.3 of the diffuse.
+fn measured_lights(ambient: [u8; 3], lights: [([f32; 3], [f32; 3]); 4]) -> SceneLights {
+    SceneLights {
+        ambient: ambient.map(|c| c as f32 / 255.0),
+        lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse.map(|c| c * 0.3))),
+    }
+}
+
+/// DOAX's lights for the viewer: the sets most often enabled in a running demo first, then those
+/// of the executable. Runs of records there hold the stage's four, then four for characters,
+/// which fits the one set matched to a live read. The first record's color is the ambient.
+/// Which set belongs to which stage and time of day is not known.
+pub fn stage_lights(xbe: &[u8]) -> Vec<(String, SceneLights)> {
+    let mut list = vec![
+        ("Demo, sun".to_string(), measured_lights([0x60; 3], [
+            ([-0.297, -0.942, 0.159], [0.9, 0.88, 0.86]),
+            ([0.164, 0.904, -0.395], [0.23, 0.2, 0.18]),
+            ([0.765, 0.634, 0.113], [0.2, 0.11, 0.11]),
+            ([-0.742, -0.596, -0.307], [0.0, 0.0, 0.0]),
+        ])),
+        ("Demo, soft".to_string(), measured_lights([0x66, 0x5B, 0x56], [
+            ([-0.142, -0.243, 0.959], [0.6, 0.55, 0.52]),
+            ([-0.878, 0.098, -0.469], [0.38, 0.38, 0.33]),
+            ([0.981, 0.0, 0.195], [0.3, 0.32, 0.34]),
+            ([0.634, -0.049, -0.772], [0.29, 0.3, 0.35]),
+        ])),
+        ("Demo, low sun".to_string(), measured_lights([0x30, 0x38, 0x44], [
+            ([-0.215, -0.672, 0.709], [1.29, 1.2, 0.98]),
+            ([0.176, -0.428, 0.887], [0.41, 0.55, 0.48]),
+            ([0.0, -1.0, 0.0], [0.0, 0.0, 0.0]),
+            ([0.0, -1.0, 0.0], [0.0, 0.0, 0.0]),
+        ])),
+    ];
+    let (Some(start), Some(end)) = (xbe_offset(xbe, LIGHTS_START_VA), xbe_offset(xbe, LIGHTS_END_VA - 1)) else { return list };
+    let mut at = start;
+    let mut number = 0;
+    while at + LIGHT_RECORD <= end {
+        let mut records = Vec::new();
+        while let Some(record) = xbe.get(at + records.len() * LIGHT_RECORD..at + (records.len() + 1) * LIGHT_RECORD).and_then(light_record) {
+            records.push(record);
+        }
+        if records.len() < 8 {
+            at += 4;
+            continue;
+        }
+        at += records.len() * LIGHT_RECORD;
+        let character = &records[4..8];
+        let lights = SceneLights { ambient: character[0].0, lights: [character[0].1, character[1].1, character[2].1, character[3].1] };
+        let known = list.iter().any(|(_, other)| other.ambient == lights.ambient && other.lights == lights.lights);
+        if !known {
+            number += 1;
+            list.push((format!("Table set {number}"), lights));
+        }
+    }
+    list
 }
 
 /// The file offset of an address in the executable.
@@ -829,6 +922,41 @@ mod tests {
             let (_, rotation, _) = self.to_scale_rotation_translation();
             Mat4::from_quat(rotation)
         }
+    }
+
+    fn record_bytes(kind: u32, angles: (i32, i32), diffuse: [f32; 3], factor: f32) -> Vec<u8> {
+        let mut record = vec![0u8; LIGHT_RECORD];
+        record[0..4].copy_from_slice(&kind.to_le_bytes());
+        for (i, value) in diffuse.iter().enumerate() {
+            record[0x18 + i * 4..0x1C + i * 4].copy_from_slice(&value.to_le_bytes());
+        }
+        record[0x24..0x28].copy_from_slice(&angles.0.to_le_bytes());
+        record[0x28..0x2C].copy_from_slice(&angles.1.to_le_bytes());
+        record[0x54..0x58].copy_from_slice(&factor.to_le_bytes());
+        record
+    }
+
+    #[test]
+    fn light_records_read_directions_and_specular() {
+        // A quarter turn down, as the formula gives for an angle of 0x4000.
+        let (_, (direction, diffuse, specular)) = light_record(&record_bytes(1, (0x4000, 0), [0.5, 0.25, 1.0], 0.3)).unwrap();
+        assert!((direction[1] + 1.0).abs() < 1e-5, "{direction:?}");
+        assert_eq!(diffuse, [0.5, 0.25, 1.0]);
+        assert!((specular[0] - 0.15).abs() < 1e-5);
+        assert!(light_record(&record_bytes(0, (0, 0), [0.5; 3], 0.3)).is_none());
+        assert!(light_record(&record_bytes(1, (0, 0), [9.0; 3], 0.3)).is_none());
+    }
+
+    /// The live set of (0.9, 0.88, 0.88) must come out of the table. Reads the executable.
+    #[test]
+    #[ignore]
+    fn table_holds_a_set_read_from_the_game() {
+        let xbe = std::fs::read("assets/doax/default.xbe").unwrap();
+        let list = stage_lights(&xbe);
+        println!("{} sets", list.len());
+        let found = list.iter().find(|(_, set)| set.lights[0].1 == [0.9, 0.88, 0.88]).expect("no such set");
+        assert!((found.1.ambient[0] - 0x59 as f32 / 255.0).abs() < 0.01, "{:?}", found.1.ambient);
+        assert!((found.1.lights[0].0[0] + 0.528).abs() < 0.002, "{:?}", found.1.lights[0].0);
     }
 
     #[test]

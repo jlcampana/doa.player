@@ -392,6 +392,7 @@ pub struct App {
     pub char_panel: CharSelectPanel,
     pub app_icon: Option<ModelTexture>,
     pub doax_characters: Vec<CharacterEntry>,
+    pub doax_stage_lights: Vec<(String, crate::renderer::mesh::SceneLights)>,
     /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
     doax_pose: Option<DoaxPose>,
     doax_hdd: Option<doax::LazyArchive>,
@@ -570,6 +571,7 @@ impl App {
                 })
             })
             .collect();
+        let doax_stage_lights = std::fs::read(asset_path(DOAX_XBE_PATH)).map(|xbe| doax::stage_lights(&xbe)).unwrap_or_default();
         let app_icon = read_app_icon(hdd_archive.as_ref());
         let mut char_panel = CharSelectPanel::new();
         if let Some(icon) = &app_icon {
@@ -618,6 +620,7 @@ impl App {
             char_panel,
             app_icon,
             doax_characters,
+            doax_stage_lights,
             doax_pose: None,
             doax_hdd,
             doax_dvd,
@@ -651,8 +654,13 @@ impl App {
     }
 
     /// The stage lights picked in the panel.
+    /// The list the stage lights selector offers, for the game on show.
+    pub fn stage_light_list(&self) -> &[(String, crate::renderer::mesh::SceneLights)] {
+        if self.char_panel.selected_source == GameSource::Doax { &self.doax_stage_lights } else { &self.stage_lights }
+    }
+
     pub fn current_stage_lights(&self) -> crate::renderer::mesh::SceneLights {
-        self.stage_lights.get(self.bg_panel.lights).map_or(crate::renderer::mesh::FALLBACK_LIGHTS, |entry| entry.1)
+        self.stage_light_list().get(self.bg_panel.lights).or(self.stage_light_list().first()).map_or(crate::renderer::mesh::FALLBACK_LIGHTS, |entry| entry.1)
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {

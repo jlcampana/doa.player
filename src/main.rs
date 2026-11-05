@@ -198,7 +198,7 @@ fn render_frame(app: &mut App, window: &Window) {
     } else {
         Vec::new()
     };
-    let light_names: Vec<String> = app.stage_lights.iter().map(|(name, _)| name.clone()).collect();
+    let light_names: Vec<String> = app.stage_light_list().iter().map(|(name, _)| name.clone()).collect();
     let has_bounce = app.has_chest_spring();
     let is_lit = app.mesh.is_lit();
     let bounce_before = app.bg_panel.bounce_scale;
@@ -505,7 +505,7 @@ fn load_from_arguments(app: &mut App) {
         app.bg_panel.relief = relief as f32 / 100.0;
     }
     if let Some(lights) = value_of("--lights") {
-        app.bg_panel.lights = lights.min(app.stage_lights.len().saturating_sub(1));
+        app.bg_panel.lights = lights.min(app.stage_light_list().len().saturating_sub(1));
     }
     if args.iter().any(|a| a == "--export") {
         let all_motions = args.iter().any(|a| a == "--all-motions");
