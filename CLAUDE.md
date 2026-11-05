@@ -31,7 +31,7 @@ EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"              
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
-target/fast/doa_player --export-all                                                 # every costume, no visible window; DOA2U and DOA3 about 3.5 minutes, DOAX about 7 more
+target/fast/doa_player --export-all                                                 # every costume, no visible window; DOA2U and DOA3 about 3.5 minutes, DOAX far longer
 target/fast/doa_player --export-all --doax                                          # only DOAX
 target/release/doa_player --install-icon                                            # icon and desktop entry in ~/.local/share, needed on Wayland
 ```

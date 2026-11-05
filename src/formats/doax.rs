@@ -100,12 +100,27 @@ impl LazyArchive {
     }
 }
 
-/// The suits made for a character, by name: `md`, the owner, a number, then her code. They are
+/// The file endings of the suits that fit a character. Bodies of the same shape share them:
+/// Helena's chest piece has the size of Lisa's, and Lei Fang's that of the `ht` body. Inferred
+/// from those sizes. The game's own table of who can wear what, at 0x3003E8, was not followed.
+fn suit_endings(code: &str) -> &'static [&'static str] {
+    match code {
+        "tn" => &["tn"],
+        "cr" => &["cr"],
+        "ls" => &["ls"],
+        "he" => &["he", "ls"],
+        "le" => &["le", "ht"],
+        _ => &[],
+    }
+}
+
+/// The suits for a character, by name: `md`, the owner, a number, then the ending. They are
 /// sorted so that the list stays the same.
 pub fn costumes<'a>(names: impl Iterator<Item = &'a str>, code: &str) -> Vec<String> {
+    let endings = suit_endings(code);
     let mut stems: Vec<String> = names
         .filter_map(|name| name.strip_suffix(".xpr"))
-        .filter(|stem| stem.starts_with("md") && stem.len() == 8 && stem.ends_with(code))
+        .filter(|stem| stem.starts_with("md") && stem.len() == 8 && endings.contains(&&stem[6..]))
         .map(str::to_string)
         .collect();
     stems.sort();
@@ -866,6 +881,9 @@ mod tests {
     fn suits_are_found_for_their_wearer_only() {
         let names = ["mdTn00tn.xpr", "mdTn00tn.cat", "mdKs01tn.xpr", "mdTn00ht.xpr", "mdSun1tn.bin", "vtn00.xpr"];
         assert_eq!(costumes(names.into_iter(), "tn"), ["mdKs01tn", "mdTn00tn"]);
+        assert_eq!(costumes(["mdTn00ls.xpr", "mdTn00he.xpr", "mdTn00tn.xpr"].into_iter(), "he"), ["mdTn00he", "mdTn00ls"]);
+        // A name that is not a character's own gives nothing.
+        assert!(costumes(names.into_iter(), "ht").is_empty());
     }
 
     #[test]
