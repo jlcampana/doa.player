@@ -1,4 +1,5 @@
 mod app;
+mod export;
 mod formats;
 mod renderer;
 mod ui;
@@ -50,6 +51,8 @@ impl ApplicationHandler for Handler {
                 .create_window(
                     Window::default_attributes()
                         .with_title("DOA Player")
+                        // Exporting from the command line needs the GPU, not a window on the desktop.
+                        .with_visible(!std::env::args().any(|a| a == "--export" || a == "--export-all"))
                         .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
                 )
                 .expect("window creation failed"),
@@ -252,6 +255,24 @@ fn render_frame(app: &mut App, window: &Window) {
     // they are moved or collapsed.
     let size = window.inner_size();
     app.camera.set_left_inset(LEFT_PANELS_WIDTH, size.width as f32, size.height as f32);
+    if let Some(request) = app.char_panel.export_request.take() {
+        let all_motions = app.char_panel.export_all_motions;
+        app.status_msg = match request {
+            ui::char_select::ExportRequest::Costume => match app.export_current(all_motions) {
+                Ok(path) => format!("Exported {}", path.display()),
+                Err(error) => format!("Export failed: {error:#}"),
+            },
+            ui::char_select::ExportRequest::Character => match app.char_panel.selected_char_idx {
+                Some(index) => {
+                    app.start_character_export(index, all_motions);
+                    "Exporting...".to_string()
+                }
+                None => "No character selected".to_string(),
+            },
+        };
+    }
+    // One costume per frame, so that the window keeps responding.
+    app.step_character_export();
     if let Some(part) = app.bg_panel.frame_request.take() {
         if let Some((low, high)) = app.mesh.frame_box(part) {
             app.camera.frame_box(low, high);
@@ -261,7 +282,8 @@ fn render_frame(app: &mut App, window: &Window) {
         let lights = app.current_stage_lights();
         app.mesh.set_lights(Some(lights));
     }
-    app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief);
+    app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief, app.bg_panel.no_textures.then_some(app.bg_panel.plain_color));
+    app.mesh.mesh_only = app.bg_panel.mesh_only;
     app.wireframe.update_camera(&app.ctx.queue, &vp);
 
     let mut encoder = app.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -387,10 +409,26 @@ fn build_ui(
 /// `doa_player --load "Jann Lee" 0 [motion] [yaw degrees] [distance] [target height]`
 /// opens with a DOA3 character loaded, optionally paused with the camera placed.
 /// `--doa2u` looks the name up among DOA2U characters instead.
-/// Also takes `--anime`, `--wind`, `--bounce <scale>`, `--motion-id <id>` and
+/// `--export-all` writes every costume of both games, without `--load`, and exits.
+/// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
+/// `--all-motions`, all of them.
+/// Also takes `--anime`, `--no-textures`, `--mesh-only`, `--wind`, `--bounce <scale>`, `--motion-id <id>` and
 /// `--frame <frame>`, which holds the motion on that frame.
 fn load_from_arguments(app: &mut App) {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--export-all") {
+        let all_motions = args.iter().any(|a| a == "--all-motions");
+        let mut written = 0;
+        for source in [app::GameSource::Doa2U, app::GameSource::Doa3] {
+            app.char_panel.selected_source = source;
+            let count = if source == app::GameSource::Doa2U { app.doa2u_characters.len() } else { app.doa3_characters.len() };
+            for index in 0..count {
+                written += app.export_character(index, all_motions);
+            }
+        }
+        println!("Exported {written} costumes to exports/");
+        std::process::exit(0);
+    }
     let [flag, name, rest @ ..] = args.as_slice() else { return };
     if flag != "--load" {
         return;
@@ -418,6 +456,8 @@ fn load_from_arguments(app: &mut App) {
     }
 
     app.bg_panel.anime_shading = args.iter().any(|a| a == "--anime");
+    app.bg_panel.no_textures = args.iter().any(|a| a == "--no-textures");
+    app.bg_panel.mesh_only = args.iter().any(|a| a == "--mesh-only");
     // Arguments set the camera themselves, unless they ask for a part.
     app.bg_panel.frame_request = None;
     if let Some(part) = args.iter().position(|a| a == "--view").and_then(|i| args.get(i + 1)) {
@@ -435,6 +475,14 @@ fn load_from_arguments(app: &mut App) {
     }
     if let Some(lights) = value_of("--lights") {
         app.bg_panel.lights = lights.min(app.stage_lights.len().saturating_sub(1));
+    }
+    if args.iter().any(|a| a == "--export") {
+        let all_motions = args.iter().any(|a| a == "--all-motions");
+        match app.export_current(all_motions) {
+            Ok(path) => println!("Exported {}", path.display()),
+            Err(error) => eprintln!("Export failed: {error:#}"),
+        }
+        std::process::exit(0);
     }
     app.anim_panel.wind = args.iter().any(|a| a == "--wind");
     let float = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok());

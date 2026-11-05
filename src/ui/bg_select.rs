@@ -3,6 +3,12 @@ use crate::app::BackgroundOption;
 pub struct BgSelectPanel {
     pub selected: usize,
     pub anime_shading: bool,
+    /// Draws the model grey, to see its shape.
+    pub no_textures: bool,
+    /// The model's color with no textures, in sRGB.
+    pub plain_color: [u8; 3],
+    /// Draws only the triangles' edges, to see how it is built.
+    pub mesh_only: bool,
     /// Multiplies the chest spring's deformation; 1 is what the game does.
     pub bounce_scale: f32,
     /// Index in the app's list of stage lights.
@@ -15,7 +21,7 @@ pub struct BgSelectPanel {
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, anime_shading: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
+        Self { selected: 0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool, light_names: &[String]) {
@@ -42,6 +48,11 @@ impl BgSelectPanel {
                 });
                 ui.separator();
                 ui.checkbox(&mut self.anime_shading, "Anime shading");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.no_textures, "No textures");
+                    ui.color_edit_button_srgb(&mut self.plain_color);
+                });
+                ui.checkbox(&mut self.mesh_only, "Mesh only");
                 if lit {
                     ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
                     egui::CollapsingHeader::new("Stage lights").show(ui, |ui| {

@@ -13,7 +13,7 @@ pub const NODE_COUNT: usize = 25;
 pub const NODE_TWIST: [usize; 2] = [19, 20];
 pub const NODE_EYES: [usize; 2] = [21, 22];
 const NODE_ELBOWS_AND_KNEES: [usize; 4] = [4, 7, 10, 13];
-const TRACK_COUNT: usize = 44;
+pub const TRACK_COUNT: usize = 44;
 
 /// Index = character ID used by the tables in `default.xbe`. Variants that
 /// share another character's files are left out by `xbe_roster`.

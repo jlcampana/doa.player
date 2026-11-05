@@ -95,6 +95,10 @@ struct LoadedModel {
     posed_vertices: Vec<MeshVertex>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    /// Each triangle edge once, for "Mesh only".
+    line_buffer: wgpu::Buffer,
+    line_count: u32,
+    triangle_count: u32,
     pieces: Vec<PosedPiece>,
     draws: Vec<DrawCall>,
     /// Keeps the materials' buffers and textures alive with the draws' bind groups.
@@ -127,6 +131,11 @@ pub struct MeshRenderer {
     translucent_culling_pipeline: wgpu::RenderPipeline,
     blended_pipeline: wgpu::RenderPipeline,
     blended_culling_pipeline: wgpu::RenderPipeline,
+    /// "Mesh only": fills depth without color, so that lines behind a surface stay hidden.
+    wire_depth_pipeline: wgpu::RenderPipeline,
+    wire_pipeline: wgpu::RenderPipeline,
+    /// Draws the triangles' edges and nothing else.
+    pub mesh_only: bool,
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     placeholder_vb: wgpu::Buffer,
@@ -286,6 +295,57 @@ impl MeshRenderer {
         let translucent_culling_pipeline = make_pipeline(Some(wgpu::Face::Back), true, false);
         let blended_pipeline = make_pipeline(None, true, true);
         let blended_culling_pipeline = make_pipeline(Some(wgpu::Face::Back), true, true);
+        let make_wire_pipeline = |lines: bool| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Mesh Wire Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2,
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_wire",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: if lines { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() },
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: if lines { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList },
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: !lines,
+                depth_compare: if lines { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less },
+                stencil: Default::default(),
+                // Pushes the surfaces back, so that their own edges pass the test.
+                bias: if lines {
+                    Default::default()
+                } else {
+                    wgpu::DepthBiasState { constant: 4, slope_scale: 1.5, clamp: 0.0 }
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let wire_depth_pipeline = make_wire_pipeline(false);
+        let wire_pipeline = make_wire_pipeline(true);
 
         // Create a placeholder box to show when no model is loaded
         let placeholder_verts = build_placeholder_box(0.5, 1.8, 0.3);
@@ -306,6 +366,9 @@ impl MeshRenderer {
             translucent_culling_pipeline,
             blended_pipeline,
             blended_culling_pipeline,
+            wire_depth_pipeline,
+            wire_pipeline,
+            mesh_only: false,
             uniform_buf,
             bind_group,
             placeholder_vb,
@@ -366,13 +429,21 @@ impl MeshRenderer {
     }
 
     /// `relief` is the optional texture bump, 0 for what the game draws.
-    pub fn update(&self, queue: &wgpu::Queue, view_proj: &glam::Mat4, view: &glam::Mat4, anime_shading: bool, relief: f32) {
+    pub fn update(&self, queue: &wgpu::Queue, view_proj: &glam::Mat4, view: &glam::Mat4, anime_shading: bool, relief: f32, plain_color: Option<[u8; 3]>) {
         let model = glam::Mat4::IDENTITY;
         let mut buf = [0f32; UNIFORM_FLOATS];
         buf[..16].copy_from_slice(&view_proj.to_cols_array());
         buf[16..32].copy_from_slice(&model.to_cols_array());
         buf[32] = if anime_shading { 1.0 } else { 0.0 };
         buf[33] = relief;
+        if let Some(color) = plain_color {
+            buf[34] = 1.0;
+            // Linear, as a sampled texture comes.
+            for (out, value) in buf[104..107].iter_mut().zip(color) {
+                let value = value as f32 / 255.0;
+                *out = if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) };
+            }
+        }
         buf[36..52].copy_from_slice(&view.to_cols_array());
         if let Some(lights) = &self.lights {
             buf[52..55].copy_from_slice(&lights.ambient);
@@ -444,7 +515,16 @@ impl MeshRenderer {
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let lines = triangle_edges(&indices);
+        let line_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Model Lines"),
+            contents: bytemuck::cast_slice(&lines),
+            usage: wgpu::BufferUsages::INDEX,
+        });
         self.model = Some(LoadedModel {
+            line_buffer,
+            line_count: lines.len() as u32,
+            triangle_count: indices.len() as u32,
             posed_vertices: rest_vertices.clone(),
             rest_vertices,
             vertex_buffer,
@@ -585,6 +665,15 @@ impl MeshRenderer {
             Some(model) => {
                 pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
                 pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                if self.mesh_only {
+                    pass.set_bind_group(1, &self.white_bind_group, &[]);
+                    pass.set_pipeline(&self.wire_depth_pipeline);
+                    pass.draw_indexed(0..model.triangle_count, 0, 0..1);
+                    pass.set_pipeline(&self.wire_pipeline);
+                    pass.set_index_buffer(model.line_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..model.line_count, 0, 0..1);
+                    return;
+                }
                 let (solid, translucent): (Vec<_>, Vec<_>) = model.draws.iter().partition(|draw| !draw.translucent);
                 for draw in solid.into_iter().chain(translucent) {
                     pass.set_pipeline(match (draw.translucent, draw.blended, draw.cull_back) {
@@ -608,6 +697,20 @@ impl MeshRenderer {
     }
 }
 
+/// Each edge of a triangle list once, as a line list.
+fn triangle_edges(indices: &[u32]) -> Vec<u32> {
+    let mut seen = std::collections::HashSet::new();
+    let mut lines = Vec::new();
+    for triangle in indices.chunks_exact(3) {
+        for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+            if a != b && seen.insert((a.min(b), a.max(b))) {
+                lines.extend([a, b]);
+            }
+        }
+    }
+    lines
+}
+
 fn nearest_along_ray(
     points: impl Iterator<Item = glam::Vec3>,
     origin: glam::Vec3,
@@ -628,7 +731,7 @@ fn nearest_along_ray(
 }
 
 /// Floats in the uniform buffer. The material holds 6 vec4 in its own buffer.
-const UNIFORM_FLOATS: usize = 104;
+const UNIFORM_FLOATS: usize = 108;
 
 /// All mip levels, one after another, averaged in linear light with the viewer's sRGB
 /// textures. The viewer's own choice: this is not read from the game's files.
@@ -792,6 +895,7 @@ struct Uniforms {
     light_to: array<vec4<f32>, 4>,
     light_diffuse: array<vec4<f32>, 4>,
     light_specular: array<vec4<f32>, 4>,
+    plain_color: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -824,6 +928,12 @@ struct VertOut {
     @location(3) lit: vec3<f32>,
     @location(4) specular: vec3<f32>,
     @location(5) world: vec3<f32>,
+}
+
+/// The lines of "Mesh only".
+@fragment
+fn fs_wire(v: VertOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.25, 0.75, 0.95, 1.0);
 }
 
 @vertex
@@ -896,8 +1006,13 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
     let light = normalize(vec3<f32>(0.5, 1.0, 0.7));
     let diff = abs(dot(normalize(v.normal), light));
     let ambient = 0.3;
-    let texel = textureSample(color_texture, color_sampler, v.uv);
-    let layer = textureSample(layer_texture, color_sampler, v.layer_uv);
+    var texel = textureSample(color_texture, color_sampler, v.uv);
+    var layer = textureSample(layer_texture, color_sampler, v.layer_uv);
+    // The viewer's "No textures": grey, opaque, and no second layer.
+    if u.anime_shading.z > 0.5 {
+        texel = vec4<f32>(u.plain_color.rgb, 1.0);
+        layer = vec4<f32>(1.0, 1.0, 1.0, 0.0);
+    }
     if u.anime_shading.x > 0.5 {
         if texel.a < 0.1 {
             discard;
@@ -961,6 +1076,13 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 mod tests {
     use super::*;
     use glam::Vec3;
+
+    #[test]
+    fn shared_edges_are_listed_once() {
+        assert_eq!(triangle_edges(&[0, 1, 2, 2, 1, 3]).len() / 2, 5);
+        // Strips can leave triangles with a repeated vertex.
+        assert_eq!(triangle_edges(&[0, 0, 1]), vec![0, 1]);
+    }
 
     #[test]
     fn mipmaps_fill_every_level_and_ignore_clear_texels() {

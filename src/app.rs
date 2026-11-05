@@ -20,7 +20,16 @@ use std::path::{Path, PathBuf};
 
 // ─── Data model ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+/// The costumes of a character still to export.
+pub struct ExportQueue {
+    character: usize,
+    next: usize,
+    count: usize,
+    written: usize,
+    all_motions: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GameSource {
     Doa2U,
     Doa3,
@@ -357,6 +366,11 @@ pub struct App {
     pub doa2u_characters: Vec<CharacterEntry>,
     pub doa3_characters: Vec<CharacterEntry>,
     pub current_animations: Vec<AnimationEntry>,
+    /// The loaded costume as the renderer got it, for exporting.
+    pub export_source: crate::export::ExportModel,
+    /// Name of the loaded costume, and of its character and game, for the export's path.
+    pub loaded_name: (String, String, String),
+    pub export_queue: Option<ExportQueue>,
     pub background_options: Vec<BackgroundOption>,
 
     // Archives (lazily loaded)
@@ -529,6 +543,9 @@ impl App {
             doa2u_characters,
             doa3_characters,
             current_animations: Vec::new(),
+            export_source: Default::default(),
+            loaded_name: Default::default(),
+            export_queue: None,
             background_options,
             hdd_archive,
             hdd2_archive,
@@ -596,6 +613,7 @@ impl App {
         }
         let xbe = self.doa2u_xbe.as_ref().context("DOA2.xbe not loaded")?;
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
+        self.loaded_name = ("DOA2U".to_string(), display_name.clone(), stem.clone());
         // datahdd2.afs first: it holds the game's own copy where a name is in both.
         let archive = self
             .hdd2_archive
@@ -746,6 +764,7 @@ impl App {
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
         self.mesh.set_lights(Some(self.current_stage_lights()));
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         for chain in &chains {
@@ -916,6 +935,7 @@ impl App {
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
         self.mesh.set_lights(None);
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         for chain in &chains {
             for target in chain.targets.iter().filter(|t| t.detached) {
@@ -979,6 +999,7 @@ impl App {
         self.char_panel.selected_costume_idx = costume_idx;
         let roster = entry.doa3.clone().context("character has no DOA3 data")?;
         let model_entry = *entry.afs_indices.get(costume_idx).context("unknown costume")?;
+        self.loaded_name = ("DOA3".to_string(), display_name.clone(), format!("costume_{costume_idx:02}"));
 
         let archive = self.loadfile_archive.as_ref().context("loadfile.afs not loaded")?;
         let xbe = self.doa3_xbe.as_ref().context("default.xbe not loaded")?;
@@ -1129,6 +1150,7 @@ impl App {
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
         self.mesh.set_lights(None);
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         for chain in &chains {
             for target in chain.targets.iter().filter(|t| t.detached) {
@@ -1197,6 +1219,115 @@ impl App {
             textures.len(),
             self.current_animations.len()
         ))
+    }
+
+    /// Writes the loaded costume to `exports/<game>/<character>/<costume>.glb`, with the
+    /// playing motion or all of them.
+    pub fn export_current(&mut self, all_motions: bool) -> anyhow::Result<PathBuf> {
+        use anyhow::Context;
+        use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
+
+        let pose = self.doa3_pose.as_ref().context("no costume loaded")?;
+        let archive = self.motion_archive().context("no motion archive")?;
+        let solve = |values: &[f32; doa3::TRACK_COUNT]| match pose.doa2u_style {
+            Some(style) => doa2u::solve_pose(values, &pose.skeleton, style),
+            None => doa3::solve_pose(values, &pose.skeleton),
+        };
+        // The first motion's first frame is the rest pose, so that all exports of a
+        // character share it.
+        let first = self.current_animations.iter().find_map(|a| a.doa3_motion.as_ref());
+        let bind = first
+            .and_then(|(entry, tracks)| doa3::eval_motion(archive.get_by_index(*entry)?, tracks, 0.0).ok())
+            .map(|values| solve(&values))
+            .context("no motion to take a rest pose from")?;
+        let soft = &pose.chains;
+        let hands: Vec<ExportHand> = soft
+            .pose_hands
+            .iter()
+            .filter_map(|hand| {
+                let &(piece, _) = soft.pieces.get(hand.object)?.as_ref()?;
+                Some(ExportHand { piece, hand })
+            })
+            .collect();
+        let chosen: Vec<&AnimationEntry> = if all_motions {
+            self.current_animations.iter().collect()
+        } else {
+            self.anim_panel.selected_anim_idx.and_then(|i| self.current_animations.get(i)).into_iter().collect()
+        };
+        let mut clips = Vec::new();
+        for entry in chosen {
+            let Some((afs_entry, tracks)) = entry.doa3_motion.as_ref() else { continue };
+            let Some(data) = archive.get_by_index(*afs_entry) else { continue };
+            let events = soft.hand_events.get(&(entry.doa3_motion_id as u16));
+            let mut states: Vec<_> = hands.iter().map(|h| h.hand.at_rest()).collect();
+            let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
+            for frame in 0..=doa3::motion_length(data, tracks) {
+                let values = doa3::eval_motion(data, tracks, frame as f32)?;
+                frames.push(solve(&values));
+                for (hand, state) in hands.iter().zip(&mut states) {
+                    let index = soft.pose_hands.iter().position(|h| std::ptr::eq(h, hand.hand)).unwrap_or(0);
+                    let script_hand = index ^ 1;
+                    let event = events.and_then(|list| list.iter().rev().find(|e| e.targets(script_hand) && e.frame <= frame as u16));
+                    state.step(event.map_or(0, |e| e.pose) as usize, event.map_or(1.0 / 26.0, doa3_morphs::HandEvent::rate));
+                }
+                hand_frames.push(states.iter().map(|s| s.state()).collect());
+            }
+            clips.push(ExportClip { name: entry.name.clone(), frames, hands: hand_frames });
+        }
+        let (game, character, costume) = &self.loaded_name;
+        let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
+        write_glb(&Export { model: &self.export_source, bind, clips: &clips, hands: &hands }, &path)?;
+        Ok(path)
+    }
+
+    /// Queues every costume of a character for `step_character_export`.
+    pub fn start_character_export(&mut self, char_idx: usize, all_motions: bool) {
+        let costumes = match self.char_panel.selected_source {
+            GameSource::Doa2U => self.doa2u_characters.get(char_idx),
+            GameSource::Doa3 => self.doa3_characters.get(char_idx),
+        }
+        .map_or(0, |entry| entry.costumes.len());
+        self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
+    }
+
+    /// Exports the next queued costume, if any.
+    pub fn step_character_export(&mut self) {
+        let Some(mut queue) = self.export_queue.take() else { return };
+        if queue.next >= queue.count {
+            self.status_msg = format!("Exported {} of {} costumes to exports/", queue.written, queue.count);
+            return;
+        }
+        self.load_character(queue.character, queue.next);
+        match self.export_current(queue.all_motions) {
+            Ok(_) => queue.written += 1,
+            Err(error) => log::warn!("Export of costume {} failed: {error:#}", queue.next),
+        }
+        queue.next += 1;
+        self.status_msg = format!("Exporting costume {} of {}...", queue.next, queue.count);
+        self.export_queue = Some(queue);
+    }
+
+    /// Exports every costume of a character, loading each. Returns how many it wrote,
+    /// and logs the ones that fail. Stays on the last one loaded.
+    pub fn export_character(&mut self, char_idx: usize, all_motions: bool) -> usize {
+        let costumes = match self.char_panel.selected_source {
+            GameSource::Doa2U => self.doa2u_characters.get(char_idx),
+            GameSource::Doa3 => self.doa3_characters.get(char_idx),
+        }
+        .map_or(0, |entry| entry.costumes.len());
+        let mut written = 0;
+        for costume in 0..costumes {
+            self.doa3_pose = None;
+            self.load_character(char_idx, costume);
+            match self.export_current(all_motions) {
+                Ok(path) => {
+                    log::info!("Exported {}", path.display());
+                    written += 1;
+                }
+                Err(error) => log::warn!("Export of costume {costume} failed: {error:#}"),
+            }
+        }
+        written
     }
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.

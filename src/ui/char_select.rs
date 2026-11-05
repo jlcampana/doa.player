@@ -5,7 +5,17 @@ pub struct CharSelectPanel {
     pub selected_source: GameSource,
     pub selected_char_idx: Option<usize>,
     pub selected_costume_idx: usize,
+    /// Exports with all motions, not only the playing one.
+    pub export_all_motions: bool,
+    pub export_request: Option<ExportRequest>,
     filter: String,
+}
+
+/// What the Export buttons ask for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExportRequest {
+    Costume,
+    Character,
 }
 
 impl CharSelectPanel {
@@ -15,6 +25,8 @@ impl CharSelectPanel {
             selected_source: GameSource::Doa2U,
             selected_char_idx: None,
             selected_costume_idx: 0,
+            export_all_motions: false,
+            export_request: None,
             filter: String::new(),
         }
     }
@@ -87,6 +99,18 @@ impl CharSelectPanel {
                 // Costume selector
                 if let Some(char_idx) = self.selected_char_idx {
                     if let Some(entry) = characters.get(char_idx) {
+                        ui.separator();
+                        ui.label("Export to Blender (.glb):");
+                        ui.horizontal(|ui| {
+                            if ui.button("Costume").on_hover_text("Writes this costume to exports/").clicked() {
+                                self.export_request = Some(ExportRequest::Costume);
+                            }
+                            if ui.button("All costumes").on_hover_text("Writes each costume of this character to its own file").clicked() {
+                                self.export_request = Some(ExportRequest::Character);
+                            }
+                        });
+                        ui.checkbox(&mut self.export_all_motions, "All motions")
+                            .on_hover_text("Otherwise only the playing motion. Files get large, and Blender takes long to import them.");
                         ui.separator();
                         ui.label("Costume:");
                         egui::ScrollArea::vertical().id_salt("costumes").auto_shrink([false, true]).show(ui, |ui| {

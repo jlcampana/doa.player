@@ -262,6 +262,16 @@ impl PoseHand {
         Self { object, vertices, shapes, normal_vertices, normals, from: 0, to: 0, weight: 1.0 }
     }
 
+    /// The same hand on pose 0, as a motion starts it for exporting.
+    pub fn at_rest(&self) -> Self {
+        Self { from: 0, to: 0, weight: 1.0, ..self.clone() }
+    }
+
+    /// The pose it comes from, the one it goes to, and the progress.
+    pub fn state(&self) -> (usize, usize, f32) {
+        (self.from, self.to, self.weight)
+    }
+
     /// Advances one game frame. Poses the costume does not have are ignored.
     pub fn step(&mut self, target: usize, rate: f32) {
         if target != self.to && target < self.shapes.len() {

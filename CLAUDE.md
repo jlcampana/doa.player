@@ -27,6 +27,9 @@ cargo build --profile fast                              # quick test build, targ
 cargo test --profile fast                               # quick tests; build.sh stays optimized
 BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|1"
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
+EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
+target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
+target/fast/doa_player --export-all                                                 # every costume, no visible window, about 10 minutes
 ```
 
 ## Current state of DOA2U (2026-11-04)
@@ -70,6 +73,14 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 - `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping.
 - Ignored tests: `list_costume_objects`, `joint_pieces_match_captured_vertices`, `captured_tracks_are_found_in_motions`, `cloth_follows_captured_vertices`, `doa2u_single_steps`, `doa2u_chain_single_steps`. Each reads its inputs from environment variables, named in its comment.
 - Captures are in `target/captures/`, not tracked. `cargo clean` deletes them, and the tools above recreate them.
+
+## Exporting to Blender
+
+`src/export.rs` writes a `.glb` per costume: a mesh per piece, an armature of 25 bones with the pose solve's hierarchy, skin weights, embedded PNG textures, and baked motions at 60 frames per second. `exports/` is gitignored: the files hold game data and must not be committed or published. The Costume and All costumes buttons are in the character panel, and All costumes does one costume per frame so the window keeps responding. Checked by importing in `blender -b`: DOA2U, an `A0` model and DOA3, and all 698 motions of `zac00` (25 MB, 8 s); a frame of `zac00` was compared with the viewer by eye.
+
+Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is not exported for anyone. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
+
+Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
 
 ## Development notes
 
