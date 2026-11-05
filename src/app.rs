@@ -85,6 +85,7 @@ const DOAX_XBE_PATH: &str = "doax/default.xbe";
 const DOAX_HDD_PATH: &str = "doax/datahdd.afs";
 const DOAX_DVD_PATH: &str = "doax/datadvd.afs";
 const DOAX2_CHR_PATH: &str = "doax2/chr.afs";
+const DOAX2_MOT_PATH: &str = "doax2/mot.afs";
 const DOAX2_WEAR_PATHS: [&str; 2] = ["doax2/werone.afs", "doax2/wertwo.afs"];
 const DOA3_LOAD_PATH: &str = "doa3/loadfile.afs";
 const DOA3_XBE_PATH: &str = "doa3/default.xbe";
@@ -398,12 +399,14 @@ pub struct App {
     pub doax_stage_lights: Vec<(String, crate::renderer::mesh::SceneLights)>,
     /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
     doax_pose: Option<DoaxPose>,
+    doax2_pose: Option<Doax2Pose>,
     doax_hdd: Option<doax::LazyArchive>,
     doax_dvd: Option<doax::LazyArchive>,
     pub doax2_characters: Vec<CharacterEntry>,
     doax2_chr: Option<doax::LazyArchive>,
     doax2_wear: Vec<doax::LazyArchive>,
     doax2_wear_names: Vec<Vec<String>>,
+    doax2_mot: Option<doax::LazyArchive>,
     pub anim_panel: AnimPanel,
     pub bg_panel: BgSelectPanel,
 
@@ -443,6 +446,16 @@ pub struct App {
     pub doa3_pose: Option<Doa3Pose>,
     /// DOA3 character the camera was last framed on.
     framed_character: Option<usize>,
+}
+
+/// The loaded DOAX2 character's motions and, per drawn piece, its DOAX bone and its place
+/// from that bone at rest.
+struct Doax2Pose {
+    files: Vec<Vec<u8>>,
+    motions: Vec<(usize, doax::Motion)>,
+    playing: Option<usize>,
+    rows: [glam::Vec3; 24],
+    pieces: Vec<(usize, glam::Mat4)>,
 }
 
 /// What is needed to pose the loaded DOA3 character.
@@ -656,12 +669,14 @@ impl App {
             doax_characters,
             doax_stage_lights,
             doax_pose: None,
+            doax2_pose: None,
             doax_hdd,
             doax_dvd,
             doax2_characters,
             doax2_chr,
             doax2_wear,
             doax2_wear_names,
+            doax2_mot: doax::LazyArchive::open(asset_path(DOAX2_MOT_PATH)).map_err(|e| log::info!("No DOAX2 motions: {e:#}")).ok(),
             anim_panel: AnimPanel::new(),
             bg_panel: BgSelectPanel::new(),
             doa2u_characters,
@@ -708,6 +723,7 @@ impl App {
             .flatten()
             .map(|entry| (entry.name.clone(), entry.doa3_motion_id, self.anim_time));
         self.doax_pose = None;
+        self.doax2_pose = None;
         self.load_character_files(char_idx, costume_idx);
         if let Some((name, id, time)) = paused {
             let same = self.current_animations.iter().position(|a| a.name == name)
@@ -795,17 +811,20 @@ impl App {
                 placed.push((piece, node_base + node, texture_base, file.textures.len()));
             }
         }
+        // One node per piece, so that each can follow its own bone.
+        let nodes: Vec<glam::Mat4> = placed.iter().map(|&(_, node, _, _)| nodes[node]).collect();
         let inputs: Vec<PieceInput> = placed
             .iter()
-            .map(|&(piece, node, first, count)| PieceInput {
-                node,
+            .enumerate()
+            .map(|(index, &(piece, _, first, count))| PieceInput {
+                node: index,
                 vertices: &piece.vertices,
                 draws: piece
                     .materials
                     .iter()
                     .map(|m| (m.indices.as_slice(), m.base_texture(count).map(|t| t + first), m.cull_back, None))
                     .collect(),
-                parent: node,
+                parent: index,
                 skin: None,
                 bend: None,
                 multi: None,
@@ -813,9 +832,43 @@ impl App {
                 translucent: false,
             })
             .collect();
+        // Motions: DOAX's tracks and solve, with the body's offsets. Each piece follows the DOAX
+        // bone of its CAT number, from where it sits at rest.
+        let rows = doax2::bone_rows(&files[0].rest)?;
+        let bone_rest = doax2::bone_rest(&rows);
+        let pelvis = files[0].rest[0].w_axis.truncate();
+        let mut pose_pieces = Vec::new();
+        for (index, file) in files.iter().enumerate() {
+            let parent = if index == 1 { head_frame } else { glam::Mat4::IDENTITY };
+            for (_, node, placed) in &file.pieces {
+                let bone = doax2::SLOT_BONES.get(placed.slot as usize).copied().unwrap_or(2);
+                let rest = glam::Mat4::from_translation(-pelvis) * parent * file.rest[*node];
+                pose_pieces.push((bone, bone_rest[bone].inverse() * rest));
+            }
+        }
+        let mut motion_data = Vec::new();
+        let mut motions = Vec::new();
+        let mut animations = Vec::new();
+        if let Some(mot) = self.doax2_mot.as_ref() {
+            let names: Vec<String> = mot.names().map(str::to_string).collect();
+            for file in doax2::motion_files(&names, &code) {
+                let Ok(data) = mot.read(&file) else { continue };
+                for motion in doax::list_motions_big(&data) {
+                    motions.push((motion_data.len(), motion));
+                    animations.push(AnimationEntry {
+                        name: format!("{} {:04} ({} frames)", file.trim_end_matches(".mot"), motion.id, motion.frames),
+                        file_key: file.clone(),
+                        doa3_motion: None,
+                        doa3_motion_id: motion.id,
+                    });
+                }
+                motion_data.push(data);
+            }
+        }
         self.doa3_pose = None;
         self.doax_pose = None;
-        self.current_animations.clear();
+        self.doax2_pose = Some(Doax2Pose { files: motion_data, motions, playing: None, rows, pieces: pose_pieces });
+        self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
         self.loaded_name = ("DOAX2".to_string(), display_name.clone(), suit.label.clone());
@@ -825,7 +878,11 @@ impl App {
         let pieces = inputs.len();
         drop(inputs);
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
-        Ok(format!("DOAX2: {display_name} - {}, {pieces} pieces, rest pose", suit.label))
+        let count = self.current_animations.len();
+        if count > 0 {
+            self.select_motion(0);
+        }
+        Ok(format!("DOAX2: {display_name} - {}, {pieces} pieces, {count} motions", suit.label))
     }
 
     /// A DOAX costume: the character's body with a suit, standing in the rest pose.
@@ -1839,6 +1896,16 @@ impl App {
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.
     pub fn select_motion(&mut self, index: usize) {
+        if let Some(pose) = &mut self.doax2_pose {
+            if index < pose.motions.len() {
+                pose.playing = Some(index);
+                self.anim_panel.selected_anim_idx = Some(index);
+                self.anim_panel.playing = true;
+                self.anim_time = 0.0;
+                self.update_doa3_pose();
+            }
+            return;
+        }
         if let Some(pose) = &mut self.doax_pose {
             if index < pose.motions.len() {
                 pose.playing = Some(index);
@@ -1864,6 +1931,19 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
+        if let Some(pose) = &self.doax2_pose {
+            let Some(index) = pose.playing else { return };
+            let (file, motion) = pose.motions[index];
+            match doax::eval_motion_endian(&pose.files[file], &motion, self.anim_time, true) {
+                Ok(values) => {
+                    let bones = doax::solve_pose(&values, &pose.rows);
+                    let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect();
+                    self.mesh.apply_pose(&self.ctx.queue, &nodes);
+                }
+                Err(e) => log::warn!("Could not evaluate the DOAX2 motion: {e:#}"),
+            }
+            return;
+        }
         if let Some(pose) = &mut self.doax_pose {
             let Some(index) = pose.playing else { return };
             let (file, motion) = pose.motions[index];
@@ -2126,7 +2206,8 @@ impl App {
         self.game_clock += dt * self.anim_panel.speed * 60.0;
         if self.anim_panel.playing {
             self.anim_time += dt * self.anim_panel.speed * 60.0;
-            let doax_length = self.doax_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32));
+            let doax_length = self.doax_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32))
+                .or_else(|| self.doax2_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32)));
             let length = doax_length.unwrap_or_else(|| self.doa3_pose.as_ref().and_then(|p| p.motion.as_ref()).map_or(0.0, |m| m.length));
             if length > 0.0 && self.anim_time > length {
                 if self.anim_panel.loop_anim {

@@ -18,7 +18,7 @@ const SLOT_TABLE_VA: u32 = 0x33_F988;
 
 /// Bone, parent and row of its offset, matched against the running game's matrices. Bone 2,
 /// the hips, is the root. Where two rows hold the same value, the row is taken by symmetry.
-const BONE_LINKS: [(usize, usize, usize); 22] = [
+pub const BONE_LINKS: [(usize, usize, usize); 22] = [
     (23, 2, 19), (0, 23, 20), (19, 0, 15), (1, 19, 21),
     (16, 0, 12), (8, 16, 4), (4, 8, 0), (5, 4, 1),
     (20, 0, 16), (14, 20, 10), (10, 14, 6), (11, 10, 7),
@@ -28,7 +28,7 @@ const BONE_LINKS: [(usize, usize, usize); 22] = [
 ];
 
 /// Bones at the origin of another in the game's matrices, at rest with its axes.
-const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27, 14), (28, 5), (29, 11), (30, 8), (31, 14)];
+pub const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27, 14), (28, 5), (29, 11), (30, 8), (31, 14)];
 
 /// Height of the foot bone above the ground in the game's matrices, about 0.1.
 const FOOT_HEIGHT: f32 = 0.1;
@@ -592,10 +592,16 @@ fn unpack(raw: u32, sign_bit: u32, exponent: u32, mantissa: u32) -> f32 {
     f32::from_bits((((raw >> sign_bit) & 1) << 31) | (exponent << 23) | mantissa)
 }
 
+/// A 16-bit field of a motion: little-endian in DOAX, big-endian in DOAX2.
+fn field16(data: &[u8], at: usize, big: bool) -> Option<u32> {
+    let bytes = [*data.get(at)?, *data.get(at + 1)?];
+    Some(if big { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) } as u32)
+}
+
 /// A key's value: 20 bits, the head's top four and 16 more (`0x000AE980`).
-fn key_value(data: &[u8], at: usize) -> Option<f32> {
-    let head = u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32;
-    let low = u16::from_le_bytes([*data.get(at + 2)?, *data.get(at + 3)?]) as u32;
+fn key_value(data: &[u8], at: usize, big: bool) -> Option<f32> {
+    let head = field16(data, at, big)?;
+    let low = field16(data, at + 2, big)?;
     let raw = ((head & 0xF000) << 4) | low;
     // With no exponent, the low bits are a fraction (`0x000AE9B5`, `0x000AE9D3`).
     if (raw >> 16) & 7 == 0 {
@@ -633,18 +639,23 @@ fn key_short_slope(raw: u32) -> f32 {
 /// duration, with the table at 0x2D1248 giving each kind's function and size. Kind 0 is a
 /// cubic with two slopes, 1 a line, 2 a parabola and 3 a constant. A head with no kind or
 /// duration ends the track. Kinds 0 to 2 end at the next key's value.
-fn eval_track(data: &[u8], start: usize, t: f32, angle: bool) -> Option<f32> {
-    let u16_at = |at: usize| Some(u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32);
+///
+/// In DOAX2 the file is big-endian: each 16-bit field is swapped, and so are the two slope
+/// bytes at +8 and +9, as if they were one 16-bit field (measured: slopes of consecutive keys
+/// agree 30 times better this way).
+fn eval_track(data: &[u8], start: usize, t: f32, angle: bool, big: bool) -> Option<f32> {
+    let u16_at = |at: usize| field16(data, at, big);
+    let (hi0, hi1) = if big { (9, 8) } else { (8, 9) };
     let (mut at, mut segment_start) = (start, 0f32);
     loop {
         let head = u16_at(at)?;
         let (kind, dt) = (head & 3, ((head >> 2) & 0x3FF) as f32);
         if (kind == 0 && dt == 0.0) || kind == 3 {
-            return key_value(data, at);
+            return key_value(data, at, big);
         }
         let size = [10, 4, 6][kind as usize];
         if t < segment_start + dt {
-            let (v0, mut v1) = (key_value(data, at)?, key_value(data, at + size)?);
+            let (v0, mut v1) = (key_value(data, at, big)?, key_value(data, at + size, big)?);
             // Angles wrap between keys: 0.01 to 6.27 is a small turn back, and going through pi
             // would flip a bone between two frames.
             if angle {
@@ -659,8 +670,8 @@ fn eval_track(data: &[u8], start: usize, t: f32, angle: bool) -> Option<f32> {
             let slope = (v1 - v0) / dt;
             return Some(match kind {
                 0 => {
-                    let m0 = key_slope(u16_at(at + 4)? | ((*data.get(at + 8)? as u32) << 16));
-                    let m1 = key_slope(u16_at(at + 6)? | ((*data.get(at + 9)? as u32) << 16));
+                    let m0 = key_slope(u16_at(at + 4)? | ((*data.get(at + hi0)? as u32) << 16));
+                    let m1 = key_slope(u16_at(at + 6)? | ((*data.get(at + hi1)? as u32) << 16));
                     let c2 = (3.0 * slope - 2.0 * m0 - m1) / dt;
                     let c3 = (m0 + m1 - 2.0 * slope) / (dt * dt);
                     ((c3 * x + c2) * x + m0) * x + v0
@@ -685,12 +696,37 @@ fn is_position_track(track: usize) -> bool {
 /// Evaluates a motion's tracks. Their order in the file is the order in memory, unless a
 /// motion is mirrored, which swaps sides by the table at 0x2D1360.
 pub fn eval_motion(data: &[u8], motion: &Motion, frame: f32) -> Result<[f32; TRACK_COUNT]> {
+    eval_motion_endian(data, motion, frame, false)
+}
+
+/// `eval_motion` for either byte order: DOAX2 keeps the same tracks big-endian.
+pub fn eval_motion_endian(data: &[u8], motion: &Motion, frame: f32, big: bool) -> Result<[f32; TRACK_COUNT]> {
+    let word = |at: usize| -> Result<u32> {
+        let bytes: [u8; 4] = data.get(at..at + 4).context("motion out of bounds")?.try_into()?;
+        Ok(if big { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
+    };
     let mut values = [0f32; TRACK_COUNT];
     for (i, value) in values.iter_mut().enumerate() {
-        let offset = read_u32(data, motion.block + 4 + i * 4)? as usize;
-        *value = eval_track(data, motion.block + offset, frame, !is_position_track(i)).context("motion track out of bounds")?;
+        let offset = word(motion.block + 4 + i * 4)? as usize;
+        *value = eval_track(data, motion.block + offset, frame, !is_position_track(i), big).context("motion track out of bounds")?;
     }
     Ok(values)
+}
+
+/// `list_motions` for DOAX2: 8000 big-endian words of block offsets.
+pub fn list_motions_big(data: &[u8]) -> Vec<Motion> {
+    let word = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()));
+    let Some(placeholder) = word(0) else { return Vec::new() };
+    (0..8000)
+        .filter_map(|id| {
+            let block = word(id * 4)?;
+            if block == placeholder {
+                return None;
+            }
+            let head = word(block as usize)?;
+            (head >> 16 == TRACK_COUNT as u32).then_some(Motion { id, block: block as usize, frames: head & 0xFFFF })
+        })
+        .collect()
 }
 
 fn euler(values: &[f32]) -> Mat4 {
@@ -1039,12 +1075,12 @@ mod tests {
     fn packed_values_unpack_as_the_game_does() {
         assert_eq!(unpack(0, 19, 0x7E, 0), 0.0);
         // Head 0x0058 and low 0xE7DF, no exponent: a fraction, the hips' height in the game.
-        let value = key_value(&[0x58, 0x00, 0xDF, 0xE7], 0).unwrap();
+        let value = key_value(&[0x58, 0x00, 0xDF, 0xE7], 0, false).unwrap();
         assert!((value - 0.9057).abs() < 1e-3, "{value}");
         // The head's top bit is the sign.
-        assert!(key_value(&[0x00, 0x80, 0x00, 0x10], 0).unwrap() < 0.0);
+        assert!(key_value(&[0x00, 0x80, 0x00, 0x10], 0, false).unwrap() < 0.0);
         // Exponent 1: from 1 to 2.
-        let value = key_value(&[0x00, 0x10, 0x00, 0x80], 0).unwrap();
+        let value = key_value(&[0x00, 0x10, 0x00, 0x80], 0, false).unwrap();
         assert_eq!(value, 1.5);
     }
 

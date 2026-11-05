@@ -626,6 +626,66 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
     Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes })
 }
 
+/// The body's node for each DOAX bone: DOAX2 has DOAX's skeleton, the same 24 offsets (Tina's
+/// match DOAX's table to the millimetre), in a node tree. Bone 15, DOAX's point on the ground,
+/// has no node. Checked on the five bodies by `bone_nodes_follow_the_links`.
+pub const BONE_NODES: [Option<usize>; 24] = [
+    Some(5), Some(6), Some(0), Some(12), Some(13), Some(14), Some(16), Some(19), Some(20), Some(29), Some(30), Some(31),
+    Some(33), Some(36), Some(37), None, Some(9), Some(11), Some(21), Some(23), Some(26), Some(28), Some(38), Some(40),
+];
+
+/// The DOAX bone of each CAT bone number. 0 to 15 are DOAX's own; 16 to 23 follow from where
+/// the body and head put them: 16 and 17 the eyes, 18 and 21 the collars, 19 and 22 the
+/// toes, 20 the neck, 23 the spine.
+pub const SLOT_BONES: [usize; 24] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 21, 16, 18, 19, 20, 22, 23];
+
+/// DOAX's offset rows, from the body's rest nodes.
+pub fn bone_rows(body_rest: &[Mat4]) -> Result<[Vec3; 24]> {
+    let position = |bone: usize| -> Result<Vec3> {
+        let node = BONE_NODES[bone].with_context(|| format!("bone {bone} has no node"))?;
+        Ok(body_rest.get(node).context("body has too few nodes")?.w_axis.truncate())
+    };
+    let mut rows = [Vec3::ZERO; 24];
+    for (bone, parent, row) in super::doax::BONE_LINKS {
+        rows[row] = position(bone)? - position(parent)?;
+    }
+    Ok(rows)
+}
+
+/// Each DOAX bone at rest with the hips at the origin, as translations.
+pub fn bone_rest(rows: &[Vec3; 24]) -> [Mat4; super::doax::BONE_COUNT] {
+    let mut positions = [Vec3::ZERO; super::doax::BONE_COUNT];
+    for (bone, parent, row) in super::doax::BONE_LINKS {
+        positions[bone] = positions[parent] + rows[row];
+    }
+    for (bone, base) in super::doax::BONES_ON_BONES {
+        positions[bone] = positions[base];
+    }
+    positions.map(Mat4::from_translation)
+}
+
+/// The name a character's motions go by.
+pub fn motion_name(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "tn" => "tina",
+        "he" => "hika",
+        "le" => "leifang",
+        "ls" => "lisa",
+        "cr" => "gokei",
+        _ => return None,
+    })
+}
+
+/// A character's motion files: her own, her bed and gravure ones, and the shared `comon` ones.
+pub fn motion_files(names: &[String], code: &str) -> Vec<String> {
+    let Some(name) = motion_name(code) else { return Vec::new() };
+    let own = |n: &str| n == format!("{name}.mot") || n == format!("bed_{name}.mot") || (n.starts_with(&format!("gr_{name}")) && n.ends_with(".mot"));
+    let mut files: Vec<String> = names.iter().filter(|n| own(n)).cloned().collect();
+    files.extend(names.iter().filter(|n| n.starts_with("comon") && n.ends_with(".mot")).cloned());
+    files.dedup();
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +756,36 @@ mod tests {
                 let gap = head_points.iter().map(|p| p.distance(*rim)).fold(f32::MAX, f32::min);
                 assert!(gap < 1e-4, "{code}: gap {gap}");
             }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn bone_nodes_follow_the_links() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for (_, code) in ROSTER {
+            let file = chr.read(&format!("v{code}1.tpr")).unwrap();
+            let nodes = hierarchy(&Xpr2::parse(&file).unwrap()).unwrap();
+            for (bone, parent, _) in crate::formats::doax::BONE_LINKS {
+                // The bone's node descends from its parent's, through nodes at the same place.
+                let (node, parent_node) = (BONE_NODES[bone].unwrap(), BONE_NODES[parent].unwrap());
+                let mut up = nodes[node].parent;
+                let mut steps = 0;
+                while up != Some(parent_node) && steps < 4 {
+                    up = up.and_then(|u| nodes[u].parent);
+                    steps += 1;
+                }
+                assert_eq!(up, Some(parent_node), "{code}: bone {bone} node {node} is not under {parent_node}");
+            }
+            let rows = bone_rows(&rest_pose(&nodes)).unwrap();
+            println!("{code}: shin {:.3}, upper arm {:.3}", rows[3].length(), rows[0].length());
+        }
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let names: Vec<String> = mot.names().map(str::to_string).collect();
+        for (_, code) in ROSTER {
+            let files = motion_files(&names, code);
+            let count: usize = files.iter().map(|f| crate::formats::doax::list_motions_big(&mot.read(f).unwrap()).len()).sum();
+            println!("{code}: {} files, {count} motions", files.len());
         }
     }
 
