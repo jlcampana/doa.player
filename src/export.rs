@@ -5,6 +5,8 @@
 //! they are simulated at run time. DOA3 hand poses and faces are not exported either.
 //! Joint pieces bend by quaternion in the game and by weights here, so they differ slightly
 //! from the viewer away from the rest pose. Rigid pieces are exact.
+//! DOAX's chest spring is baked: its shape sets are shape keys, weighted per frame by the
+//! spring as the viewer steps it from rest at each motion's first frame.
 
 use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
@@ -168,6 +170,22 @@ struct BoundVertex {
     normal: Vec3,
     joints: [u8; 4],
     weights: [f32; 4],
+}
+
+/// How a change of a vertex's file position moves it in the rest pose: the piece's node, or
+/// for a piece bent by several bones, their matrices by the vertex's shares.
+fn vector_frame(piece: &ExportPiece, vertex: usize, bind: &[Mat4]) -> Mat3 {
+    let node = Mat3::from_mat4(bind[piece.node.min(bind.len() - 1)]);
+    let Some(multi) = &piece.multi else { return node };
+    let Some(weights) = multi.weights.get(vertex) else { return node };
+    let mut left = 1.0;
+    let mut frame = Mat3::ZERO;
+    for (k, &(bone, _)) in multi.groups.iter().enumerate().take(4) {
+        let share = weights.get(k).copied().unwrap_or(left);
+        left -= share;
+        frame += Mat3::from_mat4(bind.get(bone).copied().unwrap_or(bind[piece.node.min(bind.len() - 1)])) * share;
+    }
+    frame
 }
 
 fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<BoundVertex> {
@@ -373,7 +391,10 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
     // Pieces.
     let mut meshes = Vec::new();
     let mut piece_nodes = Vec::new();
-    let mut hand_nodes: Vec<Option<(usize, usize)>> = vec![None; hands.len()];
+    // Per set of `hands`: its first target and count on its piece. Per piece node with
+    // sets: the node, its sets and its target count.
+    let mut set_targets: Vec<Option<(usize, usize)>> = vec![None; hands.len()];
+    let mut morph_nodes: Vec<(usize, Vec<usize>, usize)> = Vec::new();
     for (index, piece) in model.pieces.iter().enumerate() {
         if piece.vertices.is_empty() || piece.draws.iter().all(|d| d.indices.is_empty()) {
             continue;
@@ -390,24 +411,28 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         let joint_list = writer.accessor(bytemuck::cast_slice(&vertex_joints), UNSIGNED_BYTE, "VEC4", vertex_joints.len(), None);
         let weight_list = writer.accessor(bytemuck::cast_slice(&weights), FLOAT, "VEC4", weights.len(), None);
 
-        // A hand's shapes are absolute, in the node's space.
-        let hand = hands.iter().position(|h| h.piece == index);
+        // Hands and other morph sets on this piece: their shapes are absolute, in the
+        // piece's own space, and become targets one after another.
         let mut targets = Vec::new();
         let mut default_weights = Vec::new();
-        if let Some(hand) = hand.map(|h| hands[h].hand) {
-            let matrix = bind[piece.node.min(bone_count - 1)];
+        let on_piece: Vec<usize> = (0..hands.len()).filter(|&h| hands[h].piece == index).collect();
+        for &set_index in &on_piece {
+            let hand = hands[set_index].hand;
+            let first = targets.len();
             for (t, shape) in hand.shapes.iter().enumerate() {
                 let mut moved = vec![Vec3::ZERO; piece.vertices.len()];
                 for (group, value) in hand.vertices.iter().zip(shape) {
                     for &vertex in group {
                         if let Some(rest) = piece.vertices.get(vertex) {
-                            moved[vertex] = matrix.transform_vector3(Vec3::from(*value) - Vec3::from(rest.position));
+                            let change = Vec3::from(*value) - Vec3::from(rest.position);
+                            moved[vertex] = vector_frame(piece, vertex, bind) * change;
                         }
                     }
                 }
                 targets.push(json!({"POSITION": writer.vec3s(&moved, true)}));
                 default_weights.push(if t == 0 { 1.0 } else { 0.0 });
             }
+            set_targets[set_index] = Some((first, hand.shapes.len()));
         }
 
         let mut primitives = Vec::new();
@@ -430,8 +455,8 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         meshes.push(mesh);
         nodes.push(json!({"name": format!("piece_{index}"), "mesh": meshes.len() - 1, "skin": 0}));
         piece_nodes.push(nodes.len() - 1);
-        if let Some(hand_index) = hand {
-            hand_nodes[hand_index] = Some((nodes.len() - 1, hands[hand_index].hand.shapes.len()));
+        if !on_piece.is_empty() {
+            morph_nodes.push((nodes.len() - 1, on_piece, targets.len()));
         }
     }
     if meshes.is_empty() {
@@ -479,18 +504,19 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
                 channels.push(json!({"sampler": samplers.len() - 1, "target": {"node": node, "path": "rotation"}}));
             }
         }
-        for (hand_index, slot) in hand_nodes.iter().enumerate() {
-            let Some((node, count)) = *slot else { continue };
-            let mut values = Vec::with_capacity(clip.frames.len() * count);
-            for states in &clip.hands {
-                let (from, to, progress) = states.get(hand_index).copied().unwrap_or((0, 0, 1.0));
-                let start = values.len();
-                values.resize(start + count, 0.0f32);
-                if let Some(value) = values.get_mut(start + from) {
-                    *value += 1.0 - progress;
-                }
-                if let Some(value) = values.get_mut(start + to) {
-                    *value += progress;
+        for (node, sets, count) in &morph_nodes {
+            let mut values = vec![0.0f32; clip.frames.len() * count];
+            for (frame, states) in clip.hands.iter().enumerate() {
+                for &set in sets {
+                    let Some((first, shapes)) = set_targets[set] else { continue };
+                    let (from, to, progress) = states.get(set).copied().unwrap_or((0, 0, 1.0));
+                    let start = frame * count + first;
+                    if from < shapes {
+                        values[start + from] += 1.0 - progress;
+                    }
+                    if to < shapes {
+                        values[start + to] += progress;
+                    }
                 }
             }
             let output = writer.accessor(bytemuck::cast_slice(&values), FLOAT, "SCALAR", values.len(), None);

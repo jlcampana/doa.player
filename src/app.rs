@@ -1529,7 +1529,14 @@ impl App {
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
         if let Some(pose) = &self.doax_pose {
-            let hands: Vec<ExportHand> = pose.hands.iter().map(|(_, hand, piece)| ExportHand { piece: *piece, hand }).collect();
+            // Hands, then the chest spring's sets, which follow the spring as in the viewer.
+            let hands: Vec<ExportHand> = pose
+                .hands
+                .iter()
+                .map(|(_, hand, piece)| ExportHand { piece: *piece, hand })
+                .chain(pose.chest_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set }))
+                .collect();
+            let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions {
                 (0..pose.motions.len()).collect()
             } else {
@@ -1545,10 +1552,21 @@ impl App {
                 };
                 let events = events.map_or(&[][..], Vec::as_slice);
                 let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
+                // The spring starts at rest on the motion's first frame and steps once a frame.
+                let mut spring: Option<doa3::ChestSpring> = None;
                 for frame in 0..motion.frames {
                     let values = doax::eval_motion(&pose.files[file], &motion, frame as f32)?;
-                    frames.push(doax::solve_pose(&values, &pose.rows).to_vec());
-                    hand_frames.push(pose.hands.iter().map(|(slot, _, _)| doax::hand_blend(events, *slot, frame as f32, &pose.pose_shapes)).collect());
+                    let nodes = doax::solve_pose(&values, &pose.rows);
+                    let mut states: Vec<(usize, usize, f32)> =
+                        pose.hands.iter().map(|(slot, _, _)| doax::hand_blend(events, *slot, frame as f32, &pose.pose_shapes)).collect();
+                    if !pose.chest_sets.is_empty() {
+                        let spring = spring.get_or_insert_with(|| doa3::ChestSpring::with_parameters(&nodes[0], doax::CHEST_SPRING));
+                        spring.step(&nodes[0]);
+                        let (shape, weight) = doax::chest_weight(spring.value * bounce);
+                        states.extend(pose.chest_sets.iter().map(|_| (0, shape, weight)));
+                    }
+                    frames.push(nodes.to_vec());
+                    hand_frames.push(states);
                 }
                 clips.push(ExportClip { name: self.current_animations[index].name.clone(), frames, hands: hand_frames });
             }

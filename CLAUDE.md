@@ -85,7 +85,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 DOAX exports its 32 bones from the rest pose, arms out, with hands as shape keys and blended pieces by their weights. Checked in `blender -b` on two costumes, and one frame of `tina 0077` by eye against the viewer. Bulk export over DOAX was measured for 97 s only: 227 costumes, memory flat.
 
-Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is not exported for anyone. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
+Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is exported for DOAX only: its sets on the chest, upper arms and suit are shape keys, weighted per frame by the spring, which starts at rest on each motion's first frame and follows the Bounce slider (checked in `blender -b` on `mdAy00tn`). DOA3 and DOA2U do not export it. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
 
 Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
 
