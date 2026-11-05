@@ -9,7 +9,7 @@ use crate::formats::doa3_morphs::{self, FaceMorph, HandEvent, HandMorph};
 use crate::formats::doa3_springs::{self, SoftSprings};
 use crate::formats::doa3_tubes::{self, SoftTube};
 use crate::formats::doa3_wind::Wind;
-use crate::formats::model::{parse_xpr_model, parse_xpr_textures};
+use crate::formats::model::{parse_sprite_xpr, parse_xpr_model, parse_xpr_textures, ModelTexture};
 use crate::formats::AfsArchive;
 use crate::renderer::{Camera, RenderContext};
 use crate::renderer::grid::GridRenderer;
@@ -75,6 +75,9 @@ const DOA2U_HDD_PATH: &str = "doa2u/datahdd.afs";
 const DOA2U_HDD2_PATH: &str = "doa2u/datahdd2.afs";
 const DOA2U_VOICE_PATH: &str = "doa2u/voice.afs";
 const DOA2U_DVD_PATH: &str = "doa2u/datadvd.afs";
+/// The app's icon, from the game's files, so that it stays out of the repository: Popularity in
+/// the ranking menu. 20 is Popularity (tag).
+const APP_ICON_SPRITE: (&str, usize) = ("spOptrnk.xpr", 19);
 const DOA3_LOAD_PATH: &str = "doa3/loadfile.afs";
 const DOA3_XBE_PATH: &str = "doa3/default.xbe";
 const CHARACTERS_CONFIG: &str = "characters.toml";
@@ -102,6 +105,19 @@ fn project_file(name: &str) -> PathBuf {
 pub fn doa2u_voice_path() -> &'static str {
     static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     PATH.get_or_init(|| asset_path(DOA2U_VOICE_PATH).to_string_lossy().into_owned())
+}
+
+fn read_app_icon(archive: Option<&AfsArchive>) -> Option<ModelTexture> {
+    let (name, index) = APP_ICON_SPRITE;
+    let sprites = parse_sprite_xpr(archive?.get_by_name(name)?);
+    match sprites {
+        Ok(mut sprites) if index < sprites.len() => Some(sprites.swap_remove(index)),
+        Ok(_) => None,
+        Err(e) => {
+            log::warn!("Could not read the app's icon: {e:#}");
+            None
+        }
+    }
 }
 
 /// Finds a file inside the project's `assets` folder, searching upwards from
@@ -369,6 +385,7 @@ pub struct App {
 
     // UI panels
     pub char_panel: CharSelectPanel,
+    pub app_icon: Option<ModelTexture>,
     pub anim_panel: AnimPanel,
     pub bg_panel: BgSelectPanel,
 
@@ -467,7 +484,7 @@ impl App {
         ctx: RenderContext,
         egui_ctx: egui::Context,
         egui_state: egui_winit::State,
-        _window: &winit::window::Window,
+        window: &winit::window::Window,
     ) -> Self {
         let w = ctx.surface_config.width;
         let h = ctx.surface_config.height;
@@ -510,6 +527,14 @@ impl App {
                 None
             }
         };
+        let app_icon = read_app_icon(hdd_archive.as_ref());
+        let mut char_panel = CharSelectPanel::new();
+        if let Some(icon) = &app_icon {
+            // Wayland ignores this: there the icon comes from the desktop entry.
+            window.set_window_icon(winit::window::Icon::from_rgba(icon.rgba.clone(), icon.width, icon.height).ok());
+            let image = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
+            char_panel.logo = Some(egui_ctx.load_texture("app icon", image, egui::TextureOptions::LINEAR));
+        }
 
         let doa3_path = asset_path(DOA3_LOAD_PATH);
         let loadfile_archive = match AfsArchive::from_file(&doa3_path) {
@@ -547,7 +572,8 @@ impl App {
             egui_ctx,
             egui_state,
             egui_renderer,
-            char_panel: CharSelectPanel::new(),
+            char_panel,
+            app_icon,
             anim_panel: AnimPanel::new(),
             bg_panel: BgSelectPanel::new(),
             doa2u_characters,
@@ -1298,6 +1324,30 @@ impl App {
         }
         .map_or(0, |entry| entry.costumes.len());
         self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
+    }
+
+    /// Writes the icon and a desktop entry to the user's folders, so that the desktop shows
+    /// the icon. Wayland has no other way. Returns the entry's path.
+    pub fn install_desktop_entry(&self) -> anyhow::Result<PathBuf> {
+        let icon = self.app_icon.as_ref().ok_or_else(|| anyhow::anyhow!("the icon could not be read from assets/doa2u"))?;
+        let data = PathBuf::from(std::env::var("HOME")?).join(".local/share");
+        std::fs::create_dir_all(data.join("icons"))?;
+        std::fs::create_dir_all(data.join("applications"))?;
+        let icon_path = data.join("icons/doa-player.png");
+        let mut encoder = png::Encoder::new(std::fs::File::create(&icon_path)?, icon.width, icon.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&icon.rgba)?;
+        let entry = data.join("applications/doa-player.desktop");
+        std::fs::write(
+            &entry,
+            format!(
+                "[Desktop Entry]\nType=Application\nName=DOA Player\nExec={}\nIcon={}\nTerminal=false\nCategories=Graphics;Viewer;\nStartupWMClass=doa-player\n",
+                std::env::current_exe()?.display(),
+                icon_path.display(),
+            ),
+        )?;
+        Ok(entry)
     }
 
     /// Exports the next queued costume, if any.

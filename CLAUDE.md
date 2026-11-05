@@ -31,6 +31,7 @@ EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"  
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
 target/fast/doa_player --export-all                                                 # every costume, no visible window, about 3.5 minutes
+target/release/doa_player --install-icon                                            # icon and desktop entry in ~/.local/share, needed on Wayland
 ```
 
 ## Current state of DOA2U (2026-11-04)

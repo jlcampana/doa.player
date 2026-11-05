@@ -235,6 +235,49 @@ pub fn parse_xpr_textures(data: &[u8]) -> Result<Vec<ModelTexture>> {
     Ok(textures)
 }
 
+/// Reads a plain XPR, as DOA2U's menu sprites are: resources from +0xC, each texture followed
+/// by the palette it uses, which several textures can share. Format 0x0B is swizzled 8 bit.
+pub fn parse_sprite_xpr(data: &[u8]) -> Result<Vec<ModelTexture>> {
+    let header_size = read_u32(data, 8)? as usize;
+    let mut resources = Vec::new();
+    let mut offset = 0xC;
+    while offset + 12 <= header_size {
+        let common = read_u32(data, offset)?;
+        if common == 0 || common == u32::MAX {
+            break;
+        }
+        let data_offset = read_u32(data, offset + 4)? as usize + header_size;
+        match (common >> 16) & 7 {
+            4 => {
+                resources.push((data_offset, Some(read_u32(data, offset + 12)?)));
+                offset += 20;
+            }
+            3 => {
+                resources.push((data_offset, None));
+                offset += 12;
+            }
+            other => bail!("unknown resource type {other} at {offset:#x}"),
+        }
+    }
+    let mut textures = Vec::new();
+    for (i, &(pixels, format)) in resources.iter().enumerate() {
+        let Some(format) = format else { continue };
+        if (format >> 8) & 0xFF != 0x0B {
+            textures.push(decode_texture(data, pixels, format));
+            continue;
+        }
+        let width = 1u32 << ((format >> 20) & 0xF);
+        let height = 1u32 << ((format >> 24) & 0xF);
+        let palette = resources[i + 1..].iter().find(|r| r.1.is_none()).context("no palette")?.0;
+        let palette = data.get(palette..palette + 1024).context("palette out of range")?;
+        let indices = data.get(pixels..pixels + (width * height) as usize).context("sprite out of range")?;
+        let texels: Vec<u8> = indices.iter().flat_map(|&v| palette[v as usize * 4..v as usize * 4 + 4].to_vec()).collect();
+        let rgba = decode_swizzled_argb(Some(&texels), width as usize, height as usize).context("sprite size")?;
+        textures.push(ModelTexture { width, height, rgba });
+    }
+    Ok(textures)
+}
+
 fn decode_texture(data: &[u8], offset: usize, format: u32) -> ModelTexture {
     let width = 1u32 << ((format >> 20) & 0xF);
     let height = 1u32 << ((format >> 24) & 0xF);
@@ -360,6 +403,25 @@ pub(super) fn strip_to_triangles(strip: &[u32]) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sprites_read_through_the_palette_that_follows() {
+        let mut x = vec![0u8; 0x800 + 4 + 1024];
+        x[..4].copy_from_slice(b"XPR0");
+        x[8..12].copy_from_slice(&0x800u32.to_le_bytes());
+        // A 2x2 texture at the data's start, then its palette after the four indices.
+        x[0xC..0x10].copy_from_slice(&0x0004_0001u32.to_le_bytes());
+        x[0x18..0x1C].copy_from_slice(&((1u32 << 20) | (1 << 24) | (0x0B << 8)).to_le_bytes());
+        x[0x20..0x24].copy_from_slice(&0x0083_0001u32.to_le_bytes());
+        x[0x24..0x28].copy_from_slice(&4u32.to_le_bytes());
+        x[0x800..0x804].copy_from_slice(&[1, 0, 0, 0]);
+        // Stored as blue, green, red, alpha.
+        x[0x804 + 4..0x804 + 8].copy_from_slice(&[30, 20, 10, 40]);
+        let sprites = parse_sprite_xpr(&x).unwrap();
+        assert_eq!((sprites[0].width, sprites[0].height), (2, 2));
+        assert_eq!(&sprites[0].rgba[..4], &[10, 20, 30, 40]);
+        assert_eq!(&sprites[0].rgba[4..8], &[0, 0, 0, 0]);
+    }
+
     use super::*;
 
     #[test]

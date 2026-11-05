@@ -46,13 +46,16 @@ impl ApplicationHandler for Handler {
             return;
         }
 
+        // The name the desktop matches with `doa-player.desktop`, on each of Wayland and X11.
+        let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(Window::default_attributes(), "doa-player", "doa-player");
+        let attributes = winit::platform::x11::WindowAttributesExtX11::with_name(attributes, "doa-player", "doa-player");
         let window = Arc::new(
             event_loop
                 .create_window(
-                    Window::default_attributes()
+                    attributes
                         .with_title("DOA Player")
                         // Exporting from the command line needs the GPU, not a window on the desktop.
-                        .with_visible(!std::env::args().any(|a| a == "--export" || a == "--export-all"))
+                        .with_visible(!std::env::args().any(|a| a == "--export" || a == "--export-all" || a == "--install-icon"))
                         .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
                 )
                 .expect("window creation failed"),
@@ -416,6 +419,7 @@ fn build_ui(
 /// `doa_player --load "Jann Lee" 0 [motion] [yaw degrees] [distance] [target height]`
 /// opens with a DOA3 character loaded, optionally paused with the camera placed.
 /// `--doa2u` looks the name up among DOA2U characters instead.
+/// `--install-icon` writes the icon and a desktop entry to the user's folders, and exits.
 /// `--export-all` writes every costume of both games, without `--load`, and exits.
 /// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
 /// `--all-motions`, all of them.
@@ -423,6 +427,13 @@ fn build_ui(
 /// `--frame <frame>`, which holds the motion on that frame.
 fn load_from_arguments(app: &mut App) {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--install-icon") {
+        match app.install_desktop_entry() {
+            Ok(path) => println!("Wrote {}", path.display()),
+            Err(error) => println!("Could not install the icon: {error:#}"),
+        }
+        std::process::exit(0);
+    }
     if args.iter().any(|a| a == "--export-all") {
         let all_motions = args.iter().any(|a| a == "--all-motions");
         let mut written = 0;

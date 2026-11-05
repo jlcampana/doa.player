@@ -9,6 +9,8 @@ pub struct CharSelectPanel {
     pub export_all_motions: bool,
     pub export_request: Option<ExportRequest>,
     filter: String,
+    /// The app's icon, beside its name.
+    pub logo: Option<egui::TextureHandle>,
 }
 
 /// What the Export buttons ask for.
@@ -28,6 +30,7 @@ impl CharSelectPanel {
             export_all_motions: false,
             export_request: None,
             filter: String::new(),
+            logo: None,
         }
     }
 
@@ -45,7 +48,12 @@ impl CharSelectPanel {
             .resizable(true)
             .default_width(200.0)
             .show(ctx, |ui| {
-                ui.heading("DOA Player");
+                ui.horizontal(|ui| {
+                    if let Some(logo) = &self.logo {
+                        ui.image((logo.id(), egui::Vec2::splat(26.0)));
+                    }
+                    ui.heading("DOA Player");
+                });
                 ui.separator();
 
                 // Game source toggle
