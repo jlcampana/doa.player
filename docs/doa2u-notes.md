@@ -297,6 +297,10 @@ The `A0` series is DOA3's format, both `cat` (plain, starting with 1) and `xpr` 
 
 `formats/adx.rs` follows the usual description of ADX. Against ffmpeg on all 712 clips, the 58 dummies are identical and the others are not: on one clip, an RMS difference of 30 on a signal of 6217, and a worst of 137. ffmpeg's first nonzero sample there, -27, is not a multiple of the block's scale of 7, so the two differ in more than coefficients, and which is exact was not settled. Playback writes a temporary WAV and runs `pw-play`, `paplay` or `aplay`. Not heard by Claude. `export_clips_for_comparison` writes the clips for such a comparison.
 
+## Characters from the intro
+
+The user recognizes some extra characters as the intro's (2026-11-05): `ytina` as Tina as a girl and an animal as a meerkat. Going by one render of each, and not compared with the intro: `pdg` is an animal, likely the meerkat (`pdog`, perhaps prairie dog), though its pose looks wrong; `mam` (`mama`) is a woman in a long white dress; `wba` (`wakabs`) is a man in a headband who looks like Bass; `lor` (`loran`) lies wrapped in a blanket; `hks` lies on the ground and what it is was not worked out. They are not fighters, whatever list their IDs appear in.
+
 ## Unlocks
 
 Costumes offered in a slot come from a byte in the save, at +0x2ED8 from the save in memory (pointer at `0x87CFA8`), with slots by ID at `0x6959C0`, clamped to `0x6E0F08` (`sub_0011E410`). In this save, read from memory, all 15 are already at the maximum: 8, 16, 8, 7, 9, 20, 8, 13, 7, 8, 20, 20, 3, 6, 14. So nothing was changed. The save, `.recomp-storage/partition1/UDATA/54430006/*/ups.dat`, is 74056 bytes and looks encrypted, as the bytes in memory are not in it; its format was not read. Characters and costumes the select screen does not offer are in the viewer anyway.
