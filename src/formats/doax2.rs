@@ -580,17 +580,26 @@ pub struct Loaded {
     pub pieces: Vec<(ModelPiece, usize, Placed)>,
     pub textures: Vec<ModelTexture>,
     pub rest: Vec<Mat4>,
+    pub nodes: Vec<Node>,
 }
 
-/// The game bone the head file hangs from: the neck. The head's root node has no parent in
-/// its file, and its offset matches the body's head node from the neck (0.076 against 0.061 m
-/// up, 1.5 cm forward in both on Tina).
+/// The body's neck bone. The body's head node is the neck node's child.
 pub const NECK_SLOT: u32 = 20;
 
 impl Loaded {
     /// The node of the first piece on a game bone.
     pub fn slot_node(&self, slot: u32) -> Option<usize> {
         self.pieces.iter().find(|(_, _, placed)| placed.slot == slot).map(|(_, node, _)| *node)
+    }
+
+    /// Where a head file's root goes: on the body's head node, the neck's child. The head's
+    /// root has no parent in its file and its own offset is not the body's; placed this way
+    /// the head's neck edge meets the body's with no gap on all five characters
+    /// (`head_meets_neck`), against 2 to 29 mm from the neck with the head's offset.
+    pub fn head_frame(&self) -> Option<Mat4> {
+        let neck = self.slot_node(NECK_SLOT)?;
+        let head = *self.nodes.get(neck)?.children.first()?;
+        Some(self.rest[head])
     }
 }
 
@@ -614,7 +623,7 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
         };
         pieces.push((object_piece(&xpr, object)?, *node, placed));
     }
-    Ok(Loaded { pieces, textures: textures(&xpr), rest })
+    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes })
 }
 
 #[cfg(test)]
@@ -667,6 +676,26 @@ mod tests {
                 hi = hi.max(v.position.into());
             }
             println!("head piece {placed:?} node {node}: {} vertices, local {lo:?} {hi:?}, {} draws", piece.vertices.len(), piece.materials.len());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn head_meets_neck() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for (_, code) in ROSTER {
+            let body = load(&chr.read(&format!("v{code}1.tpr")).unwrap(), &chr.read(&format!("v{code}1.cat")).unwrap()).unwrap();
+            let head = load(&chr.read(&format!("v{code}AA.tpr")).unwrap(), &chr.read(&format!("v{code}AA.cat")).unwrap()).unwrap();
+            let neck = body.slot_node(NECK_SLOT).unwrap();
+            let points: Vec<Vec3> = body.pieces.iter().filter(|p| p.1 == neck).flat_map(|(piece, node, _)| piece.vertices.iter().map(|v| body.rest[*node].transform_point3(v.position.into()))).collect();
+            let top = points.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+            let (piece, node, _) = &head.pieces[0];
+            let m = body.head_frame().unwrap() * head.rest[0].inverse() * head.rest[*node];
+            let head_points: Vec<Vec3> = piece.vertices.iter().map(|v| m.transform_point3(v.position.into())).collect();
+            for rim in points.iter().filter(|p| p.y > top - 0.005) {
+                let gap = head_points.iter().map(|p| p.distance(*rim)).fold(f32::MAX, f32::min);
+                assert!(gap < 1e-4, "{code}: gap {gap}");
+            }
         }
     }
 

@@ -781,11 +781,14 @@ impl App {
         let mut nodes = Vec::new();
         let mut textures = Vec::new();
         let mut placed = Vec::new();
-        // The head file's nodes hang from the body's neck.
-        let neck = files[0].slot_node(doax2::NECK_SLOT).map_or(glam::Mat4::IDENTITY, |node| files[0].rest[node]);
+        // The head file's root goes on the body's head node.
+        let head_frame = match (files[0].head_frame(), files[1].rest.first()) {
+            (Some(frame), Some(root)) => frame * root.inverse(),
+            _ => glam::Mat4::IDENTITY,
+        };
         for (index, file) in files.iter().enumerate() {
             let (node_base, texture_base) = (nodes.len(), textures.len());
-            let parent = if index == 1 { neck } else { glam::Mat4::IDENTITY };
+            let parent = if index == 1 { head_frame } else { glam::Mat4::IDENTITY };
             nodes.extend(file.rest.iter().map(|m| flip * lift * parent * *m));
             textures.extend(file.textures.iter().cloned());
             for (piece, node, _) in &file.pieces {

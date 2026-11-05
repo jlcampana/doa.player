@@ -96,9 +96,10 @@ Section kind 2 of the directory is a table of draw list offsets (zero for none).
 each a whole set of the suit's objects, not told apart yet (the viewer draws the first).
 Bones seen: 0 chest, 1 head, 2 pelvis, 16 and 17 eyes, 18 and 21 collars, 20 neck, 23 spine.
 
-The head file's root node has no parent. Its offset matches the body's head node from the neck
-(0.076 m against 0.061 m up, 1.5 cm forward in both on Tina), so the viewer hangs the head from
-the body's bone 20. Suits carry their own copy of the body's node tree.
+The head file's root node has no parent, and its own offset is not the body's. Put on the body's
+head node (the child of the neck, bone 20), the head's neck edge meets the body's with no gap on
+all five characters (`head_meets_neck`); hung from the neck with the head's own offset, the gap
+was 2 to 29 mm. Suits carry their own copy of the body's node tree.
 
 Suit CATs are 200 to 600 KB. Suit models hold their own copy of the hierarchy and several
 variants of the chest and pelvis objects (187 objects in `vtn_tk_b_m`).
