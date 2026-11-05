@@ -119,9 +119,10 @@ struct LoadedModel {
     /// Vertices in bone space. Posed copies are uploaded every frame.
     rest_vertices: Vec<MeshVertex>,
     posed_vertices: Vec<MeshVertex>,
-    /// Triangles of materials without the game's lighting, DOA3's. Their file normals disagree
-    /// with the surface on about half of the vertices, so their normals are worked out from the
-    /// posed triangles each frame, over the whole model so that seams between pieces stay smooth.
+    /// Triangles of materials without the game's lighting, DOA3's. Some of their file normals,
+    /// 6 to 12 percent on three characters, are over 60 degrees from their surface, which shows
+    /// as patches. So their normals are worked out from the posed triangles each frame, over the
+    /// whole model so that seams between pieces stay smooth, on the side the file's point to.
     unlit_triangles: Vec<u32>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -764,7 +765,9 @@ impl MeshRenderer {
         }
         if !model.unlit_triangles.is_empty() {
             let positions: Vec<glam::Vec3> = model.posed_vertices.iter().map(|v| glam::Vec3::from(v.position)).collect();
-            for (vertex, normal) in model.posed_vertices.iter_mut().zip(smooth_normals(&positions, &model.unlit_triangles)) {
+            let given: Vec<glam::Vec3> = model.posed_vertices.iter().map(|v| glam::Vec3::from(v.normal)).collect();
+            let smooth = smooth_normals(&positions, &given, &model.unlit_triangles);
+            for (vertex, normal) in model.posed_vertices.iter_mut().zip(smooth) {
                 if let Some(normal) = normal {
                     vertex.normal = normal.to_array();
                 }
@@ -829,15 +832,20 @@ impl MeshRenderer {
 }
 
 /// Normals from triangles, area weighted and shared by vertices at the same place, so that
-/// seams stay smooth. Their sign follows the winding, which shading of these models ignores.
+/// seams stay smooth. Triangle strips do not keep one winding, so each face takes the side
+/// that the given normals of its corners point to, and only their sign is used.
 /// Vertices in none of the triangles get none.
-fn smooth_normals(positions: &[glam::Vec3], triangles: &[u32]) -> Vec<Option<glam::Vec3>> {
+fn smooth_normals(positions: &[glam::Vec3], given: &[glam::Vec3], triangles: &[u32]) -> Vec<Option<glam::Vec3>> {
     let key = |p: glam::Vec3| [p.x, p.y, p.z].map(|c| (c * 10000.0).round() as i64);
     let mut sums: std::collections::HashMap<[i64; 3], glam::Vec3> = std::collections::HashMap::new();
     let mut used = vec![false; positions.len()];
     for triangle in triangles.chunks_exact(3) {
         let [Some(&a), Some(&b), Some(&c)] = [0, 1, 2].map(|i| positions.get(triangle[i] as usize)) else { continue };
-        let face = (b - a).cross(c - a);
+        let mut face = (b - a).cross(c - a);
+        let hint: glam::Vec3 = triangle.iter().filter_map(|&i| given.get(i as usize)).sum();
+        if face.dot(hint) < 0.0 {
+            face = -face;
+        }
         for &index in triangle {
             used[index as usize] = true;
             *sums.entry(key(positions[index as usize])).or_default() += face;
@@ -1293,20 +1301,21 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn smooth_normals_follow_the_winding_and_join_seams() {
-        // A tetrahedron wound outwards, with one corner split in two, as a seam between pieces.
+    fn smooth_normals_take_their_side_from_the_given_normals() {
+        // A tetrahedron with one face wound inwards, as strips do, and one corner split in two,
+        // as a seam between pieces. Given normals point roughly outwards.
         let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, Vec3::ZERO];
         let center = Vec3::splat(0.25);
-        let triangles = [0, 2, 1, 4, 1, 3, 0, 3, 2, 1, 2, 3];
-        let normals = smooth_normals(&corners, &triangles);
+        let given: Vec<Vec3> = corners.iter().map(|&c| (c - center).normalize()).collect();
+        let triangles = [0, 1, 2, 4, 1, 3, 0, 3, 2, 1, 2, 3];
+        let normals = smooth_normals(&corners, &given, &triangles);
         for (i, n) in normals.iter().enumerate() {
-            let outward = (corners[i] - center).normalize();
-            assert!(n.unwrap().dot(outward) > 0.5, "{i}: {n:?}");
+            assert!(n.unwrap().dot(given[i]) > 0.5, "{i}: {n:?}");
         }
-        // Both halves of the seam get the same normal.
         assert_eq!(normals[0], normals[4]);
-        assert_eq!(smooth_normals(&corners, &[0, 1, 2])[3], None);
+        assert_eq!(smooth_normals(&corners, &given, &[0, 1, 2])[3], None);
     }
+
 
     #[test]
     fn lightning_dims_three_lights_and_adds_a_white_one() {
