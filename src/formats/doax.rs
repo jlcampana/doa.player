@@ -371,7 +371,7 @@ fn key_short_slope(raw: u32) -> f32 {
 /// duration, with the table at 0x2D1248 giving each kind's function and size. Kind 0 is a
 /// cubic with two slopes, 1 a line, 2 a parabola and 3 a constant. A head with no kind or
 /// duration ends the track. Kinds 0 to 2 end at the next key's value.
-fn eval_track(data: &[u8], start: usize, t: f32) -> Option<f32> {
+fn eval_track(data: &[u8], start: usize, t: f32, angle: bool) -> Option<f32> {
     let u16_at = |at: usize| Some(u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32);
     let (mut at, mut segment_start) = (start, 0f32);
     loop {
@@ -382,8 +382,18 @@ fn eval_track(data: &[u8], start: usize, t: f32) -> Option<f32> {
         }
         let size = [10, 4, 6][kind as usize];
         if t < segment_start + dt {
-            let (v0, v1) = (key_value(data, at)?, key_value(data, at + size)?);
+            let (v0, mut v1) = (key_value(data, at)?, key_value(data, at + size)?);
+            // Angles wrap between keys: 0.01 to 6.27 is a small turn back, and going through pi
+            // would flip a bone between two frames.
+            if angle {
+                v1 = v0 + (v1 - v0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            }
             let x = t - segment_start;
+            // A line of one frame is how an angle changes to an equal form, such as all three
+            // of a bone's angles moving by pi. Between two frames it would be a wrong turn.
+            if angle && kind == 1 && dt <= 1.0 {
+                return Some(v0);
+            }
             let slope = (v1 - v0) / dt;
             return Some(match kind {
                 0 => {
@@ -405,13 +415,18 @@ fn eval_track(data: &[u8], start: usize, t: f32) -> Option<f32> {
     }
 }
 
+/// The root's position and the limbs' targets. The rest are angles.
+fn is_position_track(track: usize) -> bool {
+    track < 3 || LIMBS.iter().any(|limb| (limb.first_track..limb.first_track + 3).contains(&track))
+}
+
 /// Evaluates a motion's tracks. Their order in the file is the order in memory, unless a
 /// motion is mirrored, which swaps sides by the table at 0x2D1360.
 pub fn eval_motion(data: &[u8], motion: &Motion, frame: f32) -> Result<[f32; TRACK_COUNT]> {
     let mut values = [0f32; TRACK_COUNT];
     for (i, value) in values.iter_mut().enumerate() {
         let offset = read_u32(data, motion.block + 4 + i * 4)? as usize;
-        *value = eval_track(data, motion.block + offset, frame).context("motion track out of bounds")?;
+        *value = eval_track(data, motion.block + offset, frame, !is_position_track(i)).context("motion track out of bounds")?;
     }
     Ok(values)
 }
@@ -610,6 +625,46 @@ mod tests {
                 all.into_iter().take(6).map(|(t, e)| (t, (e * 1000.0).round() / 1000.0)).collect()
             };
             println!("char {} tracks off {} of 57: {} id {} frame {} worst {:?}", words[1], best.0, best.1, best.2, best.3, worst);
+        }
+    }
+
+    /// Prints the biggest turn of a bone between half frames, over a `.mot`. A flip shows as
+    /// close to pi. DOAX_MOT is its name.
+    #[test]
+    #[ignore]
+    fn doax_motions_turn_smoothly() {
+        let archive = LazyArchive::open("assets/doax/datadvd.afs").unwrap();
+        let xbe = std::fs::read("assets/doax/default.xbe").unwrap();
+        let rows = bone_rows(&xbe, 0).unwrap();
+        let data = archive.read(&std::env::var("DOAX_MOT").expect("DOAX_MOT")).unwrap();
+        let mut found = Vec::new();
+        for motion in list_motions(&data) {
+            let mut before: Option<[Mat4; BONE_COUNT]> = None;
+            for half in 0..=motion.frames * 2 {
+                let pose = solve_game_space(&eval_motion(&data, &motion, half as f32 / 2.0).unwrap(), &rows);
+                if let Some(old) = before {
+                    for bone in [2usize, 23, 0, 19, 1, 16, 20, 3, 9, 5, 11] {
+                        let turn = glam::Quat::from_mat4(&(old[bone].inverse() * pose[bone]).normalize_rotation()).angle_between(glam::Quat::IDENTITY);
+                        found.push((turn, motion.id, half as f32 / 2.0, motion.frames, bone));
+                    }
+                }
+                before = Some(pose);
+            }
+        }
+        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!("{} samples, over 0.5 rad: {}", found.len(), found.iter().filter(|f| f.0 > 0.5).count());
+        for f in found.iter().take(8) {
+            println!("turn {:.2} motion {} at {} of {} bone {}", f.0, f.1, f.2, f.3, f.4);
+        }
+    }
+
+    trait NormalizeRotation {
+        fn normalize_rotation(self) -> Mat4;
+    }
+    impl NormalizeRotation for Mat4 {
+        fn normalize_rotation(self) -> Mat4 {
+            let (_, rotation, _) = self.to_scale_rotation_translation();
+            Mat4::from_quat(rotation)
         }
     }
 
