@@ -631,7 +631,7 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
     let mut hands = Vec::with_capacity(2);
     for entry_index in [1, 0] {
         // Some entries of `pdg` and `yti` have other layouts, not read. They keep their hands.
-        match read_hand(cat, base, entry_index) {
+        match read_hand(cat, base, entry_index, VERTEX_SIZE) {
             Ok(Some(hand)) => hands.push(hand),
             Ok(None) => {}
             Err(e) => log::warn!("Hand entry {entry_index} not read: {e:#}"),
@@ -641,13 +641,17 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
 }
 
 /// Reads any morph set of the `apv` section at CAT word 3, as `hands` reads the first two.
-/// DOAX keeps its chest and swimsuit shapes in the same form.
-pub fn morph_set(cat: &[u8], entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
+/// DOAX keeps its chest and swimsuit shapes in the same form. The lists hold byte offsets,
+/// so the object's vertex size, with its extra weights, gives the index: pieces bent by
+/// several bones have 36 or more bytes a vertex, not 32.
+pub fn morph_set(cat: &[u8], xpr: &[u8], entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
     let base = read_u32(cat, 0xC)? as usize;
     if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? as usize <= entry_index {
         return Ok(None);
     }
-    read_hand(cat, base, entry_index)
+    let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;
+    let stride = vertex_stride(xpr, (read_u32(cat, entry + 4)? & 0xFF) as usize)?;
+    read_hand(cat, base, entry_index, stride)
 }
 
 pub(crate) fn morph_set_count(cat: &[u8]) -> usize {
@@ -658,7 +662,7 @@ pub(crate) fn morph_set_count(cat: &[u8]) -> usize {
     read_u32(cat, base + 4).map_or(0, |n| n as usize)
 }
 
-fn read_hand(cat: &[u8], base: usize, entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
+fn read_hand(cat: &[u8], base: usize, entry_index: usize, stride: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
     {
         let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;
         let targets = read_u32(cat, entry)? as usize;
@@ -676,7 +680,7 @@ fn read_hand(cat: &[u8], base: usize, entry_index: usize) -> Result<Option<crate
                 loop {
                     let value = read_u32(cat, list)?;
                     list += 4;
-                    group.push(((value & !1) / 32) as usize);
+                    group.push(((value & !1) as usize / stride) as usize);
                     if value & 1 == 0 {
                         break;
                     }

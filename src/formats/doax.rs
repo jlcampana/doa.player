@@ -503,10 +503,10 @@ pub fn chest_weight(value: f32) -> (usize, f32) {
 /// The sets of 3 shapes in a CAT's `apv` section that the chest spring drives: on a body the
 /// chest and the two upper arms, on a suit its chest piece. Hands, the first two of a body,
 /// and faces, with more shapes, are left out.
-pub fn chest_sets(cat: &[u8], body: bool) -> Vec<super::doa3_morphs::PoseHand> {
+pub fn chest_sets(cat: &[u8], xpr: &[u8], body: bool) -> Vec<super::doa3_morphs::PoseHand> {
     let first = if body { 2 } else { 0 };
     (first..super::doa2u::morph_set_count(cat))
-        .filter_map(|entry| super::doa2u::morph_set(cat, entry).ok().flatten())
+        .filter_map(|entry| super::doa2u::morph_set(cat, xpr, entry).ok().flatten())
         .filter(|set| set.shapes.len() == 3)
         .collect()
 }
@@ -991,12 +991,12 @@ mod tests {
         let hdd = LazyArchive::open("assets/doax/datahdd.afs").unwrap();
         let body = dvd.read("vtn00.cat").unwrap();
         for entry in 0..super::super::doa2u::morph_set_count(&body) {
-            let set = super::super::doa2u::morph_set(&body, entry);
+            let set = super::super::doa2u::morph_set(&body, &dvd.read("vtn00.xpr").unwrap(), entry);
             println!("body set {entry}: {:?}", set.as_ref().map(|s| s.as_ref().map(|s| (s.object, s.shapes.len()))));
         }
         let suit = hdd.read("mdAy00tn.cat").unwrap();
-        println!("body chest sets {:?}", chest_sets(&body, true).iter().map(|s| s.object).collect::<Vec<_>>());
-        println!("suit chest sets {:?}", chest_sets(&suit, false).iter().map(|s| s.object).collect::<Vec<_>>());
+        println!("body chest sets {:?}", chest_sets(&body, &dvd.read("vtn00.xpr").unwrap(), true).iter().map(|s| s.object).collect::<Vec<_>>());
+        println!("suit chest sets {:?}", chest_sets(&suit, &hdd.read("mdAy00tn.xpr").unwrap(), false).iter().map(|s| s.object).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1091,5 +1091,53 @@ mod tests {
         assert!((pose[3].w_axis.y - FOOT_HEIGHT).abs() < 1e-5);
         assert!((pose[9].w_axis.y - FOOT_HEIGHT).abs() < 1e-5);
         assert_eq!(pose[15].w_axis.y, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod chest_set_check {
+    use super::*;
+
+    /// Each chest set's base shape is its piece's own vertices, for every character and suit.
+    /// Reading the lists as 32-byte vertices put the arm and suit sets on the wrong vertices.
+    #[test]
+    #[ignore]
+    fn chest_base_shapes_are_their_pieces() {
+        let dvd = LazyArchive::open("assets/doax/datadvd.afs").unwrap();
+        let hdd = LazyArchive::open("assets/doax/datahdd.afs").unwrap();
+        let names: Vec<String> = hdd.names().map(str::to_string).collect();
+        let worst = std::cell::Cell::new(0f32);
+        let check = |name: &str, xpr: &[u8], cat: &[u8], body: bool| -> usize {
+            // A few suit files do not parse as models; the viewer cannot load them either.
+            let Ok(model) = super::super::doa2u::parse_model(xpr) else {
+                println!("{name}: not a model");
+                return 0;
+            };
+            let sets = chest_sets(cat, xpr, body);
+            for set in &sets {
+                let piece = &model.pieces[set.object];
+                for (group, value) in set.vertices.iter().zip(&set.shapes[0]) {
+                    for &v in group {
+                        let rest = piece.vertices.get(v).unwrap_or_else(|| panic!("{name}: vertex {v} out of object {}", set.object));
+                        let error = glam::Vec3::from(*value).distance(glam::Vec3::from(rest.position));
+                        // Lei Fang's `mdTn90le` to `mdTn92le` have 66 vertices up to 4 mm from
+                        // their base shape, in the file; every other set is within 0.03 mm.
+                        assert!(error < 5e-3, "{name} object {} vertex {v}: {error}", set.object);
+                        worst.set(worst.get().max(error));
+                    }
+                }
+            }
+            sets.len()
+        };
+        for (_, code, _) in ROSTER {
+            let body = check(code, &dvd.read(&format!("v{code}00.xpr")).unwrap(), &dvd.read(&format!("v{code}00.cat")).unwrap(), true);
+            let mut suits = 0;
+            for stem in costumes(names.iter().map(String::as_str), code) {
+                // Some, such as `mdEar_tn`, have no CAT.
+                let Ok(cat) = hdd.read(&format!("{stem}.cat")) else { continue };
+                suits += check(&stem, &hdd.read(&format!("{stem}.xpr")).unwrap(), &cat, false);
+            }
+            println!("{code}: {body} body sets, {suits} suit sets, largest error {:.5}", worst.get());
+        }
     }
 }

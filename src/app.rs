@@ -848,12 +848,12 @@ impl App {
             })
             .collect();
         let mut chest_sets = Vec::new();
-        for set in doax::chest_sets(&body_cat, true) {
+        for set in doax::chest_sets(&body_cat, &body_xpr, true) {
             if let Some(piece) = rigid_objects.iter().position(|&object| object == set.object) {
                 chest_sets.push((set, piece));
             }
         }
-        for set in doax::chest_sets(&suit_cat, false) {
+        for set in doax::chest_sets(&suit_cat, &suit_xpr, false) {
             if let Some(&(_, piece)) = suit_inputs.iter().find(|(object, _)| *object == set.object) {
                 chest_sets.push((set, piece));
             }
