@@ -120,6 +120,8 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
     // Prefixes in the `A0` series follow the order of the table at 0x695848, which runs by ID:
     // that `bay` there is Leon and `sam` Bayman, and the IDs of `nin`, `sui` and `gok`, are
     // inferred from it. `hks` has no .bin, and its ID is inferred from the costume counts.
+    // `nin`, `sui` and `gok` are named from the pieces and textures they share with DOA3's
+    // models (`compare_a0_series_with_doa3`), and move as in DOA3: see `a0_doa3_character`.
     let roster: [(&[&str], &[&str], &str, &str, usize); 24] = [
         (&["kas"], &[], "kasumi", "Kasumi", 5),
         (&["aya"], &[], "ayane", "Ayane", 13),
@@ -144,10 +146,11 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
         (&["lor"], &[], "loran", "Loran", 15),
         (&["hks"], &[], "", "hks", 16),
         (&["yti"], &[], "ytina", "ytina", 18),
-        // These three have no motions of their own: they borrow some, so as not to lie down.
-        (&["nin"], &[], "ryu", "nin", 10),
-        (&["sui"], &[], "karate", "sui", 22),
-        (&["gok"], &[], "genfu", "gok", 23),
+        // These three have no motions in DOA2U. Without DOA3's files they borrow some, so as
+        // not to lie down.
+        (&["nin"], &[], "ryu", "Hayate", 10),
+        (&["sui"], &[], "karate", "Brad Wong", 22),
+        (&["gok"], &[], "genfu", "Christie", 23),
     ];
     roster
         .iter()
@@ -172,6 +175,17 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
             doa2u_id: Some(*id),
         })
         .collect()
+}
+
+/// DOA3's ID of a character with `A0` models and no files in DOA2U: Hayate, Brad Wong and
+/// Christie. Their bones and motions are in DOA3's, when that game's files are present.
+fn a0_doa3_character(prefix: &str) -> Option<usize> {
+    match prefix {
+        "nin" => Some(11),
+        "sui" => Some(19),
+        "gok" => Some(20),
+        _ => None,
+    }
 }
 
 /// Builds the DOA3 character list. A costume is every model between a
@@ -380,6 +394,8 @@ pub struct Doa3Pose {
     pub motion: Option<Doa3Motion>,
     pub chest: Option<Doa3Chest>,
     pub chains: Doa3Chains,
+    /// The motions are in DOA3's `loadfile.afs`, not in DOA2U's archive.
+    pub motions_in_doa3: bool,
 }
 
 /// Hair, ribbons and hanging cloth.
@@ -573,6 +589,7 @@ impl App {
         let display_name = entry.display_name.clone();
         let bin_id = entry.bin_id.clone();
         let id = entry.doa2u_id.context("character has no ID")?;
+        let doa3_character = a0_doa3_character(&entry.id);
 
         if self.doa2u_xbe.is_none() {
             self.doa2u_xbe = Some(Xbe::from_bytes(std::fs::read(DOA2U_XBE_PATH)?)?);
@@ -591,8 +608,16 @@ impl App {
         doa2u::decrypt_xpr(&mut xpr)?;
         doa2u::decrypt_cat(&mut cat)?;
         if cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
-            let skeleton = doa2u::skeleton(xbe, id)?;
-            return self.load_doa3_format_costume(char_idx, &display_name, &stem, &bin_id, id, skeleton, &xpr, &cat);
+            let home = self.doa3_xbe.as_ref().filter(|_| self.loadfile_archive.is_some()).and_then(|xbe| {
+                let home = xbe.roster().ok()?.into_iter().find(|r| Some(r.id) == doa3_character)?;
+                Some((xbe.skeleton(home.id).ok()?, home))
+            });
+            let skeleton = match &home {
+                Some((skeleton, _)) => *skeleton,
+                None => doa2u::skeleton(xbe, id)?,
+            };
+            let home = home.map(|(_, home)| home);
+            return self.load_doa3_format_costume(char_idx, &display_name, &stem, &bin_id, id, skeleton, home, &xpr, &cat);
         }
 
         let mut model = doa2u::parse_model(&xpr)?;
@@ -763,7 +788,7 @@ impl App {
             log::info!("Chest spring on object {object}, {} groups", groups.len());
             Some(Doa3Chest { piece, groups, spring: None, frame: 0 })
         });
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains, motions_in_doa3: false });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -780,9 +805,10 @@ impl App {
 
     /// The archive that holds the current character's motion files.
     fn motion_archive(&self) -> Option<&AfsArchive> {
-        match self.char_panel.selected_source {
-            GameSource::Doa2U => self.hdd_archive.as_ref(),
-            GameSource::Doa3 => self.loadfile_archive.as_ref(),
+        if self.doa3_pose.as_ref().is_some_and(|pose| pose.motions_in_doa3) {
+            self.loadfile_archive.as_ref()
+        } else {
+            self.hdd_archive.as_ref()
         }
     }
 
@@ -799,8 +825,8 @@ impl App {
     }
 
     /// The `A0` series of DOA2U's `char_doa3` folder, in DOA3's format, posed by DOA3's solve
-    /// with DOA2U's bones and motions. It has DOA3's shading and no chest spring. How the game
-    /// itself uses these files was not read.
+    /// with DOA2U's bones and motions, or those of `home` in DOA3's files. It has DOA3's
+    /// shading and no chest spring. How the game itself uses these files was not read.
     #[allow(clippy::too_many_arguments)]
     fn load_doa3_format_costume(
         &mut self,
@@ -810,6 +836,7 @@ impl App {
         bin_id: &str,
         id: usize,
         skeleton: [glam::Vec3; 17],
+        home: Option<RosterEntry>,
         xpr: &[u8],
         cat: &[u8],
     ) -> anyhow::Result<String> {
@@ -903,10 +930,19 @@ impl App {
             self.bg_panel.frame_request = Some(crate::renderer::mesh::FramePart::Full);
             self.framed_character = Some(char_idx);
         }
-        self.current_animations = self.hdd_archive.as_ref().map_or_else(Vec::new, |a| doa2u_animations(bin_id, a));
+        self.current_animations = match (&home, &self.loadfile_archive, &self.hdd_archive) {
+            (Some(home), Some(archive), _) => doa3_animations(home, archive),
+            (_, _, Some(archive)) => doa2u_animations(bin_id, archive),
+            _ => Vec::new(),
+        };
         let hands = doa3_morphs::parse_hands(cat, &nodes.rigid);
         let face = doa3_morphs::parse_face(cat, &nodes.rigid);
-        let hand_events = self.hdd_archive.as_ref().and_then(|a| a.get_by_name(&format!("{bin_id}.bin"))).map(doa3_morphs::parse_hand_events).unwrap_or_default();
+        let script = match (&home, &self.loadfile_archive, &self.hdd_archive) {
+            (Some(home), Some(archive), _) => archive.get_by_index(home.bin_entry),
+            (_, _, Some(archive)) => archive.get_by_name(&format!("{bin_id}.bin")),
+            _ => None,
+        };
+        let hand_events = script.map(doa3_morphs::parse_hand_events).unwrap_or_default();
         let chains = Doa3Chains {
             chains,
             cloth,
@@ -918,12 +954,12 @@ impl App {
             hands,
             face,
             hand_events,
-            character: id,
+            character: home.as_ref().map_or(id, |home| home.id),
             pose_hands: Vec::new(),
             normal_rebuilds: Vec::new(),
             copies: Vec::new(),
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains, motions_in_doa3: home.is_some() });
         self.game_clock = 0.0;
         self.select_motion(0);
         Ok(format!("DOA2U: {display_name} {stem}, DOA3 format: {piece_count} pieces, {triangles} triangles, {} textures", textures.len()))
@@ -1142,7 +1178,7 @@ impl App {
             normal_rebuilds: Vec::new(),
             copies: Vec::new(),
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains, motions_in_doa3: true });
         self.game_clock = 0.0;
         let motion_index = config
             .motion
@@ -1169,10 +1205,7 @@ impl App {
         let Some(entry) = self.current_animations.get(index) else { return };
         let id = entry.doa3_motion_id;
         let Some((afs_entry, tracks)) = entry.doa3_motion else { return };
-        let length = match self.char_panel.selected_source {
-            GameSource::Doa2U => self.hdd_archive.as_ref(),
-            GameSource::Doa3 => self.loadfile_archive.as_ref(),
-        }
+        let length = if pose.motions_in_doa3 { self.loadfile_archive.as_ref() } else { self.hdd_archive.as_ref() }
         .and_then(|archive| archive.get_by_index(afs_entry))
         .map_or(0, |data| doa3::motion_length(data, &tracks));
         pose.motion = Some(Doa3Motion { afs_entry, tracks, length: length as f32, id });

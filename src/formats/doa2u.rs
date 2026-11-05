@@ -1666,6 +1666,75 @@ mod tests {
         println!("file's shape, no cloth:     {:?}", summary(&mut still));
     }
 
+    /// Compares the `A0` series in DOA2U's `datadvd.afs` with DOA3's models: for each, the
+    /// DOA3 model sharing the most identical pieces and textures. Needs DOA2U_DISC.
+    #[test]
+    #[ignore]
+    fn compare_a0_series_with_doa3() {
+        use crate::formats::model::{parse_xpr_model, parse_xpr_textures};
+        use std::collections::{hash_map::DefaultHasher, HashSet};
+        use std::hash::{Hash, Hasher};
+        struct Prints { pieces: Vec<u64>, loose: Vec<u64>, textures: Vec<u64>, vertices: usize, height: f32 }
+        let prints = |xpr: &[u8]| -> Option<Prints> {
+            let pieces = parse_xpr_model(xpr).ok()?;
+            let textures = parse_xpr_textures(xpr).ok()?;
+            let hash = |piece: &crate::formats::model::ModelPiece, uv: bool| {
+                let mut h = DefaultHasher::new();
+                for v in &piece.vertices {
+                    v.position.map(f32::to_bits).hash(&mut h);
+                    if uv {
+                        v.uv.map(f32::to_bits).hash(&mut h);
+                    }
+                }
+                h.finish()
+            };
+            let ys = pieces.iter().flat_map(|p| p.vertices.iter().map(|v| v.position[1]));
+            let (low, high) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
+            Some(Prints {
+                pieces: pieces.iter().filter(|p| !p.vertices.is_empty()).map(|p| hash(p, true)).collect(),
+                loose: pieces.iter().filter(|p| !p.vertices.is_empty()).map(|p| hash(p, false)).collect(),
+                textures: textures.iter().map(|t| { let mut h = DefaultHasher::new(); t.rgba.hash(&mut h); h.finish() }).collect(),
+                vertices: pieces.iter().map(|p| p.vertices.len()).sum(),
+                height: high - low,
+            })
+        };
+        let doa3 = crate::formats::AfsArchive::from_file("assets/doa3/loadfile.afs").unwrap();
+        let xbe = crate::formats::doa3::Xbe::from_bytes(std::fs::read("assets/doa3/default.xbe").unwrap()).unwrap();
+        let roster = xbe.roster().unwrap();
+        let mut starts: Vec<(usize, &str)> = roster.iter().map(|r| (r.bin_entry, r.name)).collect();
+        starts.sort_unstable();
+        let mut known = Vec::new();
+        for i in 0..doa3.entries().len() {
+            let Some(data) = doa3.get_by_index(i) else { continue };
+            if data.get(..4) != Some(b"XPR0") || data.get(0x14..0x18) != Some(b"MDL\0") { continue }
+            let Some(p) = prints(data) else { continue };
+            let owner = starts.iter().rev().find(|(start, _)| *start <= i).map_or("?", |(_, n)| n);
+            let cat = doa3.get_by_index(i + 1).unwrap_or(&[]).to_vec();
+            known.push((i, owner, p, cat));
+        }
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datadvd.afs")).unwrap();
+        for entry in archive.entries() {
+            let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+            let Some(cat) = archive.get_by_name(&format!("{stem}.cat")) else { continue };
+            if read_u32(cat, 0).ok() != Some(1) { continue }
+            let Some(xpr) = archive.get_by_name(&format!("{stem}.xpr")) else { continue };
+            let mut xpr = xpr.to_vec();
+            if decrypt_xpr(&mut xpr).is_err() { continue }
+            let Some(p) = prints(&xpr) else { println!("{stem}: no read"); continue };
+            let shared = |a: &[u64], b: &[u64]| { let b: HashSet<_> = b.iter().collect(); a.iter().filter(|x| b.contains(x)).count() };
+            let mut scored: Vec<_> = known.iter().map(|(i, owner, k, c)| {
+                let same_cat = c.len() == cat.len() && c == cat;
+                let bytes = if c.len() == cat.len() { c.iter().zip(cat).filter(|(a, b)| a == b).count() * 100 / cat.len().max(1) } else { 0 };
+                (shared(&p.pieces, &k.pieces) + shared(&p.textures, &k.textures), shared(&p.pieces, &k.pieces), shared(&p.loose, &k.loose), shared(&p.textures, &k.textures), *i, *owner, k.pieces.len(), k.textures.len(), same_cat, bytes, c.len(), xpr.len() as i64 - doa3.get_by_index(*i).map_or(0, |d| d.len()) as i64)
+            }).collect();
+            scored.sort_by_key(|s| std::cmp::Reverse((s.0, s.2)));
+            let b = &scored[0];
+            println!("{stem}: pieces {} verts {} tex {} height {:.2} cat {} | best {} {} pieces {}/{} (no uv {}) textures {}/{} cat same {} {}% size {} xpr size diff {}",
+                p.pieces.len(), p.vertices, p.textures.len(), p.height, cat.len(), b.4, b.5, b.1, b.6, b.2, b.3, b.7, b.8, b.9, b.10, b.11);
+        }
+    }
+
     /// Reads every section the viewer uses, for every costume of both archives. A0 files
     /// are plain, and the others encrypted. Prints what fails, without a body's data.
     #[test]

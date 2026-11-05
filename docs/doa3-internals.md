@@ -220,7 +220,7 @@ No flag for hidden characters has been identified. A fresh save already has 2 in
 
 IDs 10, 15, 16, 21 and 22 (Hakkyoku-ken, K-1, Pro Wrestler, Taekwondo, Demi Human) have no menu list and point at the files of Helena or Kasumi, so they have no models of their own. Tengu has its `.bin` and motions at entries 656 to 658 and only placeholders after them, so no model here.
 
-DOA2U's `datadvd.afs` holds 25 more models in DOA3's format, the `A0` series, which are not byte for byte any of the 96: see "Costume files" in `docs/doa2u-notes.md`. They are listed under DOA2U in the viewer.
+DOA2U's `datadvd.afs` holds 25 more models in DOA3's format, the `A0` series, which are not byte for byte any of the 96: see "Costume files" in `docs/doa2u-notes.md`. They share part of their pieces and textures with DOA3's models, which is how `nin`, `sui` and `gok` were identified as Hayate, Brad Wong and Christie. They are listed under DOA2U in the viewer.
 
 ## Status and plan (2026-11-03)
 
