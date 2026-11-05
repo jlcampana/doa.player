@@ -170,6 +170,29 @@ fn decode_texture(data: &[u8], offset: usize, width: u32, height: u32, format: X
     }
 }
 
+/// Linear DXT blocks to RGBA: `kind` 1, 3 (explicit alpha) or 5 (interpolated alpha).
+pub(crate) fn decode_blocks(data: &[u8], width: u32, height: u32, kind: u8) -> Vec<u8> {
+    match kind {
+        1 => decode_dxt1(data, 0, width, height),
+        5 => decode_dxt4(data, 0, width, height),
+        _ => {
+            let mut rgba = decode_dxt4(data, 0, width, height);
+            let blocks_x = width.div_ceil(4) as usize;
+            for (b, block) in data.chunks_exact(16).enumerate() {
+                let (bx, by) = ((b % blocks_x) * 4, (b / blocks_x) * 4);
+                for p in 0..16usize {
+                    let (x, y) = (bx + p % 4, by + p / 4);
+                    if x < width as usize && y < height as usize {
+                        let nibble = (u64::from_le_bytes(block[..8].try_into().unwrap()) >> (p * 4)) & 0xF;
+                        rgba[(y * width as usize + x) * 4 + 3] = (nibble * 17) as u8;
+                    }
+                }
+            }
+            rgba
+        }
+    }
+}
+
 fn decode_dxt1(data: &[u8], offset: usize, width: u32, height: u32) -> Vec<u8> {
     let blocks_x = ((width + 3) / 4) as usize;
     let blocks_y = ((height + 3) / 4) as usize;

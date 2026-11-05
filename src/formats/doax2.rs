@@ -1,0 +1,539 @@
+//! Dead or Alive Xtreme 2 (Xbox 360): models in XPR2 files, big-endian.
+//!
+//! What is read so far, from Tina's body `vtn1.tpr` in `chr.afs` (see `docs/doax2-notes.md`):
+//! - The XPR2 resource list: `USER` blocks, `TX2D` textures, `VBUF` and `IBUF` buffers whose
+//!   headers end in Xenos fetch constants.
+//! - `MdlGeo`, one `ObjGeo` per object with its `GeoDecl`: vertex declaration, vertex buffers
+//!   with their strides, index buffer and counts.
+//! - `Hie`, the node hierarchy: a matrix per node, the object it draws, its parent and children.
+//! - Textures: DXT1, DXT3, DXT5 and 8888, untiled.
+//!
+//! Not read: `MdlInfo`, materials, the CAT's draw lists and slots, motions.
+
+use anyhow::{bail, Context, Result};
+use glam::{Mat4, Vec3};
+
+use super::model::{ModelMaterial, ModelPiece, ModelTexture, ModelVertex};
+
+fn be32(data: &[u8], at: usize) -> Result<u32> {
+    let bytes = data.get(at..at + 4).with_context(|| format!("read past end at {at:#x}"))?;
+    Ok(u32::from_be_bytes(bytes.try_into()?))
+}
+
+fn be16(data: &[u8], at: usize) -> Result<u16> {
+    let bytes = data.get(at..at + 2).with_context(|| format!("read past end at {at:#x}"))?;
+    Ok(u16::from_be_bytes(bytes.try_into()?))
+}
+
+fn bef32(data: &[u8], at: usize) -> Result<f32> {
+    be32(data, at).map(f32::from_bits)
+}
+
+/// An XPR2 file: its resources, each with its tag and the offset of its header in the file.
+pub struct Xpr2<'a> {
+    pub file: &'a [u8],
+    /// Where the data section starts; buffer and texture addresses are relative to it.
+    pub data: usize,
+    pub resources: Vec<([u8; 4], usize, usize)>,
+}
+
+impl<'a> Xpr2<'a> {
+    pub fn parse(file: &'a [u8]) -> Result<Self> {
+        if file.get(..4) != Some(&b"XPR2"[..]) {
+            bail!("not an XPR2 file");
+        }
+        let header = be32(file, 4)? as usize;
+        let count = be32(file, 12)? as usize;
+        let resources = (0..count)
+            .map(|i| {
+                let at = 16 + i * 16;
+                let tag: [u8; 4] = file.get(at..at + 4).context("resource table")?.try_into()?;
+                Ok((tag, 12 + be32(file, at + 4)? as usize, be32(file, at + 8)? as usize))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { file, data: 12 + header, resources })
+    }
+
+    fn of_kind(&self, tag: &[u8; 4]) -> impl Iterator<Item = usize> + '_ {
+        let tag = *tag;
+        self.resources.iter().filter(move |r| r.0 == tag).map(|r| r.1)
+    }
+
+    /// The `USER` block whose record starts with `name`.
+    fn user(&self, name: &[u8]) -> Option<usize> {
+        self.of_kind(b"USER").find(|&at| self.file.get(at..at + name.len()) == Some(name))
+    }
+
+    /// A vertex or index buffer: its address in the file and size, from the fetch constant
+    /// at +0x18 (address with the type in the low bits) and +0x1C.
+    fn buffer(&self, header: usize, vertex: bool) -> Result<(usize, usize)> {
+        let address = be32(self.file, header + 0x18)? as usize & !3;
+        let size = be32(self.file, header + 0x1C)? as usize;
+        Ok((self.data + address, if vertex { (size >> 2) * 4 } else { size }))
+    }
+}
+
+/// A vertex element, as `D3DVERTEXELEMENT9` on the Xbox 360.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Element {
+    pub stream: u16,
+    pub offset: u16,
+    pub kind: u32,
+    pub usage: u8,
+    pub usage_index: u8,
+}
+
+/// Element types seen in the files.
+pub const FLOAT3: u32 = 0x2A23B9;
+pub const FLOAT2: u32 = 0x2C23A5;
+pub const FLOAT4: u32 = 0x1A23A6;
+pub const HALF2: u32 = 0x2C235F;
+/// Three signed normalized values in 11, 11 and 10 bits, x in the low bits.
+pub const HEND3N: u32 = 0x2A2190;
+
+pub const USAGE_POSITION: u8 = 0;
+pub const USAGE_BLENDWEIGHT: u8 = 1;
+pub const USAGE_NORMAL: u8 = 3;
+pub const USAGE_TEXCOORD: u8 = 5;
+
+/// A vertex layout of an object, with its buffers.
+#[derive(Debug, Clone)]
+pub struct Decl {
+    pub elements: Vec<Element>,
+    /// Per stream: the `VBUF` index and the stride.
+    pub streams: Vec<(usize, usize)>,
+    pub index_buffer: usize,
+    pub index_count: usize,
+    pub vertex_count: usize,
+}
+
+/// A part of an object drawn with one material: a range of its declaration's indices and
+/// texture stages as (stage, kind, texture). Kind 1 on stage 0 is the base colour.
+#[derive(Debug, Clone)]
+pub struct Draw {
+    pub decl: usize,
+    pub first_index: usize,
+    pub index_count: usize,
+    pub stages: Vec<(u32, u32, usize)>,
+}
+
+/// One `ObjGeo`.
+#[derive(Debug, Clone)]
+pub struct Object {
+    pub decls: Vec<Decl>,
+    pub draws: Vec<Draw>,
+}
+
+impl Object {
+    pub fn vertex_count(&self) -> usize {
+        self.decls.iter().map(|d| d.vertex_count).sum()
+    }
+}
+
+/// The objects of `MdlGeo`.
+///
+/// `ObjGeo`: +0x14 the number of draws, +0x28 the offset of its `GeoDecl`, from +0x40 the
+/// offsets of the draws, all from the `ObjGeo`'s start.
+///
+/// `GeoDecl`: +0x14 the number of layouts, from +0x30 their offsets from the `GeoDecl`. A
+/// layout: +0 the offset of its stream list from the layout, +4 the number of streams, +8 the
+/// index buffer, +0xC the index count, +0x14 the vertex count, its elements from +0x30, ended
+/// by stream 0xFF. A stream entry is 16 bytes: the `VBUF` index and the stride.
+///
+/// A draw: +8 its layout, +0x10 the first index, +0x14 the index count, +0x18 the number of
+/// texture stages, +0x1C their offset from the draw. A stage is 0x40 bytes: stage, kind,
+/// texture.
+pub fn objects(xpr: &Xpr2) -> Result<Vec<Object>> {
+    let file = xpr.file;
+    let model = xpr.user(b"MdlGeo").context("no MdlGeo")?;
+    let count = be32(file, model + 0x14)? as usize;
+    (0..count)
+        .map(|i| {
+            let at = model + be32(file, model + 0x30 + i * 4)? as usize;
+            if file.get(at..at + 6) != Some(&b"ObjGeo"[..]) {
+                bail!("object {i} is not an ObjGeo");
+            }
+            let geo = at + be32(file, at + 0x28)? as usize;
+            if file.get(geo..geo + 7) != Some(&b"GeoDecl"[..]) {
+                bail!("object {i} has no GeoDecl at {geo:#x}");
+            }
+            let decls = (0..be32(file, geo + 0x14)? as usize)
+                .map(|d| {
+                    let head = geo + be32(file, geo + 0x30 + d * 4)? as usize;
+                    let mut elements = Vec::new();
+                    let mut p = head + 0x30;
+                    loop {
+                        let stream = be16(file, p)?;
+                        if stream == 0xFF {
+                            break;
+                        }
+                        elements.push(Element {
+                            stream,
+                            offset: be16(file, p + 2)?,
+                            kind: be32(file, p + 4)?,
+                            usage: file[p + 9],
+                            usage_index: file[p + 10],
+                        });
+                        p += 12;
+                        if elements.len() > 32 {
+                            bail!("object {i}: declaration does not end");
+                        }
+                    }
+                    let list = head + be32(file, head)? as usize;
+                    let streams = (0..be32(file, head + 4)? as usize)
+                        .map(|s| Ok((be32(file, list + s * 16)? as usize, be32(file, list + s * 16 + 4)? as usize)))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Decl {
+                        elements,
+                        streams,
+                        index_buffer: be32(file, head + 8)? as usize,
+                        index_count: be32(file, head + 0xC)? as usize,
+                        vertex_count: be32(file, head + 0x14)? as usize,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let draws = (0..be32(file, at + 0x14)? as usize)
+                .map(|d| {
+                    let draw = at + be32(file, at + 0x40 + d * 4)? as usize;
+                    let stage_at = draw + be32(file, draw + 0x1C)? as usize;
+                    let stages = (0..be32(file, draw + 0x18)?.min(16) as usize)
+                        .map(|k| {
+                            let p = stage_at + k * 0x40;
+                            Ok((be32(file, p)?, be32(file, p + 4)?, be32(file, p + 8)? as usize))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Draw {
+                        decl: be32(file, draw + 8)? as usize,
+                        first_index: be32(file, draw + 0x10)? as usize,
+                        index_count: be32(file, draw + 0x14)? as usize,
+                        stages,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Object { decls, draws })
+        })
+        .collect()
+}
+
+/// A node of `Hie`: its matrix relative to the parent, the object it draws, its parent.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub local: Mat4,
+    pub object: usize,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+}
+
+/// `Hie`: per node 0x50 bytes, a row-major matrix with the translation in the last row, then
+/// shorts: the object, the parent (-1 for none), the child count and the children.
+pub fn hierarchy(xpr: &Xpr2) -> Result<Vec<Node>> {
+    let file = xpr.file;
+    let hie = xpr.user(b"Hie\0").context("no Hie")?;
+    let count = be32(file, hie + 0x14)? as usize;
+    (0..count)
+        .map(|i| {
+            let at = hie + be32(file, hie + 0x30 + i * 4)? as usize;
+            let mut m = [0f32; 16];
+            for (k, value) in m.iter_mut().enumerate() {
+                *value = bef32(file, at + k * 4)?;
+            }
+            // Rows of the file are the columns of glam's column-major matrix.
+            let local = Mat4::from_cols_array(&m);
+            let short = |k: usize| -> Result<i16> { Ok(be16(file, at + 64 + k * 2)? as i16) };
+            let child_count = short(2)?.max(0) as usize;
+            Ok(Node {
+                local,
+                object: short(0)?.max(0) as usize,
+                parent: usize::try_from(short(1)?).ok(),
+                children: (0..child_count.min(5)).map(|k| short(3 + k).map(|c| c.max(0) as usize)).collect::<Result<_>>()?,
+            })
+        })
+        .collect()
+}
+
+/// Each node's matrix in model space, in the rest pose.
+pub fn rest_pose(nodes: &[Node]) -> Vec<Mat4> {
+    let mut world: Vec<Option<Mat4>> = vec![None; nodes.len()];
+    fn resolve(k: usize, nodes: &[Node], world: &mut Vec<Option<Mat4>>, depth: usize) -> Mat4 {
+        if let Some(m) = world[k] {
+            return m;
+        }
+        let m = match nodes[k].parent {
+            Some(p) if p < nodes.len() && depth < 64 => resolve(p, nodes, world, depth + 1) * nodes[k].local,
+            _ => nodes[k].local,
+        };
+        world[k] = Some(m);
+        m
+    }
+    (0..nodes.len()).map(|k| resolve(k, nodes, &mut world, 0)).collect()
+}
+
+/// An IEEE half float.
+fn half(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = ((bits >> 10) & 0x1F) as i32;
+    let mantissa = (bits & 0x3FF) as f32;
+    sign * match exponent {
+        0 => mantissa * 2f32.powi(-24),
+        31 => if mantissa == 0.0 { f32::INFINITY } else { f32::NAN },
+        e => (1.0 + mantissa / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
+/// Three signed normalized values in 11, 11 and 10 bits, x in the low bits. Measured: Tina's
+/// body normals come out with length 0.998 to 1.0 this way.
+fn hend3n(word: u32) -> [f32; 3] {
+    let signed = |value: u32, bits: u32| -> f32 {
+        let max = (1i32 << (bits - 1)) - 1;
+        let mut v = (value & ((1 << bits) - 1)) as i32;
+        if v > max {
+            v -= 1 << bits;
+        }
+        (v as f32 / max as f32).max(-1.0)
+    };
+    [signed(word, 11), signed(word >> 11, 11), signed(word >> 22, 10)]
+}
+
+/// An object's vertices and triangles, its layouts one after another. Positions are in the
+/// node's space. Each draw becomes a material with its base texture.
+pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
+    let file = xpr.file;
+    let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+    let ibufs: Vec<usize> = xpr.of_kind(b"IBUF").collect();
+    let mut vertices = Vec::new();
+    let mut firsts = Vec::new();
+    for decl in &object.decls {
+        firsts.push(vertices.len());
+        let start = vertices.len();
+        vertices.resize(start + decl.vertex_count, ModelVertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2] });
+        let out = &mut vertices[start..];
+        for element in &decl.elements {
+            let first = decl.elements.iter().find(|e| e.usage == element.usage && e.usage_index == 0 && e.stream == 0);
+            if element.stream != 0 || Some(element) != first {
+                continue;
+            }
+            let &(buffer, stride) = decl.streams.first().context("no stream 0")?;
+            let (at, size) = xpr.buffer(*vbufs.get(buffer).context("VBUF out of range")?, true)?;
+            if stride == 0 || size < decl.vertex_count * stride {
+                bail!("vertex buffer {buffer} holds {size} bytes, short of {} vertices of {stride}", decl.vertex_count);
+            }
+            for (v, out) in out.iter_mut().enumerate() {
+                let p = at + v * stride + element.offset as usize;
+                match (element.usage, element.kind) {
+                    (USAGE_POSITION, FLOAT3) => out.position = [bef32(file, p)?, bef32(file, p + 4)?, bef32(file, p + 8)?],
+                    (USAGE_NORMAL, HEND3N) => out.normal = hend3n(be32(file, p)?),
+                    (USAGE_NORMAL, FLOAT3) => out.normal = [bef32(file, p)?, bef32(file, p + 4)?, bef32(file, p + 8)?],
+                    (USAGE_TEXCOORD, HALF2) => out.uv = [half(be16(file, p)?), half(be16(file, p + 2)?)],
+                    (USAGE_TEXCOORD, FLOAT2) => out.uv = [bef32(file, p)?, bef32(file, p + 4)?],
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut materials = Vec::new();
+    for draw in &object.draws {
+        let decl = object.decls.get(draw.decl).context("draw's layout out of range")?;
+        let base = firsts[draw.decl] as u32;
+        // Strips, restarted by 0xFFFF.
+        let (at, size) = xpr.buffer(*ibufs.get(decl.index_buffer).context("IBUF out of range")?, false)?;
+        if size < (draw.first_index + draw.index_count) * 2 {
+            bail!("index buffer {} is short", decl.index_buffer);
+        }
+        let mut indices = Vec::new();
+        let mut strip: Vec<u32> = Vec::new();
+        let flush = |strip: &mut Vec<u32>, indices: &mut Vec<u32>| {
+            for k in 2..strip.len() {
+                let (a, b, c) = if k % 2 == 0 { (strip[k - 2], strip[k - 1], strip[k]) } else { (strip[k - 1], strip[k - 2], strip[k]) };
+                if a != b && b != c && a != c {
+                    indices.extend([a, b, c]);
+                }
+            }
+            strip.clear();
+        };
+        for k in draw.first_index..draw.first_index + draw.index_count {
+            let index = be16(file, at + k * 2)?;
+            if index == 0xFFFF {
+                flush(&mut strip, &mut indices);
+            } else if (index as usize) < decl.vertex_count {
+                strip.push(base + index as u32);
+            } else {
+                bail!("index {index} beyond {} vertices", decl.vertex_count);
+            }
+        }
+        flush(&mut strip, &mut indices);
+        let texture = draw.stages.iter().find(|s| s.0 == 0).map(|s| s.2);
+        materials.push(ModelMaterial { indices, textures: texture.into_iter().collect(), cull_back: false, look: None });
+    }
+    Ok(ModelPiece { vertices, materials })
+}
+
+/// Xenos texture formats seen so far.
+const FMT_8888: u32 = 0x06;
+const FMT_DXT1: u32 = 0x12;
+const FMT_DXT3: u32 = 0x13;
+const FMT_DXT5: u32 = 0x14;
+
+/// Byte offset of block (x, y) in a tiled surface, as the Xenos lays it out. `width` is in
+/// blocks; `log2_bpp` is the log2 of the bytes per block. From Xenia's `TiledOffset2D`.
+fn tiled_offset(x: u32, y: u32, width: u32, log2_bpp: u32) -> u32 {
+    let aligned = (width + 31) & !31;
+    let macro_ = ((x >> 5) + (y >> 5) * (aligned >> 5)) << (log2_bpp + 7);
+    let micro = ((x & 7) + ((y & 0xE) << 2)) << log2_bpp;
+    let offset = macro_ + ((micro & !0xF) << 1) + (micro & 0xF) + ((y & 1) << 4);
+    ((offset & !0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F)
+}
+
+/// The textures, in file order, each as RGBA. Formats not read come out grey.
+pub fn textures(xpr: &Xpr2) -> Vec<ModelTexture> {
+    xpr.of_kind(b"TX2D").map(|at| texture(xpr, at).unwrap_or_else(|e| {
+        log::warn!("DOAX2 texture at {at:#x}: {e:#}");
+        ModelTexture { width: 4, height: 4, rgba: vec![128; 64] }
+    })).collect()
+}
+
+fn texture(xpr: &Xpr2, header: usize) -> Result<ModelTexture> {
+    let file = xpr.file;
+    // The fetch constant follows the 28-byte resource header.
+    let word = |k: usize| be32(file, header + 28 + k * 4);
+    let (w0, w1, w2) = (word(0)?, word(1)?, word(2)?);
+    let tiled = w0 >> 31 != 0;
+    let format = w1 & 0x3F;
+    let endian = (w1 >> 6) & 3;
+    let base = xpr.data + (w1 >> 12 << 12) as usize;
+    let width = (w2 & 0x1FFF) + 1;
+    let height = ((w2 >> 13) & 0x1FFF) + 1;
+    let (block, bytes) = match format {
+        FMT_8888 => (1, 4),
+        FMT_DXT1 => (4, 8),
+        FMT_DXT3 | FMT_DXT5 => (4, 16),
+        _ => bail!("format {format:#x} not read"),
+    };
+    let (bw, bh) = (width.div_ceil(block), height.div_ceil(block));
+    let log2 = (bytes as u32).trailing_zeros();
+    // Untile into a linear little-endian block list.
+    let mut linear = vec![0u8; (bw * bh) as usize * bytes];
+    for y in 0..bh {
+        for x in 0..bw {
+            let from = if tiled { tiled_offset(x, y, bw, log2) as usize } else { ((y * bw.next_multiple_of(32) + x) as usize) * bytes };
+            let src = file.get(base + from..base + from + bytes).context("texture data past the end")?;
+            let dst = &mut linear[((y * bw + x) as usize) * bytes..][..bytes];
+            dst.copy_from_slice(src);
+            match endian {
+                1 => dst.chunks_exact_mut(2).for_each(|c| c.swap(0, 1)),
+                2 => dst.chunks_exact_mut(4).for_each(|c| c.reverse()),
+                3 => dst.chunks_exact_mut(4).for_each(|c| {
+                    c.swap(0, 2);
+                    c.swap(1, 3);
+                }),
+                _ => {}
+            }
+        }
+    }
+    let rgba = match format {
+        FMT_8888 => linear.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect(),
+        FMT_DXT1 => super::xpr::decode_blocks(&linear, width, height, 1),
+        FMT_DXT3 => super::xpr::decode_blocks(&linear, width, height, 3),
+        _ => super::xpr::decode_blocks(&linear, width, height, 5),
+    };
+    Ok(ModelTexture { width, height, rgba })
+}
+
+/// Each object's node: `Hie` names the object a node draws.
+pub fn object_nodes(nodes: &[Node], object_count: usize) -> Vec<Option<usize>> {
+    let mut out = vec![None; object_count];
+    for (k, node) in nodes.iter().enumerate() {
+        if let Some(slot) = out.get_mut(node.object) {
+            slot.get_or_insert(k);
+        }
+    }
+    out
+}
+
+/// Model-space bounds of all objects at rest, for checks.
+pub fn bounds(xpr: &Xpr2) -> Result<(Vec3, Vec3)> {
+    let objects = objects(xpr)?;
+    let nodes = hierarchy(xpr)?;
+    let rest = rest_pose(&nodes);
+    let placed = object_nodes(&nodes, objects.len());
+    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for (object, node) in objects.iter().zip(placed) {
+        let Some(node) = node else { continue };
+        for v in object_piece(xpr, object)?.vertices {
+            let p = rest[node].transform_point3(v.position.into());
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+    }
+    Ok((lo, hi))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::formats::doax::LazyArchive;
+
+    #[test]
+    fn tiled_offsets_cover_a_surface_once() {
+        let (w, h) = (64u32, 64u32);
+        let mut seen = std::collections::HashSet::new();
+        for y in 0..h {
+            for x in 0..w {
+                assert!(seen.insert(tiled_offset(x, y, w, 2)));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn suit_reads() {
+        let wear = LazyArchive::open("assets/doax2/wertwo.afs").unwrap();
+        let names: Vec<String> = wear.names().map(str::to_string).collect();
+        let index = names.iter().position(|n| n == "vtn_tk_b_m").unwrap();
+        let file = wear.read_index(index).unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let objects = objects(&xpr).unwrap();
+        let nodes = hierarchy(&xpr).unwrap();
+        println!("{} objects, {} nodes", objects.len(), nodes.len());
+        let rest = rest_pose(&nodes);
+        for (i, (object, node)) in objects.iter().zip(object_nodes(&nodes, objects.len())).enumerate() {
+            let piece = object_piece(&xpr, object).unwrap();
+            let (mut lo, mut hi) = (Vec3::splat(9.0), Vec3::splat(-9.0));
+            for v in &piece.vertices {
+                let p = node.map_or(Vec3::from(v.position), |n| rest[n].transform_point3(v.position.into()));
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            let bases: Vec<_> = piece.materials.iter().map(|m| m.textures.first().copied()).collect();
+            println!("object {i} node {node:?}: {} vertices in {} layouts, {:?} {:?}, textures {bases:?}", piece.vertices.len(), object.decls.len(), (lo * 100.0).round() / 100.0, (hi * 100.0).round() / 100.0);
+        }
+        for (i, t) in textures(&xpr).iter().enumerate() {
+            println!("texture {i}: {}x{}", t.width, t.height);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn tina_body_reads() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let file = chr.read("vtn1.tpr").unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let objects = objects(&xpr).unwrap();
+        let nodes = hierarchy(&xpr).unwrap();
+        assert_eq!(objects.len(), nodes.len());
+        for (i, object) in objects.iter().enumerate() {
+            let piece = object_piece(&xpr, object).unwrap();
+            let bad = piece.vertices.iter().filter(|v| (Vec3::from(v.normal).length() - 1.0).abs() > 0.01).count();
+            let triangles: usize = piece.materials.iter().map(|m| m.indices.len() / 3).sum();
+            let stages: Vec<_> = object.draws.iter().map(|d| d.stages.clone()).collect();
+            println!("object {i}: {} vertices, {triangles} triangles, {bad} normals off unit, stages {stages:?}", piece.vertices.len());
+        }
+        let (lo, hi) = bounds(&xpr).unwrap();
+        println!("bounds {lo:?} {hi:?}");
+        for (i, t) in textures(&xpr).iter().enumerate() {
+            println!("texture {i}: {}x{}", t.width, t.height);
+            if let Ok(dir) = std::env::var("DOAX2_TEXTURES") {
+                std::fs::write(format!("{dir}/tex{i}_{}x{}.rgba", t.width, t.height), &t.rgba).unwrap();
+            }
+        }
+    }
+}

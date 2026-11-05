@@ -7,6 +7,7 @@ pub mod model;
 pub mod doa2u;
 pub mod doa3;
 pub mod doax;
+pub mod doax2;
 pub mod doa3_chains;
 pub mod doa3_cloth;
 pub mod doa3_morphs;

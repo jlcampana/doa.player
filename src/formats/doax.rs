@@ -91,6 +91,16 @@ impl LazyArchive {
         self.entries.iter().map(|e| e.0.as_str())
     }
 
+    /// Reads an entry by its place, for archives where names repeat.
+    pub fn read_index(&self, index: usize) -> Result<Vec<u8>> {
+        let (_, offset, size) = self.entries.get(index).with_context(|| format!("no entry {index}"))?;
+        let mut file = std::fs::File::open(&self.path)?;
+        file.seek(SeekFrom::Start(*offset))?;
+        let mut data = vec![0u8; *size];
+        file.read_exact(&mut data)?;
+        Ok(data)
+    }
+
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let (_, offset, size) = self.entries.iter().find(|e| e.0 == name).with_context(|| format!("no {name}"))?;
         let mut file = std::fs::File::open(&self.path)?;
