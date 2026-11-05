@@ -35,23 +35,23 @@ Where two rows hold the same value, the row is taken by symmetry, not measured. 
 
 ## Motions
 
-`.mot` keys are not DOA3's, though they look alike. Values are packed floats (`0x000AE980`): 20 bits, the head's top four and the next 16, with sign bit 19, exponent `((v >> 16) & 7) + 0x7E` and mantissa `(v & 0xFFFF) << 7`. Slopes are 24 bits (`0x000AE9F0`) or 16 (`0x000AE910`). Kinds by the table at `0x2D1248`: 0 cubic, size 10; 1 line, 4; 2 parabola, 6; 3 constant, 0. (code) Tracks are in memory's order, unless the motion is mirrored, by the table at `0x2D1360`. The viewer does not play mirrored ones. (code)
+`.mot` keys are not DOA3's, though they look alike. Values are packed floats (`0x000AE980`): 20 bits, the head's top four and the next 16, with sign bit 19, exponent `((v >> 16) & 7) + 0x7E` and mantissa `(v & 0xFFFF) << 7`. Slopes are 24 bits (`0x000AE9F0`) or 16 (`0x000AE910`). With an exponent field of 0, a value is its low 16 bits over 65536, and slopes use a smaller range with their own exponent base. Kinds by the table at `0x2D1248`: 0 cubic, size 10; 1 line, 4; 2 parabola, 6; 3 constant, 0. (code) Tracks are in memory's order, unless the motion is mirrored, by the table at `0x2D1360`. The viewer does not play mirrored ones. (code)
 
 The values start 0xC into the block at `0x5E06A0 + n * 0x5C`, and the layout follows DOA3's where it can: 1 height, 3 to 5 hips, 6 to 8 chest, 9 to 11 head, limbs of 8 from 12, 20, 28 and 36, 44 to 46 waist (bone 23), 47 to 49 neck (19), 50, 51 one collar (20), 52, 53 the other (16), 56 to 59 toes. (live)
 
 Measured from those values against the game's matrices, `solve_game_space`, test `doax_pose_matches_capture` with `tools/re/doax_capture.py`. Hips, ankles and wrists are within 0.3 mm in the good samples. Bones 23, 0, 19, 1, 16 and 20 fit their formulas, to 0.2 mm where the bone table was right. Limbs are DOA3's solve followed by a fixed change of axes, which was the same on all 4 characters. (live) Elbow roll is approximate, half of the hand's, within 0.08 radians. Bones 26, 27, 30 and 31, which roll along the upper arm, and 28 and 29 are not worked out: they sit on their base bone, and only 30 and 31 carry a piece. The later samples showed bigger errors on arms and legs, up to 0.2 in a matrix element, not explained: another scene started between them and the first.
 
-Not confirmed: `doax_tracks_match_capture` looks for the live tracks in all `.mot` files and did not find an exact match, with blended or mirrored motions the likely reason. Motions look natural in the viewer, on 5 motions seen at one frame each. That the evaluator gives the game's numbers for a given frame has not been shown. Which file is whose also comes from names only: `gokei` is taken to be Christie.
+The evaluator is confirmed by `doax_tracks_match_capture`: two characters of a demo were found playing `tina.mot` 77, from frame 187 to 194, and `gokei.mot` 77, from 566 to 573, across two samples 0.2 s apart. That also confirms `gokei` is Christie's. Between 14 and 31 of 57 tracks stayed more than 0.003 off. Tracks 23 and 25 differ by pi on one hand and so may be another form of the same rotation, 9 to 11 and 47 to 49 are the head and neck, which the game turns itself, and 0 and 2 are the position, which the viewer leaves out. Not all of the others were explained. (live)
 
 A table starts four rows before `0x2CFD58 + table * 0x180`, with its rows 20 to 23. (live)
 
-Not done: joint bending, so knees and elbows show seams; morphs; soft bodies; mirrored motions; blending; hands.
+Joint pieces read with DOA2U's parser, with each record's own parent, and thighs bend by their one weight: not compared with the game. Not done: other weighted pieces; morphs; soft bodies; mirrored motions; blending; hands.
 
 ## In the viewer
 
-`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit, moving as rigid pieces, for 5 characters. A suit's pieces replace the body's hips and chest, and its waist when the suit has one, inferred from their sizes. Of the body's chest piece, only the triangles above 0.17 in bone space or on the back are drawn, for the shoulders, back and upper chest around the suit's top. The game was not seen to cut it: what it really draws under a suit is not read, and should be checked in `sub_00064300`'s area or by a capture. The viewer never shows a body without a suit.
+`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit and motions, for 5 characters. The up and down keys walk the costume list, for any game. A suit's pieces replace the body's hips and chest, and its waist when the suit has one, inferred from their sizes. Of the body's chest piece, only the triangles above 0.17 in bone space or on the back are drawn, for the shoulders, back and upper chest around the suit's top. The game was not seen to cut it: what it really draws under a suit is not read, and should be checked in `sub_00064300`'s area or by a capture. The viewer never shows a body without a suit.
 
-Not done: joint bending (joint pieces just sit on one bone), morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Lights use DOA2U's list as a stand-in. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
+Not done: morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Lights use DOA2U's list as a stand-in. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
 
 ## Limits
 

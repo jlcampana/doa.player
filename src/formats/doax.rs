@@ -220,6 +220,38 @@ pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
     }
 }
 
+/// A body's joint pieces. The records read as DOA2U's, from the table at CAT word 4, except that
+/// a hand's parent is the one its record names: the DOA3 parser's special case for hands
+/// points at nodes that are other bones here.
+pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
+    let table = read_u32(cat, 0x10)? as usize;
+    let mut skins = super::doa3::parse_sparse_joint_skins(cat, table);
+    for skin in &mut skins {
+        let mut i = 0;
+        while let Ok(entry) = read_u32(cat, table + i * 4) {
+            i += 1;
+            if entry == 0 {
+                break;
+            }
+            let Ok(flags) = read_u32(cat, table + entry as usize + 8) else { continue };
+            if entry != 1 && (flags & 0xFF) as usize == skin.object {
+                skin.parent = ((flags >> 16) & 0xFF) as usize;
+            }
+        }
+    }
+    Ok(skins)
+}
+
+/// A thigh's bend towards the hips: its parent and its offset in rest, by its bone. Weights come
+/// from the object's extra float. The other weighted pieces hold 2 or 3 floats, not worked out.
+pub fn bend_of_bone(bone: usize, rows: &[Vec3; 24]) -> Option<(usize, Vec3)> {
+    match bone {
+        6 => Some((2, rows[2])),
+        12 => Some((2, rows[8])),
+        _ => None,
+    }
+}
+
 /// The rest pose's matrices from a character's offsets, arms out, standing on the ground.
 pub fn rest_pose(rows: &[Vec3; 24]) -> [Mat4; BONE_COUNT] {
     let mut positions = [Vec3::ZERO; BONE_COUNT];
@@ -290,16 +322,35 @@ fn key_value(data: &[u8], at: usize) -> Option<f32> {
     let head = u16::from_le_bytes([*data.get(at)?, *data.get(at + 1)?]) as u32;
     let low = u16::from_le_bytes([*data.get(at + 2)?, *data.get(at + 3)?]) as u32;
     let raw = ((head & 0xF000) << 4) | low;
+    // With no exponent, the low bits are a fraction (`0x000AE9B5`, `0x000AE9D3`).
+    if (raw >> 16) & 7 == 0 {
+        let value = (raw & 0xFFFF) as f32 / 65536.0;
+        return Some(if raw >> 19 & 1 != 0 { -value } else { value });
+    }
     Some(unpack(raw, 19, ((raw >> 16) & 7) + 0x7E, (raw & 0xFFFF) << 7))
 }
 
 /// A 24 bit slope (`0x000AE9F0`).
 fn key_slope(raw: u32) -> f32 {
+    if (raw >> 19) & 0xF == 0 {
+        // A smaller range (`0x000AEA24`), which holds zero as well.
+        if raw & 0x7FFFF == 0 {
+            return 0.0;
+        }
+        return unpack(raw, 23, ((raw >> 16) & 7) + 0x69, (raw & 0xFFFF) << 7);
+    }
     unpack(raw, 23, ((raw >> 19) & 0xF) + 0x70, (raw & 0x7FFFF) << 4)
 }
 
 /// A 16 bit slope (`0x000AE910`).
 fn key_short_slope(raw: u32) -> f32 {
+    if (raw >> 12) & 7 == 0 {
+        // A smaller range (`0x000AE947`), which holds zero as well.
+        if raw & 0xFFF == 0 {
+            return 0.0;
+        }
+        return unpack(raw, 15, ((raw >> 10) & 3) + 0x6E, (raw & 0x3FF) << 13);
+    }
     unpack(raw, 15, ((raw >> 12) & 7) + 0x71, (raw & 0xFFF) << 11)
 }
 
@@ -534,7 +585,7 @@ mod tests {
             let wrapped = d % std::f32::consts::TAU;
             d.min(wrapped).min(std::f32::consts::TAU - wrapped)
         };
-        for line in text.lines().step_by(9).take(8) {
+        for line in text.lines().take(8) {
             let words: Vec<&str> = line.split_whitespace().collect();
             let live: Vec<f32> = words[3..3 + TRACK_COUNT].iter().map(|w| w.parse().unwrap()).collect();
             let mut best = (f32::MAX, String::new(), 0, 0, [0f32; TRACK_COUNT]);
@@ -542,7 +593,8 @@ mod tests {
                 for motion in list_motions(data) {
                     for frame in 0..motion.frames {
                         let Ok(values) = eval_motion(data, &motion, frame as f32) else { continue };
-                        let e: f32 = (3..TRACK_COUNT).map(|t| distance(t, values[t], live[t]).min(1.0)).sum();
+                        // Fewer close tracks is worse: the game adjusts some, such as the head.
+                        let e = (3..TRACK_COUNT).filter(|&t| distance(t, values[t], live[t]) > 0.003).count() as f32;
                         if e < best.0 {
                             best = (e, name.clone(), motion.id, frame, values);
                         }
@@ -554,18 +606,21 @@ mod tests {
                 all.sort_by(|a, b| b.1.total_cmp(&a.1));
                 all.into_iter().take(6).map(|(t, e)| (t, (e * 1000.0).round() / 1000.0)).collect()
             };
-            println!("char {} sum {:.2} {} id {} frame {} worst {:?}", words[1], best.0, best.1, best.2, best.3, worst);
+            println!("char {} tracks off {} of 57: {} id {} frame {} worst {:?}", words[1], best.0, best.1, best.2, best.3, worst);
         }
     }
 
     #[test]
     fn packed_values_unpack_as_the_game_does() {
         assert_eq!(unpack(0, 19, 0x7E, 0), 0.0);
-        // Head 0x0058 and low 0xE7DF: exponent 0x7E, so 0.5 times 1.906.
+        // Head 0x0058 and low 0xE7DF, no exponent: a fraction, the hips' height in the game.
         let value = key_value(&[0x58, 0x00, 0xDF, 0xE7], 0).unwrap();
-        assert!((value - 0.9525).abs() < 1e-3, "{value}");
+        assert!((value - 0.9057).abs() < 1e-3, "{value}");
         // The head's top bit is the sign.
         assert!(key_value(&[0x00, 0x80, 0x00, 0x10], 0).unwrap() < 0.0);
+        // Exponent 1: from 1 to 2.
+        let value = key_value(&[0x00, 0x10, 0x00, 0x80], 0).unwrap();
+        assert_eq!(value, 1.5);
     }
 
     #[test]

@@ -701,6 +701,9 @@ impl App {
                 .collect()
         }
         let suit_textures = textures.len() - body_textures;
+        let xbe = std::fs::read(asset_path(DOAX_XBE_PATH))?;
+        let rows = doax::bone_rows(&xbe, table)?;
+        let skins = doax::joint_skins(&body_cat)?;
         let mut inputs: Vec<PieceInput> = Vec::new();
         let suit_pieces = doax::placed_objects(&suit_cat)?;
         let suit_has_waist = suit_pieces.iter().any(|p| p.waist);
@@ -710,16 +713,49 @@ impl App {
                 doax::keep_shoulders(piece);
             }
         }
+        // The same object can be listed twice: a joint record takes over from a plain place.
+        let mut rigid_objects: Vec<usize> = Vec::new();
         for placed in body_pieces.iter().filter(|p| (!p.replaced_by_suit || p.bone == 0) && !(p.waist && suit_has_waist)) {
+            if skins.iter().any(|skin| skin.object == placed.object) || rigid_objects.contains(&placed.object) {
+                continue;
+            }
             let Some(piece) = body.pieces.get(placed.object) else { continue };
+            let bend = doax::bend_of_bone(placed.bone, &rows).zip(body.weights[placed.object].clone()).map(|((parent, offset), weights)| {
+                crate::renderer::mesh::VertexBend { parent, offset, weights }
+            });
+            rigid_objects.push(placed.object);
             inputs.push(PieceInput {
                 node: placed.bone,
                 vertices: &piece.vertices,
                 draws: draws_of(piece, 0, body_textures),
                 parent: placed.bone,
                 skin: None,
-                bend: None,
+                bend,
                 welds: Vec::new(),
+                translucent: false,
+            });
+        }
+        for skin in &skins {
+            let Some(piece) = body.pieces.get(skin.object) else { continue };
+            let welds = skin
+                .welds
+                .iter()
+                .filter_map(|weld| Some((rigid_objects.iter().position(|&o| o == weld.object)?, weld)))
+                .flat_map(|(input, weld)| {
+                    weld.links.iter().flat_map(move |(source, targets)| targets.iter().map(move |&target| (input, *source, target)))
+                })
+                .filter(|&(input, source, target)| {
+                    source < body.pieces[rigid_objects[input]].vertices.len() && target < piece.vertices.len()
+                })
+                .collect();
+            inputs.push(PieceInput {
+                node: skin.node,
+                vertices: &piece.vertices,
+                draws: draws_of(piece, 0, body_textures),
+                parent: skin.parent,
+                skin: Some((skin.blend, skin.vertices.as_slice())),
+                bend: None,
+                welds,
                 translucent: false,
             });
         }
@@ -736,10 +772,8 @@ impl App {
                 translucent: false,
             });
         }
-        let xbe = std::fs::read(asset_path(DOAX_XBE_PATH))?;
-        let nodes = doax::rest_pose(&doax::bone_rows(&xbe, table)?);
+        let nodes = doax::rest_pose(&rows);
 
-        let rows = doax::bone_rows(&xbe, table)?;
         let mut files = Vec::new();
         let mut motions = Vec::new();
         let mut animations = Vec::new();
@@ -771,7 +805,7 @@ impl App {
         if count > 0 {
             self.select_motion(0);
         }
-        Ok(format!("DOAX: {display_name} - {stem}, {count} motions, rigid pieces"))
+        Ok(format!("DOAX: {display_name} - {stem}, {count} motions"))
     }
 
     fn load_doa2u_character(&mut self, char_idx: usize, costume_idx: usize) {

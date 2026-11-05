@@ -138,10 +138,28 @@ impl CharSelectPanel {
                             .on_hover_text("Otherwise only the playing motion. Files get large, and Blender takes long to import them.");
                         ui.separator();
                         ui.label("Costume:");
+                        // The up and down keys walk the list, loading each costume, unless a
+                        // text box has the keyboard.
+                        let step = if ui.ctx().wants_keyboard_input() {
+                            0
+                        } else {
+                            ui.input(|i| i.key_pressed(egui::Key::ArrowDown) as i32 - i.key_pressed(egui::Key::ArrowUp) as i32)
+                        };
+                        let moved_to = (step != 0 && !entry.costumes.is_empty()).then(|| {
+                            (self.selected_costume_idx as i32 + step).clamp(0, entry.costumes.len() as i32 - 1) as usize
+                        }).filter(|&next| next != self.selected_costume_idx);
+                        if let Some(next) = moved_to {
+                            self.selected_costume_idx = next;
+                            on_char_selected(char_idx, next);
+                        }
                         egui::ScrollArea::vertical().id_salt("costumes").auto_shrink([false, true]).show(ui, |ui| {
                             for (ci, name) in entry.costumes.iter().enumerate() {
                                 let selected = self.selected_costume_idx == ci;
-                                if ui.selectable_label(selected, name).clicked() {
+                                let label = ui.selectable_label(selected, name);
+                                if moved_to == Some(ci) {
+                                    label.scroll_to_me(None);
+                                }
+                                if label.clicked() {
                                     self.selected_costume_idx = ci;
                                     on_char_selected(char_idx, ci);
                                 }
