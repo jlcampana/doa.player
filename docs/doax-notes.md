@@ -12,7 +12,7 @@ Status of each statement below: "live" was measured on the running game, "file" 
 - CAT: +4 is the base, 0x14. Records from the base are (kind, value), the other way round from DOA2U, ending with kind 0. Kind 1, value + base: 8 byte (count, offset) pairs. Kind 3: material colors. Kind 4: a list, read next. (file)
 - Kind 4 on a body: 10 header bytes, then triples of (kind, slot, object). Kind 1 is rigid on bone `slot`, where 0x80 is a flag; kind 6 and kind 2 are other piece kinds; 2 goes with objects that have extra floats. Two-byte `0A n` entries divide it into groups. Meaning of the header, of the groups and of kinds 2 and 6 is not read. (file, guess on meaning)
 - A kind 4 list also has `0B`, one byte, dividing it further. Slots from 0x80 are bones 24 and up. Kind 2 slots come from the table at `0x33F988`, 16 bytes a slot, as DOA2U's at `0x64C8B0`: a count, then lists ended by 0xFF, each a bone followed by 0x80 + a bone to add that bone's offset or 0x40 + a bone to take it away. A piece's vertices hold one extra float less than the count, a weight per list, and the last list takes what is left. (file; the weights' meaning fits the pieces' shapes) Slot 15, the neck, counts 4 lists but holds 3. Kind 6 pieces are joints, which the records at CAT word 4 describe.
-- Group 0 holds feet in two pieces with toes, and group 2 whole feet. The viewer draws group 2. Which one the game draws, and when, is not read. (guess)
+- `0x000633E0` walks the list. `0A n` draws what follows only when the girl's mode byte (`0x4C9744`) is n, up to the next `0A` or `0B`. On a body, mode 0 has feet in two pieces with toes, and mode 2 whole feet. The viewer uses 0. What sets the mode was not read, and the port's docs say mode 1 also exists. (code)
 - `.mot`: a table of 1000 words, 0xFA4 for unused IDs. A motion's block is a word, frames in the low half and 60 tracks in the high half, then 60 track offsets relative to the block. Keys read as DOA3's: the sizes walk exactly to each track's end on the tracks tried. (file)
 
 ## Skeleton
@@ -49,7 +49,7 @@ Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2
 
 ## In the viewer
 
-`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit and motions, for 5 characters. The up and down keys walk the costume list, for any game. A suit's pieces replace the body's hips and chest, and its waist when the suit has one, inferred from their sizes. Of the body's chest piece, only the triangles above 0.17 in bone space or on the back are drawn, for the shoulders, back and upper chest around the suit's top. The game was not seen to cut it: what it really draws under a suit is not read, and should be checked in `sub_00064300`'s area or by a capture. The viewer never shows a body without a suit.
+`src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit and motions, for 5 characters. The up and down keys walk the costume list, for any game. The body's chest, hips and waist are in the common part of the list, so the game draws them whatever the suit, with the suit over them, and so does the viewer. (code) The viewer offers no way of removing the suit.
 
 Not done: morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Lights use DOA2U's list as a stand-in. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
 

@@ -1,7 +1,7 @@
 //! Dead or Alive Xtreme Beach Volleyball, read as far as `docs/doax-notes.md` says.
 //!
-//! A character moves as rigid pieces, without soft bodies, morphs or joint bending. A costume is always a swimsuit on a body: the suit's pieces take the place of the
-//! body's torso and hips, and the body is not offered without one.
+//! A character moves as rigid pieces, without soft bodies, morphs or joint bending. A costume is always a swimsuit on a body, drawn over it as in the game,
+//! and the body is not offered without one.
 
 use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Vec3};
@@ -28,9 +28,6 @@ const BONE_LINKS: [(usize, usize, usize); 22] = [
 
 /// Bones that sit on another in the game's matrices, and turn with it.
 const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27, 14), (28, 5), (29, 11), (30, 8), (31, 14)];
-
-/// Height in the chest bone's space from which its piece is drawn under a suit.
-const SHOULDERS_FROM: f32 = 0.17;
 
 /// Height of the foot bone above the ground in the game's matrices, about 0.1.
 const FOOT_HEIGHT: f32 = 0.1;
@@ -121,17 +118,17 @@ pub fn costumes<'a>(names: impl Iterator<Item = &'a str>, code: &str) -> Vec<Str
 pub struct Placed {
     pub object: usize,
     pub bone: usize,
-    /// On the torso or hips, which a suit replaces.
-    pub replaced_by_suit: bool,
-    /// Reaches over the waist. The body's own waist is left out under a suit that has one.
-    pub waist: bool,
     /// A kind 2 slot: the piece blends between bones, by `multi_bend`.
     pub slot: Option<u8>,
 }
 
-/// Reads the pieces of a CAT. Records from +0x14 are (kind, value), and kind 4 is the list: a
-/// header up to three bytes of 0xFE, then (kind, slot, object). `0A n` starts group n and `0B` divides it further. Group 0
-/// holds a foot in two pieces with its toes, and group 2 a whole foot, drawn here.
+/// The value of the girl's mode byte (`0x4C9744`) that the viewer draws. 0 has feet in two
+/// pieces with toes. What sets it for a suit was not read: mode 2 has a whole foot instead.
+const MODE: u8 = 0;
+
+/// Reads the pieces of a CAT, as `0x000633E0` walks them. Records from +0x14 are (kind, value),
+/// and kind 4 is the list: a header up to three bytes of 0xFE, then (kind, slot, object).
+/// `0A n` draws what follows only in mode n, up to the next `0A` or `0B`.
 pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
     let base = read_u32(cat, 4)? as usize;
     let mut record = base;
@@ -146,25 +143,25 @@ pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
     let list = cat.get(list..).context("piece list is outside the file")?;
     let start = list.windows(3).position(|w| w == [0xFE; 3]).context("piece list has no header end")? + 3;
     let mut placed = Vec::new();
-    let (mut at, mut group) = (start, None);
+    let (mut at, mut mode) = (start, None);
     while let Some(&kind) = list.get(at) {
         if kind == 0 {
             break;
         }
         if kind == 0x0A {
-            group = list.get(at + 1).copied();
+            mode = list.get(at + 1).copied();
             at += 2;
             continue;
         }
-        // Divides the list again, by one byte. What it means is not known.
         if kind == 0x0B {
+            mode = None;
             at += 1;
             continue;
         }
         let (Some(&slot), Some(&object)) = (list.get(at + 1), list.get(at + 2)) else { break };
         at += 3;
         let object = object as usize;
-        if group == Some(0) {
+        if mode.is_some_and(|mode| mode != MODE) {
             continue;
         }
         match kind {
@@ -172,42 +169,20 @@ pub fn placed_objects(cat: &[u8]) -> Result<Vec<Placed>> {
                 // Slots from 0x80 are bone 24 and up, as in DOA2U.
                 let bone = if slot >= 0x80 { slot as usize - 0x80 + 24 } else { slot as usize };
                 if bone < BONE_COUNT {
-                    placed.push(Placed { object, bone, replaced_by_suit: kind == 1 && (bone == 0 || bone == 2), waist: false, slot: None });
+                    placed.push(Placed { object, bone, slot: None });
                 }
             }
-            2 => placed.push(Placed { object, bone: 0, replaced_by_suit: false, waist: matches!(slot, 0 | 0x0B | 0x0C), slot: Some(slot) }),
+            2 => placed.push(Placed { object, bone: 0, slot: Some(slot) }),
             _ => {}
         }
     }
     Ok(placed)
 }
 
-/// Keeps the triangles of a body's chest piece that lie wholly above `SHOULDERS_FROM` or wholly
-/// on the back. Faces look towards +z. A suit's
-/// top is only the top: the shoulders and upper chest around it are this piece's. The game was
-/// not seen to cut it, this is so that only those parts of the body show around the suit.
-pub fn keep_shoulders(piece: &mut super::model::ModelPiece) {
-    for material in &mut piece.materials {
-        let kept: Vec<u32> = material
-            .indices
-            .chunks_exact(3)
-            .filter(|t| {
-                t.iter().all(|&v| piece.vertices[v as usize].position[1] >= SHOULDERS_FROM)
-                    || t.iter().all(|&v| piece.vertices[v as usize].position[2] <= 0.0)
-            })
-            .flatten()
-            .copied()
-            .collect();
-        material.indices = kept;
-    }
-}
-
 /// A body's joint pieces. The records read as DOA2U's, from the table at CAT word 4, except that
 /// a hand's parent is the one its record names: the DOA3 parser's special case for hands
-/// points at nodes that are other bones here. Ankles come in two versions and toes have their
-/// own: this keeps the ones marked by bit 3 of the record's top byte, which go with the whole
-/// foot of group 2, as the viewer draws. The port's docs say a mode selects them, which was
-/// not read.
+/// points at nodes that are other bones here. Records marked by bit 3 of the top byte go with
+/// another mode: the port's docs say mode 2 draws only those on a foot, and others skip them.
 pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
     let table = read_u32(cat, 0x10)? as usize;
     let mut flags_of = std::collections::HashMap::new();
@@ -222,14 +197,7 @@ pub fn joint_skins(cat: &[u8]) -> Result<Vec<super::doa3::JointSkin>> {
         }
     }
     let mut skins = super::doa3::parse_sparse_joint_skins(cat, table);
-    skins.retain(|skin| {
-        let marked = flags_of.get(&skin.object).is_some_and(|flags| flags >> 24 & 8 != 0);
-        match skin.node {
-            3 | 9 => marked,
-            18 | 22 => false,
-            _ => true,
-        }
-    });
+    skins.retain(|skin| !flags_of.get(&skin.object).is_some_and(|flags| flags >> 24 & 8 != 0));
     for skin in &mut skins {
         if let Some(flags) = flags_of.get(&skin.object) {
             skin.parent = ((flags >> 16) & 0xFF) as usize;
@@ -682,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn pieces_skip_the_header_and_group_zero() {
+    fn pieces_skip_the_header_and_other_modes() {
         // Records from +0x14: kind 4 with value 0x10, then the end. List at 0x24.
         let mut cat = vec![0u8; 0x24];
         cat[4] = 0x14;
@@ -691,10 +659,10 @@ mod tests {
         cat.extend_from_slice(&[1, 0xFE, 0xFE, 0xFE, 1, 0x02, 3, 0x0A, 0, 1, 3, 9, 0x0A, 2, 1, 3, 10, 0x0B, 2, 0, 39, 6, 4, 7, 0]);
         let placed = placed_objects(&cat).unwrap();
         assert_eq!(placed, [
-            Placed { object: 3, bone: 2, replaced_by_suit: true, waist: false, slot: None },
-            Placed { object: 10, bone: 3, replaced_by_suit: false, waist: false, slot: None },
-            Placed { object: 39, bone: 0, replaced_by_suit: false, waist: true, slot: Some(0) },
-            Placed { object: 7, bone: 4, replaced_by_suit: false, waist: false, slot: None },
+            Placed { object: 3, bone: 2, slot: None },
+            Placed { object: 9, bone: 3, slot: None },
+            Placed { object: 39, bone: 0, slot: Some(0) },
+            Placed { object: 7, bone: 4, slot: None },
         ]);
     }
 
