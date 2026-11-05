@@ -37,6 +37,7 @@ Measured against the running game; see `docs/doa2u-notes.md` for numbers and cod
 - Hand shapes: `doa2u::hands`, from `apv` entries 0 and 1, driven by the move scripts in `.bin`.
 - Joint pieces: measured on `kas00` only. Shoulders are off by up to 2.6 cm, unexplained.
 - Cloth (kind 2), chains (kind 1, hair), extra objects (kind 3) and vertex copies (kind 250) are in the viewer. Single steps match the game on most sheets and chains, not all; see the table in the notes. Wind was 0 in those captures.
+- `nin`, `sui` and `gok` are Hayate, Brad Wong and Christie, with DOA3's bones and motions.
 - Chest spring: Tina, Helena and Lei Fang only. Measured on Helena and Lei Fang.
 - Roster: Zack 0, Tina 1, Leon 8, Lei Fang 12, Hitomi 21, Bayman 24 measured in matches. Internal names differ: `sambo` is Bayman, `bayman` is Leon, `koryu` is Hitomi.
 
@@ -52,8 +53,8 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: four stage materials (`hel10`), drawing in the game's order, fog, lightning, real point lights with a fighter position, and which areas change their table in code.
 2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
-3. **Remaining soft body error.** Head strips of `lei00` and `lei04` (flags 0x90, up to 32 mm), the cape of `tin09` (1.03 mm, worst 6 mm), the cuffs of `lei04` (worst 7 mm), chains on `tin16` 7, 8, 9 and `hel00` 3, 5, 8 (1 to 5 mm), and shoulders (up to 2.6 cm). Wind was 0 in the cloth captures, so it is untested.
-4. **Other soft body kinds:** 4, 5, 7, 8, 9, 12 and 14. They need those costumes in a match. Kind 0xFE variants are read but only variant 0 is shown; the selector byte at `0x877CA0` and `sub_0005B050` were not followed.
+3. **Remaining soft body error.** `hel00` chain 7 (5 mm) and chains 0, 1, 6, 8 (under 0.4 mm), and shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each; a new capture should confirm it, because the rest of their pairs are not one step apart. Wind was 0 in the cloth captures, so it is untested.
+4. **Other soft body kinds:** 4, 5, 7, 8, 9, 12 and 14. They need those costumes in a match. Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
 5. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. Pose 0's character substitution was not found.
 6. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
 

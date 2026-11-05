@@ -84,7 +84,7 @@ Internal names differ from the shown ones: `sambo` is Bayman, `bayman` is Leon a
 
 CAT word 2 is a list of 8-byte entries: a kind and an offset from the list, ending at kind 0xFF (`sub_0005A250`, installed by `sub_00057370`). DOA3's section scan rejects it, as kind 1 records differ, so `soft_body_offsets` reads it. Kinds 0xFA and 0xFB also appear, and bodies after them are still installed.
 
-Kind 0xFE means another variant of the record before it, not another body. `sub_000587F0` gathers a record and its 0xFE followers into a group: up to 16 groups at state +0xF718, stride 0x24, byte +0xB is the count. A group holds the kind, the body's index and up to 8 record pointers, with -1 in unused ones. `sub_0005A740` compares the byte at `0x877CA0 + fighter` with the last value (state +1) and, when it changed, calls `sub_0004FC40` to reload every group with that variant. `sub_0005B050` writes the byte, with values from 0 to at least 3; what chooses them was not read.
+Kind 0xFE means another variant of the record before it, not another body. `sub_000587F0` gathers a record and its 0xFE followers into a group: up to 16 groups at state +0xF718, stride 0x24, byte +0xB is the count. A group holds the kind, the body's index and up to 8 record pointers, with -1 in unused ones. `sub_0005A740` compares the byte at `0x877CA0 + fighter` with the last value (state +1) and, when it changed, calls `sub_0004FC40` to reload every group with that variant. `sub_0005B050` writes the byte, from 0 to 3. It switches on a value at `0x85084A + fighter * 16`, with a jump table at `0x5B240` and indices at `0x5B264`, and then tests `sub_0005D530(fighter, 0)` and `(fighter, 1)` against 7, 8, 9, 0x11, 0x12 and 0x13, the byte at `0x87F51C`, and in one case the stage (`0x87AB48` = 4 and `0x878391` = 2). What those values mean in play was not read, so which variant a moment of the game uses is unknown.
 
 `soft_body_offsets` skips 0xFE, so the viewer always shows variant 0. Read from the game on `kas00` and `kas01`: 6 and 3 groups, and the byte stayed 0 for 20 s in training, with no moves being done. Other values were not seen, so what the variants look like in play is inferred from the records.
 
@@ -111,9 +111,9 @@ One step against the game's particles, median per record, from `doa2u_single_ste
 | `hel00` object 0, 2 sheets | 6 | 0.00 mm | 0.58, 0.66 mm | 0.00 mm |
 | `lei00` skirt, 2 sheets | 20 | 0.00 mm | 14.57, 8.06 mm | 0.01, 0.00 mm |
 | `lei04` skirt, 2 sheets | 20 | 0.00 mm | 14.08, 2.67 mm | 0.00 mm |
-| `lei04` trouser cuffs, 2 sheets | 20 | 0.16, 0.83 mm | 0.49, 3.95 mm | 1.38, 7.15 mm |
-| `tin09` cape | 8 | 1.03 mm | 1.36 mm | 6.01 mm |
-| `lei00` and `lei04` head strips, 4 sheets, flags 0x90 | 20 | 2.88 to 6.76 mm | 4.67 to 16.21 mm | 13.24 to 32.24 mm |
+| `lei04` trouser cuffs, 2 sheets | 20 | 0.00 mm | 0.49, 3.95 mm | 0.00 mm |
+| `tin09` cape | 1 | 0.00 mm | 0.90 mm | 0.04 mm |
+| `lei00` and `lei04` head strips, 4 sheets, flags 0x90 | 1 | 0.00 mm | 0.73 to 24.01 mm | 0.00 mm |
 
 The error between earlier captures was the stage's floor, at about 1.015 on that stage, which touches only sheets that reach it. The floor per row is the ground + 0.002 - 0.001 per row, as in DOA3. The game samples the ground once per sheet and frame (`sub_00146920`, plus the constant at `0x3C2E68`). 1.015 was read from where particles stop and then tried in steps of 0.002, and the stage's own height table was not read. The ground was flat under both fighters in this capture; slopes were not tried. The viewer's ground is 0 (`floor_height`), with the feet on it. Only the single step is measured, not a long run, where small errors could add up.
 
@@ -127,7 +127,10 @@ Hair and similar. The file's record has DOA3's chain layout: count, bone, object
 - A chain can start on a vertex: +0x44 is a byte offset into the object at +2. The viewer sets this only at load, and the measured chains I checked have 0 there.
 - Bones from 0x80 are matrices from 24.
 
-One step against the game's particles, 40 pairs per record, wind included (`doa2u_chain_single_steps`): of the 21 records measured on `tin16` and `hel00`, 12 have a median segment error of 0.00 mm, and 7 more are at or under 0.68 mm. `tin16` chain 11 has 1.62 mm. `hel00` chain 7 has 4.97 mm, worse than the 4.15 mm of not stepping at all. Both are unexplained.
+- A moved tip stays where the collision left it: its length is not restored (`sub_0004BFE0`), as on cloth.
+- Stiffness pulls towards the segment before, and only the first segment towards the direction.
+
+One step against the game's particles, 40 pairs per record, wind included (`doa2u_chain_single_steps`): of the 21 records measured on `tin16` and `hel00`, 17 have a median segment error of 0.00 mm, and `hel00` chains 0, 1, 6 and 8 are at or under 0.38 mm. `hel00` chain 7 has 5.07 mm, worse than the 4.15 mm of not stepping at all, unexplained. It differs from chain 6, which matches, only in the sign of its direction's X. Kind 1's collision was read and matches the game's (`sub_0004C290`).
 
 Detached objects, marked `0xFFFF` in a chain's target, are only drawn through the chain, and the viewer does this as in DOA3.
 
@@ -186,9 +189,15 @@ Against captured skirts of `lei00` and `lei04`, largest component error per vert
 - Chains: a chain's +0x5C (+0x60 at run time) names the same data as kind 251, and `sub_00050510` runs `sub_0004FD00` with it after writing the vertices. On `hel08` only the ponytail has it. `normal_rebuilds` reads these too.
 - The face (`apv` 2 and 3) and chest (`apv` 4) have a normal count of 0, so they have no normal tables.
 
-### Head strips, unsolved
+### Pairs more than a step apart
 
-The two column sheets on the head of `lei00` and `lei04` (flags 0x90, stiffness 0) stay at 2.88 to 6.76 mm in a step. Tried, with no real change: no wind (it was 0), both ways spacing off, point collisions in place of edges, and stiffness of 0.1, 0.5 and 1. Removing shapes makes it worse, so collisions run. Sheets on the head of `hel00`, with four columns, match exactly. Fields +0x1C and +0x20 of the record are not used by the viewer, and their role was not read.
+`doa2u_single_steps` and `doa2u_chain_single_steps` now drop a pair when the step's last pull differs from the game's by over 0.1 mm. That pull comes from the root alone, so a difference means the particles read as "before" are not one step before the rest. Row 0 still matches in such pairs, which is why the earlier filter let them through.
+
+This was the error on the head strips (19 of 20 pairs dropped per sheet, flags 0x90) and on the `tin09` cape (7 of 8): both were reported at up to 32 and 6 mm, and match on the pairs left. That is 1 pair per sheet, so a new capture should confirm it. Why those sheets give such pairs when the skirts of the same read do not was not found.
+
+### Tube limit
+
+DOA2U has its own limit (`sub_0004DF20`), not DOA3's: the centre moves towards the column by the small radius, and the only radial limit is the large radius minus the small one. This fixed the cuffs of `lei04`. DOA3 keeps its form.
 
 ### Other kinds
 
