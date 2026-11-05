@@ -311,9 +311,14 @@ fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
         let entry = list.remove(desert);
         list.insert(0, entry);
     }
+    if let Some(storm) = list.iter().position(|(name, _)| name.contains("storm")) {
+        let flash = list[storm].1.lightning_flash();
+        list.insert(storm + 1, (format!("{}: lightning", list[storm].0), flash));
+    }
     if list.is_empty() {
         list.push(("Desert".to_string(), FALLBACK_LIGHTS));
     }
+    log::debug!("Stage lights: {:?}", list.iter().map(|(name, _)| name).collect::<Vec<_>>());
     list
 }
 

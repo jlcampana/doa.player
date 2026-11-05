@@ -53,6 +53,23 @@ pub struct SceneLights {
     pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
 }
 
+impl SceneLights {
+    /// The storm stage during a lightning flash, as read from the game (579 reads against
+    /// 7296 between flashes): its three lights at 0.2, another ambient, and a fourth light in
+    /// white. Specular is scaled like diffuse and the new light's is 0.3 of its diffuse, as on
+    /// other lights. That part was not read during a flash.
+    pub fn lightning_flash(&self) -> SceneLights {
+        let mut flash = SceneLights { ambient: [35.0 / 255.0, 49.0 / 255.0, 49.0 / 255.0], lights: self.lights };
+        for (_, diffuse, specular) in &mut flash.lights[..3] {
+            *diffuse = diffuse.map(|c| c * 0.2);
+            *specular = specular.map(|c| c * 0.2);
+        }
+        let white = [1.248, 1.336, 1.336];
+        flash.lights[3] = ([0.677, -0.29, -0.677], white, white.map(|c| c * 0.3));
+        flash
+    }
+}
+
 /// Used when the executable's table cannot be read: the desert stage's.
 pub const FALLBACK_LIGHTS: SceneLights = SceneLights {
     ambient: [94.0 / 255.0; 3],
@@ -1074,6 +1091,14 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lightning_dims_three_lights_and_adds_a_white_one() {
+        let flash = FALLBACK_LIGHTS.lightning_flash();
+        assert_eq!(flash.lights[0].1[0], FALLBACK_LIGHTS.lights[0].1[0] * 0.2);
+        assert_eq!(flash.lights[3].1, [1.248, 1.336, 1.336]);
+        assert_eq!(flash.ambient[0], 35.0 / 255.0);
+    }
+
     use super::*;
     use glam::Vec3;
 

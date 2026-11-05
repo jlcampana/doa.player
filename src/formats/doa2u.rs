@@ -1042,6 +1042,23 @@ fn material_look(data: &[u8], block: usize, flags: u32, layers: usize) -> Result
     let stage = |i: usize, at: usize| read_u32(data, block + 0x70 + i * 16 + at);
     let reflects = |i: usize| -> Result<bool> { Ok(i < layers && stage(i, 0xC)? >> 24 == 1) };
     let mode = if layers > 0 { stage(0, 8)? } else { 0 };
+    // The layer is stage 1, except on four stages (two materials of `hel10`), where stage 1
+    // repeats stage 0 over itself, which changes nothing, and the layer is stage 2.
+    let layer_stage = if layers >= 3 && mode == 3 {
+        let same_as_base = |i: usize| -> Result<bool> {
+            Ok(stage(i, 0)? == stage(0, 0)? && stage(i, 0xC)? >> 24 == stage(0, 0xC)? >> 24)
+        };
+        let mut found = 1;
+        for i in 1..layers {
+            if stage(i, 8)? == 4 && !same_as_base(i)? {
+                found = i;
+                break;
+            }
+        }
+        Some(found)
+    } else {
+        None
+    };
     Ok(MaterialLook {
         diffuse: [float(0x20)?, float(0x24)?, float(0x28)?, float(0x2C)?],
         ambient: triple(0x30)?,
@@ -1051,9 +1068,9 @@ fn material_look(data: &[u8], block: usize, flags: u32, layers: usize) -> Result
         specular_on: read_u32(data, block + 0x68)? & 2 != 0,
         no_depth_write: flags & 8 != 0,
         alpha_from_texture: layers > 0 && mode % 2 == 1,
-        layer: if layers >= 3 && mode == 3 { Some(stage(1, 0)? as usize) } else { None },
+        layer: layer_stage.map(|i| stage(i, 0).map(|t| t as usize)).transpose()?,
         base_reflects: reflects(0)?,
-        layer_reflects: reflects(1)?,
+        layer_reflects: reflects(layer_stage.unwrap_or(1))?,
         unlit: layers > 0 && layers < 3 && (mode == 2 || mode == 3),
     })
 }
@@ -1179,6 +1196,34 @@ mod tests {
         for (id, list) in ids {
             println!("{id}: {:?}", list.iter().map(|e| (e.frame, e.hand, e.pose, e.time)).collect::<Vec<_>>());
         }
+    }
+
+    /// Stages as (texture, mode, coordinates), as in `hel10` and the common three stage form.
+    fn look_of_stages(stages: &[(u32, u32, u32)]) -> MaterialLook {
+        let mut block = vec![0u8; 0x80 + stages.len() * 16];
+        for (i, (texture, mode, coordinates)) in stages.iter().enumerate() {
+            let at = 0x70 + i * 16;
+            block[at..at + 4].copy_from_slice(&texture.to_le_bytes());
+            block[at + 8..at + 12].copy_from_slice(&mode.to_le_bytes());
+            block[at + 0xC..at + 0x10].copy_from_slice(&(coordinates << 24).to_le_bytes());
+        }
+        material_look(&block, 0, 0, stages.len()).unwrap()
+    }
+
+    #[test]
+    fn four_stages_skip_the_stage_that_repeats_the_base() {
+        let look = look_of_stages(&[(38, 3, 0), (38, 4, 0), (2, 4, 0), (2184, 5, 0)]);
+        assert_eq!(look.layer, Some(2));
+        assert!(!look.layer_reflects);
+    }
+
+    #[test]
+    fn three_stages_keep_stage_one_as_the_layer() {
+        let reflecting = look_of_stages(&[(38, 3, 0), (2, 4, 1), (2184, 5, 0)]);
+        assert_eq!(reflecting.layer, Some(2));
+        assert!(reflecting.layer_reflects);
+        // The same texture on the same coordinates, with nothing else to choose.
+        assert_eq!(look_of_stages(&[(38, 3, 0), (38, 4, 0), (2184, 5, 0)]).layer, Some(38));
     }
 
     #[test]

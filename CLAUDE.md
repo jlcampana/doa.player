@@ -55,7 +55,7 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 
 ## Next steps, in order
 
-1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: four stage materials (`hel10`), drawing in the game's order, fog, lightning, real point lights with a fighter position, and which areas change their table in code.
+1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: drawing in the game's order, fog, timed lightning (a held flash is in the list), real point lights with a fighter position, and which areas change their table in code.
 2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
 3. **Remaining soft body error.** `hel00` chain 7 (5 mm) and chains 0, 1, 6, 8 (under 0.4 mm), and shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each; a new capture should confirm it, because the rest of their pairs are not one step apart. Wind was 0 in the cloth captures, so it is untested.
 4. **Other soft body kinds:** 4, 5, 7, 8, 9, 12 and 14. They need those costumes in a match. Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
