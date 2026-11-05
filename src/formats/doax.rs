@@ -487,6 +487,30 @@ pub fn hand_events(bin: &[u8], xbe: &[u8]) -> Result<std::collections::HashMap<u
     Ok(events)
 }
 
+/// The chest spring's parameters: those at 0x33FB90, 0.128, 0.85, 20 and 0.25, the same as
+/// DOA3's, with the half `0x00062040` takes of the rest and of the drive in standing states.
+pub const CHEST_SPRING: super::doa3::ChestSpringParameters = super::doa3::ChestSpring::DOA3;
+
+/// How far a chest shape is blended in for a spring value (`0x00064AF0`): (1 - k) |v| + k
+/// sqrt |v|, with k 0.3 in most states. Shape 1 for a positive value, 2 for a negative one.
+/// Matched to live reads of the value and the weight, within their rounding.
+pub fn chest_weight(value: f32) -> (usize, f32) {
+    const K: f32 = 0.3;
+    let size = value.abs().min(1.0);
+    (if value >= 0.0 { 1 } else { 2 }, (1.0 - K) * size + K * size.sqrt())
+}
+
+/// The sets of 3 shapes in a CAT's `apv` section that the chest spring drives: on a body the
+/// chest and the two upper arms, on a suit its chest piece. Hands, the first two of a body,
+/// and faces, with more shapes, are left out.
+pub fn chest_sets(cat: &[u8], body: bool) -> Vec<super::doa3_morphs::PoseHand> {
+    let first = if body { 2 } else { 0 };
+    (first..super::doa2u::morph_set_count(cat))
+        .filter_map(|entry| super::doa2u::morph_set(cat, entry).ok().flatten())
+        .filter(|set| set.shapes.len() == 3)
+        .collect()
+}
+
 /// The shape each hand pose rests on, from the table at 0x33EE38, 8 bytes a pose.
 pub fn pose_shapes(xbe: &[u8]) -> Result<Vec<usize>> {
     let table = xbe_offset(xbe, POSE_SHAPES_VA).context("no pose table")?;
@@ -957,6 +981,16 @@ mod tests {
         let found = list.iter().find(|(_, set)| set.lights[0].1 == [0.9, 0.88, 0.88]).expect("no such set");
         assert!((found.1.ambient[0] - 0x59 as f32 / 255.0).abs() < 0.01, "{:?}", found.1.ambient);
         assert!((found.1.lights[0].0[0] + 0.528).abs() < 0.002, "{:?}", found.1.lights[0].0);
+    }
+
+    #[test]
+    fn chest_weights_match_live_reads() {
+        // Values and weights read together from the running game.
+        for (value, weight) in [(0.009, 0.034), (0.084, 0.146), (0.645, 0.693), (0.759, 0.793)] {
+            assert_eq!(chest_weight(value).0, 1);
+            assert!((chest_weight(value).1 - weight).abs() < 0.002, "{value}");
+            assert_eq!(chest_weight(-value).0, 2);
+        }
     }
 
     #[test]

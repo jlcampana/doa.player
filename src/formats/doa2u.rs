@@ -640,6 +640,24 @@ pub fn hands(cat: &[u8]) -> Result<Vec<crate::formats::doa3_morphs::PoseHand>> {
     Ok(hands)
 }
 
+/// Reads any morph set of the `apv` section at CAT word 3, as `hands` reads the first two.
+/// DOAX keeps its chest and swimsuit shapes in the same form.
+pub fn morph_set(cat: &[u8], entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
+    let base = read_u32(cat, 0xC)? as usize;
+    if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? as usize <= entry_index {
+        return Ok(None);
+    }
+    read_hand(cat, base, entry_index)
+}
+
+pub(crate) fn morph_set_count(cat: &[u8]) -> usize {
+    let Ok(base) = read_u32(cat, 0xC).map(|b| b as usize) else { return 0 };
+    if slice(cat, base, 4).ok() != Some(&b"apv\0"[..]) {
+        return 0;
+    }
+    read_u32(cat, base + 4).map_or(0, |n| n as usize)
+}
+
 fn read_hand(cat: &[u8], base: usize, entry_index: usize) -> Result<Option<crate::formats::doa3_morphs::PoseHand>> {
     {
         let entry = base + read_u32(cat, base + 8 + entry_index * 4)? as usize;

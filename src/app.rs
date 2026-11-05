@@ -453,6 +453,11 @@ pub struct DoaxPose {
     pose_shapes: Vec<usize>,
     /// (slot in the scripts, the hand's shapes, its piece).
     hands: Vec<(u16, crate::formats::doa3_morphs::PoseHand, usize)>,
+    /// The chest's shapes and those of pieces that follow it, with their pieces.
+    chest_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)>,
+    chest_spring: Option<doa3::ChestSpring>,
+    /// Game frames the spring has run.
+    chest_frame: u64,
 }
 
 pub struct Doa3Pose {
@@ -789,7 +794,9 @@ impl App {
                 translucent: false,
             });
         }
+        let mut suit_inputs: Vec<(usize, usize)> = Vec::new();
         for placed in suit_pieces {
+            suit_inputs.push((placed.object, inputs.len()));
             let Some(piece) = suit.pieces.get(placed.object) else { continue };
             let multi = doax::multi_bend(&suit_xpr, &placed, &xbe, &rows);
             inputs.push(PieceInput {
@@ -840,8 +847,22 @@ impl App {
                 Some((slot as u16, hand, piece))
             })
             .collect();
+        let mut chest_sets = Vec::new();
+        for set in doax::chest_sets(&body_cat, true) {
+            if let Some(piece) = rigid_objects.iter().position(|&object| object == set.object) {
+                chest_sets.push((set, piece));
+            }
+        }
+        for set in doax::chest_sets(&suit_cat, false) {
+            if let Some(&(_, piece)) = suit_inputs.iter().find(|(object, _)| *object == set.object) {
+                chest_sets.push((set, piece));
+            }
+        }
         self.doa3_pose = None;
-        self.doax_pose = Some(DoaxPose { rows, files, motions, playing: None, events, shared_events, shared_files, pose_shapes, hands });
+        self.doax_pose = Some(DoaxPose {
+            rows, files, motions, playing: None, events, shared_events, shared_files, pose_shapes, hands,
+            chest_sets, chest_spring: None, chest_frame: 0,
+        });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
@@ -1720,6 +1741,23 @@ impl App {
             match doax::eval_motion(&pose.files[file], &motion, self.anim_time) {
                 Ok(values) => {
                     let nodes = doax::solve_pose(&values, &pose.rows);
+                    if !pose.chest_sets.is_empty() {
+                        let clock = self.game_clock as u64;
+                        let spring = pose.chest_spring.get_or_insert_with(|| doa3::ChestSpring::with_parameters(&nodes[0], doax::CHEST_SPRING));
+                        // Holding the pose between 60 Hz frames, as for DOA3.
+                        while pose.chest_frame < clock {
+                            spring.step(&nodes[0]);
+                            pose.chest_frame += 1;
+                        }
+                        let (shape, weight) = doax::chest_weight(spring.value * self.bg_panel.bounce_scale);
+                        for (set, piece) in &mut pose.chest_sets {
+                            set.set_blend(0, shape, weight);
+                            self.mesh.set_rest_positions(
+                                *piece,
+                                set.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))),
+                            );
+                        }
+                    }
                     self.mesh.apply_pose(&self.ctx.queue, &nodes);
                 }
                 Err(e) => log::warn!("Could not evaluate the motion: {e:#}"),
@@ -1960,7 +1998,8 @@ impl App {
     }
 
     pub fn has_chest_spring(&self) -> bool {
-        self.doa3_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
+        self.doax_pose.as_ref().is_some_and(|pose| !pose.chest_sets.is_empty())
+            || self.doa3_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
     }
 
     pub fn reset_animation(&mut self) {
