@@ -674,7 +674,12 @@ impl SoftChain {
 
             let mut force = pull * self.pull + velocity + direction;
             direction *= self.bend;
-            force += (direction - particle.segment) * self.stiffness + wind;
+            // DOA2U pulls towards the segment before, and only the first towards the direction.
+            let target = match i.checked_sub(1) {
+                Some(before) if self.wind_factor.is_some() => self.particles[before].segment,
+                _ => direction,
+            };
+            force += (target - particle.segment) * self.stiffness + wind;
             let size = force.length();
             if size > self.max_force {
                 force *= self.max_force / size;
