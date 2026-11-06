@@ -791,20 +791,22 @@ pub fn bone_rest(rows: &[Vec3; 24]) -> [Mat4; super::doax::BONE_COUNT] {
 /// Inferred from the bodies, not read from the game: group 0 is the piece's own bone; a group
 /// whose vertices meet a rigid piece at rest takes that piece's bone (`blend_groups_from_seams`,
 /// clear by 6 mm or more over 80 frames); the rest are DOAX's groups for the same place
-/// (`0x33F988` in DOAX: neck 19, 1, 0; spine 23, 2, 0; shoulder 30, 0, 19, 16), and the
-/// forearms' third group is the shoulder, the bone that stretched them least. Suits use only
-/// combinations the bodies have.
+/// (`0x33F988` in DOAX: neck 19, 1, 0; spine 23, 2, 0; shoulder 30, 0, 19, 16). The forearms'
+/// groups lie at the elbow (0), the wrist (1) and the middle (2, 8 to 16 cm from the elbow):
+/// the middle takes DOAX's forearm twist bone, 24 or 25, which sits on the elbow. Taking the
+/// shoulder there, as the least stretch suggested, sank the forearm below the elbow. Suits use
+/// only combinations the bodies have.
 pub fn blend_bones(slot: u32, groups: usize) -> Option<&'static [usize]> {
     Some(match (slot, groups) {
         (3, 2) => &[3, 7],
         (4, 2) => &[4, 8],
-        (4, 3) => &[4, 5, 8],
+        (4, 3) => &[4, 5, 24],
         (5, 2) => &[5, 4],
         (6, 2) => &[6, 2],
         (7, 2) => &[7, 6],
         (9, 2) => &[9, 13],
         (10, 2) => &[10, 14],
-        (10, 3) => &[10, 11, 14],
+        (10, 3) => &[10, 11, 25],
         (11, 2) => &[11, 10],
         (12, 2) => &[12, 2],
         (13, 2) => &[13, 12],
@@ -1412,6 +1414,29 @@ mod tests {
                 }
                 println!("{code} layout {d}: {} uv sets, uv0 != uv1 on {differ} of {}, stage kinds {:?}", uvs.len(), decl.vertex_count, draws.iter().take(4).collect::<Vec<_>>());
             }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn forearm_groups() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let file = chr.read("vtn1.tpr").unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let objects = objects(&xpr).unwrap();
+        for k in [11usize, 7, 20] {
+            let piece = object_piece(&xpr, &objects[k]).unwrap();
+            let weights = object_weights(&xpr, &objects[k]).unwrap();
+            let groups = weights[0].len();
+            for g in 0..groups {
+                let xs: Vec<f32> = piece.vertices.iter().zip(&weights).filter(|(_, w)| w[g] > 0.5).map(|(v, _)| v.position[0]).collect();
+                let total: f32 = weights.iter().map(|w| w[g]).sum();
+                if xs.is_empty() { println!("object {k} group {g}: none over 0.5, total {total:.1}"); continue; }
+                let (lo, hi) = xs.iter().fold((9f32, -9f32), |(l, h), &x| (l.min(x), h.max(x)));
+                println!("object {k} group {g}: {} over 0.5, x {lo:.3}..{hi:.3}, mean {:.3}, total {total:.1}", xs.len(), xs.iter().sum::<f32>() / xs.len() as f32);
+            }
+            let (lo, hi) = piece.vertices.iter().fold((9f32, -9f32), |(l, h), v| (l.min(v.position[0]), h.max(v.position[0])));
+            println!("object {k}: x {lo:.3}..{hi:.3}");
         }
     }
 

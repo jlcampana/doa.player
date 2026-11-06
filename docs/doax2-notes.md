@@ -154,9 +154,10 @@ table inferred from the bodies (`blend_bones`):
 - A group whose dominant vertices meet a rigid piece at rest takes that piece's bone: over 80
   motion frames, any other bone opens the seam by 6 mm or more (`blend_groups_from_seams`).
 - The rest follow DOAX's groups for the same place: neck 1, 0, 19; spine 0, 2, 23; collars
-  16, 8, 0, 30 and 20, 14, 0, 31. The forearms' third group (13 vertices) is the shoulder, the
-  bone that stretched them least; the forearm still narrows near the elbow in some poses, so this
-  one is doubtful.
+  16, 8, 0, 30 and 20, 14, 0, 31. The forearms' groups lie at the elbow, the wrist and the middle
+  (275 vertices over half weight, 8 to 16 cm from the elbow); the middle is DOAX's twist bone 24
+  or 25. The shoulder, which the least stretch had picked, sank the forearm below the elbow, as
+  the user saw.
 
 Suits use only (bone number, group count) pairs that bodies have. Some suit weights add up to
 more than one (a single 2.307, or 1.16 to 1.23 over two groups, in Tina's `on_s_m`); they are
