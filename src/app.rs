@@ -891,8 +891,8 @@ impl App {
             }
         }
         let nodes = rest_nodes;
-        // Each piece as drawn, then its hair strands again as a translucent piece on the same
-        // node, blended by the texture's alpha after the solid ones. Pieces shaped at run time
+        // Each piece as drawn, then its hair strands again as a piece on the same node,
+        // blended by the texture's alpha after the solid ones. Pieces shaped at run time
         // (chest, hands) have no strands, so their indices stay those of `drawn`.
         fn input_of<'a>(d: &Drawn<'a>, blended: bool) -> PieceInput<'a> {
             PieceInput {
@@ -910,7 +910,9 @@ impl App {
                 bend: None,
                 multi: d.multi.clone(),
                 welds: Vec::new(),
-                translucent: blended,
+                // Blended through the material, which writes depth: the hair's inner shadow
+                // layers stay under its outer strands. Without depth they drew over them.
+                translucent: false,
             }
         }
         let mut inputs: Vec<PieceInput> = drawn.iter().map(|d| input_of(d, false)).collect();
