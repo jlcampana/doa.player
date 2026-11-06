@@ -181,6 +181,9 @@ pub struct MeshRenderer {
     white_view: wgpu::TextureView,
     white_bind_group: wgpu::BindGroup,
     lights: Option<SceneLights>,
+    lights_follow_camera: bool,
+    /// The viewer's plain shading instead of the game's lights and materials.
+    pub plain_lighting: bool,
     /// The nodes of the last pose, for framing.
     last_nodes: Vec<glam::Mat4>,
 }
@@ -460,6 +463,8 @@ impl MeshRenderer {
             white_view,
             white_bind_group,
             lights: None,
+            lights_follow_camera: false,
+            plain_lighting: false,
             last_nodes: Vec::new(),
         }
     }
@@ -467,6 +472,12 @@ impl MeshRenderer {
     /// The lights for models whose materials have a look. None keeps the viewer's own shading.
     pub fn set_lights(&mut self, lights: Option<SceneLights>) {
         self.lights = lights;
+    }
+
+    /// Light directions given in the camera's space, Direct3D's (z into the screen), as
+    /// DOAX2's shader constants hold them: they turn with the viewer's camera.
+    pub fn set_lights_follow_camera(&mut self, follow: bool) {
+        self.lights_follow_camera = follow;
     }
 
     /// The first posed vertex along a ray, among those within `tolerance` of it, where
@@ -516,6 +527,7 @@ impl MeshRenderer {
         buf[..16].copy_from_slice(&view_proj.to_cols_array());
         buf[16..32].copy_from_slice(&model.to_cols_array());
         buf[32] = if anime_shading { 1.0 } else { 0.0 };
+        buf[35] = if self.plain_lighting { 1.0 } else { 0.0 };
         buf[33] = relief;
         if let Some(color) = plain_color {
             buf[34] = 1.0;
@@ -531,7 +543,14 @@ impl MeshRenderer {
             buf[52..55].copy_from_slice(&lights.ambient);
             for (i, (direction, diffuse, specular)) in lights.lights.iter().enumerate() {
                 // Toward the light, in the viewer's space, whose Z is the game's flipped.
-                buf[56 + i * 4..59 + i * 4].copy_from_slice(&[-direction[0], -direction[1], direction[2]]);
+                let toward = if self.lights_follow_camera {
+                    // Direct3D's camera looks down +z; the viewer's, down -z.
+                    let travel = view.inverse().transform_vector3(glam::Vec3::new(direction[0], direction[1], -direction[2]));
+                    (-travel.normalize_or_zero()).to_array()
+                } else {
+                    [-direction[0], -direction[1], direction[2]]
+                };
+                buf[56 + i * 4..59 + i * 4].copy_from_slice(&toward);
                 buf[72 + i * 4..75 + i * 4].copy_from_slice(diffuse);
                 buf[88 + i * 4..91 + i * 4].copy_from_slice(specular);
             }
@@ -1263,7 +1282,7 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
         }
         return cel_shaded(v, texel, layer);
     }
-    if material.flags.x > 0.5 {
+    if material.flags.x > 0.5 && u.anime_shading.w < 0.5 {
         var color = to_stored(texel.rgb);
         var alpha = material.diffuse.a;
         if material.flags.z > 0.5 {

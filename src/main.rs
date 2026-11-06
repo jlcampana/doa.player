@@ -296,6 +296,7 @@ fn render_frame(app: &mut App, window: &Window) {
         let lights = app.current_stage_lights();
         app.mesh.set_lights(Some(lights));
     }
+    app.mesh.plain_lighting = !app.bg_panel.game_lights;
     app.mesh.update(&app.ctx.queue, &vp, &app.camera.view_matrix(), app.bg_panel.anime_shading, app.bg_panel.relief, app.bg_panel.no_textures.then_some(app.bg_panel.plain_color));
     app.mesh.mesh_only = app.bg_panel.mesh_only;
     app.mesh.outline_width = app.bg_panel.outline_width;
@@ -501,6 +502,7 @@ fn load_from_arguments(app: &mut App) {
     }
 
     app.bg_panel.anime_shading = args.iter().any(|a| a == "--anime");
+    app.bg_panel.game_lights = !args.iter().any(|a| a == "--no-game-lights");
     app.bg_panel.no_textures = args.iter().any(|a| a == "--no-textures");
     app.bg_panel.mesh_only = args.iter().any(|a| a == "--mesh-only");
     // Arguments set the camera themselves, unless they ask for a part.

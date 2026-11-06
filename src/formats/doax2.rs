@@ -115,7 +115,7 @@ pub struct Draw {
     pub first_index: usize,
     pub index_count: usize,
     pub stages: Vec<(u32, u32, usize)>,
-    /// From +0x70: diffuse, ambient, specular (vec4 each) and the specular power.
+    /// Diffuse, ambient, specular (vec4 each) and the specular power, at the offset in +0x20.
     pub diffuse: [f32; 3],
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
@@ -207,16 +207,18 @@ pub fn objects(xpr: &Xpr2) -> Result<Vec<Object>> {
                             Ok((be32(file, p)?, be32(file, p + 4)?, be32(file, p + 8)? as usize))
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    let colours = draw + be32(file, draw + 0x20)? as usize;
                     let vec3 = |at: usize| -> Result<[f32; 3]> { Ok([bef32(file, at)?, bef32(file, at + 4)?, bef32(file, at + 8)?]) };
                     Ok(Draw {
                         decl: be32(file, draw + 8)? as usize,
                         first_index: be32(file, draw + 0x10)? as usize,
                         index_count: be32(file, draw + 0x14)? as usize,
                         stages,
-                        diffuse: vec3(draw + 0x70)?,
-                        ambient: vec3(draw + 0x80)?,
-                        specular: vec3(draw + 0x90)?,
-                        power: bef32(file, draw + 0xA0)?,
+                        // +0x20 holds the colours' offset from the draw (0x80 in those read).
+                        diffuse: vec3(colours)?,
+                        ambient: vec3(colours + 0x10)?,
+                        specular: vec3(colours + 0x20)?,
+                        power: bef32(file, colours + 0x30)?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -390,9 +392,7 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
             specular: draw.specular,
             emissive: [0.0; 3],
             power: if draw.power.is_finite() { draw.power } else { 0.0 },
-            // The draws' specular (0.3, 0.2, 0.2 at power 15 on skin) washed every colour out
-            // without the game's shine maps, which are not read. Left off.
-            specular_on: false,
+            specular_on: draw.specular.iter().any(|&v| v > 0.0) && draw.power > 0.0,
             no_depth_write: false,
             alpha_from_texture: textures.len() == 2,
             layer: None,
@@ -992,9 +992,9 @@ pub fn hand_entry(pose: u16) -> usize {
 pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
     let set = |ambient: [f32; 3], lights: [([f32; 3], [f32; 3]); 4]| crate::renderer::mesh::SceneLights {
         ambient,
-        // The shaders' `DirLightVec` points towards the light; the viewer wants the way the
-        // light travels. Taken as stored, faces were lit from behind.
-        lights: lights.map(|(direction, diffuse)| (direction.map(|v| -v), diffuse, diffuse.map(|c| c * 0.3))),
+        // Directions as stored: the way the light travels in Direct3D's camera space (see
+        // `set_lights_follow_camera`). The strongest comes down and away from the camera.
+        lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse.map(|c| c * 0.3))),
     };
     vec![
         ("Match, set 1".to_string(), set([0.33, 0.32, 0.3], [
@@ -1541,6 +1541,7 @@ mod tests {
                 if let Ok(dir) = std::env::var("DOAX2_TEXTURES") {
                     std::fs::write(format!("{dir}/d{i:02}_t{t}_{}x{}.rgba", texture.width, texture.height), &texture.rgba).unwrap();
                 }
+                println!("   colours: diffuse {:?} ambient {:?} specular {:?} power {}", draw.diffuse, draw.ambient, draw.specular, draw.power);
                 println!("object {k} draw {i}: layout {} indices {} kind {kind} texture {t} {}x{} partial {partial:.2} clear {clear:.2}", draw.decl, draw.index_count, texture.width, texture.height);
             }
         }
@@ -1583,6 +1584,31 @@ mod tests {
                     let low = t.rgba.chunks_exact(4).filter(|p| p[3] < 250).count();
                     println!("body object {} blended: texture {} {}x{}, {:.1}% below 250", placed.object, m.textures[0], t.width, t.height, 100.0 * low as f32 / n as f32);
                 }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn normals_point_out() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for name in ["vtnAA.tpr", "vtn1.tpr"] {
+            let file = chr.read(name).unwrap();
+            let xpr = Xpr2::parse(&file).unwrap();
+            for (k, object) in objects(&xpr).unwrap().iter().enumerate().take(3) {
+                let piece = object_piece(&xpr, object).unwrap();
+                if piece.vertices.len() < 100 { continue; }
+                let centre = piece.vertices.iter().fold(Vec3::ZERO, |a, v| a + Vec3::from(v.position)) / piece.vertices.len() as f32;
+                let out = piece.vertices.iter().filter(|v| Vec3::from(v.normal).dot(Vec3::from(v.position) - centre) > 0.0).count();
+                // Faces by winding against stored normals.
+                let mut agree = 0; let mut total = 0;
+                for m in &piece.materials { for t in m.indices.chunks_exact(3) {
+                    let p: Vec<Vec3> = t.iter().map(|&i| Vec3::from(piece.vertices[i as usize].position)).collect();
+                    let face = (p[1] - p[0]).cross(p[2] - p[0]);
+                    let n: Vec3 = t.iter().map(|&i| Vec3::from(piece.vertices[i as usize].normal)).sum();
+                    total += 1; if face.dot(n) > 0.0 { agree += 1; }
+                }}
+                println!("{name} object {k}: {:.0}% normals point out from the centre, {:.0}% of faces wind with their normals", 100.0 * out as f32 / piece.vertices.len() as f32, 100.0 * agree as f32 / total.max(1) as f32);
             }
         }
     }

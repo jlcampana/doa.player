@@ -746,6 +746,7 @@ impl App {
             .map(|entry| (entry.name.clone(), entry.doa3_motion_id, self.anim_time));
         self.doax_pose = None;
         self.doax2_pose = None;
+        self.mesh.set_lights_follow_camera(false);
         self.load_character_files(char_idx, costume_idx);
         if let Some((name, id, time)) = kept {
             let same = self.current_animations.iter().position(|a| a.name == name)
@@ -971,6 +972,8 @@ impl App {
         self.anim_time = 0.0;
         self.loaded_name = ("DOAX2".to_string(), display_name.clone(), suit.label.clone());
         self.mesh.set_lights(Some(self.current_stage_lights()));
+        // DOAX2's light directions are in the camera's space.
+        self.mesh.set_lights_follow_camera(true);
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         let pieces = inputs.len();

@@ -246,12 +246,17 @@ c108 on, `DirLightBool` b5-8, `PointLightBool` b9-12; some take `SunDir` c200 an
 `SunColorAndIntensity` c207 or `DirLightCol0/1` c10/c12. Blocks laid out in that order (two
 ambients, four booleans, four directions, four colours, then point lights with range 100) sit in
 the heap at `0x4007E270`, `0x4007E450` and `0x4007E630` during a match: three light sets, found in
-no file on disk or in the image, so built at run time. `DirLightVec` points towards the light:
-taken as the way light travels, faces were lit from behind.
+no file on disk or in the image, so built at run time.
 
-A draw holds its colours from +0x70: diffuse, ambient, specular (vec4 each), power at +0xA0
-(1, 0.5, (0.3, 0.2, 0.2), 15 on skin). The viewer lights DOAX2 like DOA2U's materials with
-the three sets (Stage lights), ambient from `P1`, and the specular off: without the game's shine
-maps it washed every colour out. The result is darker and flatter than the unlit view; not
-compared with the game.
+`DirLightVec` is the way the light travels in Direct3D's camera space (z into the screen): the
+strongest light of each set comes down and away from the camera, lighting faces from the front
+and above whatever the camera's angle. The viewer turns them with its own camera
+(`set_lights_follow_camera`).
+
+A draw's colours sit at the offset in its +0x20 (0x80 in all read): diffuse, ambient, specular
+(vec4 each), then the power (1, 0.5, (0.3, 0.2, 0.2), 15 on skin; heads vary, power 50 on some
+parts). Read at a fixed +0x70 at first, the heads' diffuse came out zero and the game lights
+looked far too dark, as the user saw. The viewer lights DOAX2 like DOA2U's materials with the
+three sets, ambient from `P1` (`P2` left out). "Game lights" in the Shading window switches to
+the viewer's plain shading. Not compared with the game.
 

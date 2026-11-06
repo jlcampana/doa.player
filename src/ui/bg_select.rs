@@ -17,13 +17,16 @@ pub struct BgSelectPanel {
     pub relief: f32,
     /// Width of the anime shading's ink line, 1 as drawn by default.
     pub outline_width: f32,
+    /// Lights the model with the game's lights and materials. Off, it gets the viewer's plain
+    /// shading, as before the game's lighting was read.
+    pub game_lights: bool,
     /// A part of the character to frame, asked for this frame.
     pub frame_request: Option<crate::renderer::mesh::FramePart>,
 }
 
 impl BgSelectPanel {
     pub fn new() -> Self {
-        Self { selected: 0, outline_width: 1.0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, frame_request: None }
+        Self { selected: 0, outline_width: 1.0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, game_lights: true, frame_request: None }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool, light_names: &[String]) {
@@ -66,6 +69,7 @@ impl BgSelectPanel {
                 });
                 ui.checkbox(&mut self.mesh_only, "Mesh only");
                 if lit {
+                    ui.checkbox(&mut self.game_lights, "Game lights");
                     ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
                     egui::CollapsingHeader::new("Stage lights").show(ui, |ui| {
                         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
