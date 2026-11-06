@@ -184,3 +184,17 @@ vertical spring and weight on the chest bone: a positive value lowers the chest 
 moves down 1.3 cm), a negative one raises it. Checked running: values from 0 to 0.91 in one of
 Tina's motions. The sideways and forward pairs stay at rest.
 
+## Hands
+
+`hand_vacance.bin`, `hand_gravure.bin`, `hand_volley.bin`, `hand_pwc.bin` in `chr.afs`, one per kind
+of scene. `MPV\0`, then `MPP\0` blocks, one per hand: +0xC the hand's object in the body (31 the
+left hand, 12 the right), +0x14 the pose count (122 and 125 in `hand_vacance`), then the poses'
+offsets from the block. The first offset is a list of the hand's vertex byte offsets (stride
+32), a set bit 31 starting each group of copies of one vertex, ended by -1: 689 groups, whose
+members sit at the same place (checked on Tina's left hand). Each pose is 689 x 24 bytes,
+position and normal per group, in the hand object's own space, plus 8 bytes. The pose most ids
+share (79 of 122) is the base mesh exactly; the others move the fingers by up to 10 cm.
+
+Which pose a motion asks for is in the scripts (`<name>.bin`, `anime_cm.bin` in `mot.afs`), not
+read yet. The viewer shows the base pose.
+
