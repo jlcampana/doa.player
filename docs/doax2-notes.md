@@ -140,7 +140,9 @@ bone of its CAT number from where it sits at rest.
 Compared with the running game (`live_poses_match_motions`, captures from
 `tools/re/doax2_live.py`): Tina in a match played `comon_pyn.mot` 512 and 506; 4 of 12 samples
 matched a whole frame within 6.9 mm at the worst bone (positions from the hips in the frame of
-bone 15), the rest 4 to 21 cm off, taken between frames or while the game blends motions.
+bone 15), the rest 4 to 21 cm off, taken between frames or while the game blends motions. Lei Fang in a match played
+`leifang.mot` 1299: 6 of 12 samples matched consecutive frames within 2.7 mm, the rest within
+0.8 to 4.6 cm. This checks the tracks, DOAX's solve and the rows from the node tree.
 
 ## Skinning
 
