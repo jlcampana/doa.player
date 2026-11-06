@@ -445,10 +445,15 @@ fn load_from_arguments(app: &mut App) {
     if args.iter().any(|a| a == "--export-all") {
         let all_motions = args.iter().any(|a| a == "--all-motions");
         let mut written = 0;
-        // With `--doax`, only DOAX, whose suits take far longer than the other two games.
+        // With `--doax` or `--doax2`, only that game, whose suits take far longer than the
+        // other two games. DOAX2 is left out of the default run.
         let only_doax = args.iter().any(|a| a == "--doax");
-        for source in [app::GameSource::Doa2U, app::GameSource::Doa3, app::GameSource::Doax] {
-            if only_doax && source != app::GameSource::Doax {
+        let only_doax2 = args.iter().any(|a| a == "--doax2");
+        for source in [app::GameSource::Doa2U, app::GameSource::Doa3, app::GameSource::Doax, app::GameSource::Doax2] {
+            if (only_doax && source != app::GameSource::Doax) || (only_doax2 && source != app::GameSource::Doax2) {
+                continue;
+            }
+            if source == app::GameSource::Doax2 && !only_doax2 {
                 continue;
             }
             app.char_panel.selected_source = source;
