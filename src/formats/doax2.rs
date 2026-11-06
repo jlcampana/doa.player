@@ -1264,6 +1264,43 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn heads_differ() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let names: Vec<String> = chr.names().map(str::to_string).collect();
+        for (_, code) in ROSTER {
+            for name in names.iter().filter(|n| n.starts_with(&format!("v{code}")) && n.ends_with(".tpr") && n.len() == 9) {
+                let file = chr.read(name).unwrap();
+                let xpr = Xpr2::parse(&file).unwrap();
+                let objects = objects(&xpr).unwrap();
+                let textures = textures(&xpr);
+                println!("{name}: objects {:?}, textures {:?}", objects.iter().map(Object::vertex_count).collect::<Vec<_>>(), textures.iter().map(|t| (t.width, t.height)).collect::<Vec<_>>());
+                if name == "vleAA.tpr" {
+                    for (i, (t, at)) in textures.iter().zip(xpr.of_kind(b"TX2D")).enumerate() {
+                        let w1 = be32(xpr.file, at + 32).unwrap();
+                        let alpha: Vec<u8> = t.rgba.chunks_exact(4).map(|p| p[3]).collect();
+                        let below = alpha.iter().filter(|&&a| a < 26).count();
+                        println!("  texture {i}: {}x{} format {:#x} endian {} alpha {}..{}, {below} below 0.1", t.width, t.height, w1 & 0x3F, (w1 >> 6) & 3, alpha.iter().min().unwrap(), alpha.iter().max().unwrap());
+                    }
+                    let piece = object_piece(&xpr, &objects[0]).unwrap();
+                    let weights = object_weights(&xpr, &objects[0]).unwrap();
+                    let mut first = 0;
+                    for (d, decl) in objects[0].decls.iter().enumerate() {
+                        let vs = &piece.vertices[first..first + decl.vertex_count];
+                        let (lo, hi) = vs.iter().fold((Vec3::splat(9.0), Vec3::splat(-9.0)), |(l, h), v| (l.min(v.position.into()), h.max(v.position.into())));
+                        let w = &weights[first];
+                        println!("  layout {d}: {} vertices, streams {:?}, weights {}, box {lo:?} {hi:?}, usages {:?}", decl.vertex_count, decl.streams, w.len(), decl.elements.iter().map(|e| (e.stream, e.usage, e.usage_index)).collect::<Vec<_>>());
+                        first += decl.vertex_count;
+                    }
+                    for (k, draw) in objects[0].draws.iter().enumerate() {
+                        println!("  draw {k}: layout {}, indices {}, stages {:?}", draw.decl, draw.index_count, draw.stages);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn suit_reads() {
         let wear = LazyArchive::open("assets/doax2/wertwo.afs").unwrap();
         let names: Vec<String> = wear.names().map(str::to_string).collect();

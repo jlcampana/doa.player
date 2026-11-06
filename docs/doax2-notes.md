@@ -210,3 +210,18 @@ exactly; the race's scripts ask for no pose there, so the game sets it in code.
 
 The viewer uses `hand_vacance.bin` for every motion; the game picks the file by scene.
 
+## Heads
+
+Per character `v<xx>AA`, `AB` and for some `BA`, `BB`. On Lisa and Lei Fang `AA` and `AB` look the
+same from the front; `AA`'s eyes have 129 vertices against 496 in `AB` on Lei Fang, Lisa and
+Christie. Lei Fang's `BA` and `BB` add braids. The viewer uses `AA`.
+
+A head object holds three layouts: the face and scalp (opaque, stage 0 kind 1), small parts
+such as brows and lashes, and hair strands (up to 31 cm long) whose stage 0 is kind 0, a colour
+texture with alpha only at the strands' ragged ends, and stage 1 kind 1 a grey shine map. The
+viewer draws stage 0's texture.
+
+Lei Fang's fringe covers her eyes in the viewer on all four heads: it is opaque geometry at eye
+height, with the hair's top level with the scalp's, so nothing points at a misplaced layout. Not
+compared with the game.
+
