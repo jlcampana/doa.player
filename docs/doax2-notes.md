@@ -362,6 +362,41 @@ owner). `P[x]` below is the working `PROPERTY` at offset x from its tag.
    `0x824988D0`, and every thread first calls `0x824988D0`.
 7. `0x824970D8` and `0x82497450` then write the vertices.
 
+### Checked against the live states
+
+On `vksAAlong_l` (49 steps): the velocity a step leaves at +0x10 is, to 0.015 mm rms (0.07 max),
+0.2 * (position - previous) + gravity + air + springs, with the fixed particles already at the
+new head position, the stiffnesses and gravity at half the file's values (the global factor is
+0.5 in DOAX2 Recomp's 60 fps mode: 0.1 and 0.05, gravity -0.011) and the air term with
+P[0x38] 0.5 and P[0x64] 0.2. Owner+0xB0 was 0, so the frame velocity was 0.
+
+The position is then position + velocity (`0x82495EA4` when there are no colliders), after
+which threads, angle limits and colliders pull it back. Gravity alone moves the hair 11 mm a
+step, and most of it is undone by collisions with the head, back and shoulders: integration
+plus the two thread caps leave 5 to 14 mm, so colliders are needed to match.
+
+`THREAD_DATA` after the thread list holds angle limits (records of 0x40: 1, 0x40, then 0.2618
+or 0.5236 or 0.1222 and 0.1571, a count, the same again, 1.5708, a number, 0.9 or 0.75),
+applied by `0x82499B40` through `0x82494380`. Not decoded.
+
+Colliders: the loaded `CLOTH_DATA`+0x38 points to a chain of records (in the file right after
+the angle limits): type, CAT bone, offset of the next, size, then 1, a flag, 0, an index, and
+the shape:
+
+- type 4, an ellipsoid: centre (x, y, z, 1) and radii. Head (bone 1): centre (0, 0.08,
+  -0.005), radii (0.09, 0.105, 0.095). Neck (20), collars (18, 21), chest (0, (0, 0.2, -0.02)).
+- type 8, a box: centre, two axis rows, half sizes. Chest (bone 0): (0.19, 0.2, 0.16).
+- type 1, a capsule: start, length, radius, axis. Upper arms (bone 8 and others): 0.35 long,
+  0.06 radius.
+- type 2: a radius 0.05, or (0.03, 0.01, 0.16) on the head.
+
+Each record keeps an offset (0x37C720 and up) that the game turns into a work area whose +0x100
+holds the collider's world matrix. `0x82495030` runs a collision for each particle's move from
+its position to position + velocity, by type: 4 `0x824A2490`, 8, 1 and 9 `0x8249B430`, 2
+`0x824A2318`; a second round 4 `0x824A4870`, 8, 1 and 9 `0x8249EE88`, 2 `0x824A43E8`, 3
+`0x824A4690`. `0x8249B750` (3800 instructions) is a closest point and segment test used by them.
+None of these is decoded yet.
+
 Other vertices of layout 2 (2844 to 3367 on `vksAA`) also move but are not particles. The head
 CAT has blocks tagged 0x06010001 from 0x1680 (two values 0.3 and 0.8, a point behind the head,
 offsets) that may drive them. Not decoded.
