@@ -195,6 +195,18 @@ members sit at the same place (checked on Tina's left hand). Each pose is 689 x 
 position and normal per group, in the hand object's own space, plus 8 bytes. The pose most ids
 share (79 of 122) is the base mesh exactly; the others move the fingers by up to 10 cm.
 
-Which pose a motion asks for is in the scripts (`<name>.bin`, `anime_cm.bin` in `mot.afs`), not
-read yet. The viewer shows the base pose.
+Which pose a motion asks for is in the scripts (`<name>.bin`, `anime_cm.bin` in `mot.afs`):
+DOAX's script format, big-endian, with the argument counts of its 96 operations in the table at
+`0x82BDDC78` of the image (6 bytes each, as DOAX's). Op 0 plays a motion, 1 waits for a frame,
+12 and 13 set a hand's pose (hand 0, 1 or 2 for both; pose; frames). Tina's scripts hold 454 hand
+events, the shared ones 789. Poses used: 0 to 6, 12 to 14 and 16.
+
+The pose number to file entry mapping is inferred: entry p + 1 (entry 1 is the base mesh, as
+pose 0 is in DOAX; entries 2 to 13 are the first with their own data). DOAX's pose table at
+`0x33EE38` has no match in the image. Which script hand is which block (the viewer takes hand 0
+as the first block, the left hand) is not checked either. In a jet ski race both hands' working
+buffers (24 bytes a group, in the heap near `0x116C60000`) held entry 13 of `hand_pwc.bin`
+exactly; the race's scripts ask for no pose there, so the game sets it in code.
+
+The viewer uses `hand_vacance.bin` for every motion; the game picks the file by scene.
 

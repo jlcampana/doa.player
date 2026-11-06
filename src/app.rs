@@ -462,6 +462,12 @@ struct Doax2Pose {
     chest_frame: u64,
     /// The nodes as first shown, before a motion: the export's bind pose.
     rest_nodes: Vec<glam::Mat4>,
+    /// Per hand: the scripts' hand number, the mesh piece, its poses.
+    hands: Vec<(u16, usize, crate::formats::doax2::HandPoses)>,
+    /// Hand events by motion key: own motions by number, shared ones by number + 0x2000.
+    events: std::collections::HashMap<u16, Vec<doax::HandEvent>>,
+    /// Per motion file, whether it is a shared one.
+    shared_files: Vec<bool>,
 }
 
 /// What is needed to pose the loaded DOA3 character.
@@ -827,6 +833,7 @@ impl App {
         let mut pose_nodes: Vec<(usize, glam::Mat4)> = Vec::new();
         let mut rest_nodes: Vec<glam::Mat4> = Vec::new();
         let mut chest = Vec::new();
+        let mut body_objects = Vec::new();
         for (index, file) in files.iter().enumerate() {
             let drawn_before = drawn.len();
             let texture_base = textures.len();
@@ -864,6 +871,9 @@ impl App {
                         .collect();
                     chest.push((drawn.len(), positions));
                 }
+                if index == 0 {
+                    body_objects.push((placed.object, drawn.len()));
+                }
                 drawn.push(Drawn { piece, first_texture: texture_base, texture_count: file.textures.len(), node, multi });
             }
         }
@@ -888,13 +898,38 @@ impl App {
             })
             .collect();
         let pose_pieces = pose_nodes;
+        // Hands: the pose file for holidays, the scripts' events. Hand k of the scripts is taken
+        // to be the file's k-th block; not checked.
+        let hands: Vec<(u16, usize, doax2::HandPoses)> = chr
+            .read("hand_vacance.bin")
+            .ok()
+            .and_then(|file| doax2::hand_poses(&file).map_err(|e| log::warn!("DOAX2 hands: {e:#}")).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(k, hand)| {
+                let piece = body_objects.iter().find(|(object, _)| *object == hand.object)?.1;
+                Some((k as u16, piece, hand))
+            })
+            .collect();
+        let mut events = std::collections::HashMap::new();
+        let mut shared_files = Vec::new();
         let mut motion_data = Vec::new();
         let mut motions = Vec::new();
         let mut animations = Vec::new();
         if let Some(mot) = self.doax2_mot.as_ref() {
             let names: Vec<String> = mot.names().map(str::to_string).collect();
+            if let Some(name) = doax2::motion_name(&code) {
+                if let Ok(bin) = mot.read(&format!("{name}.bin")) {
+                    events.extend(doax2::hand_events(&bin));
+                }
+            }
+            if let Ok(bin) = mot.read("anime_cm.bin") {
+                events.extend(doax2::hand_events(&bin));
+            }
             for file in doax2::motion_files(&names, &code) {
                 let Ok(data) = mot.read(&file) else { continue };
+                shared_files.push(file.starts_with("comon"));
                 for motion in doax::list_motions_big(&data) {
                     motions.push((motion_data.len(), motion));
                     animations.push(AnimationEntry {
@@ -912,6 +947,7 @@ impl App {
         self.doax2_pose = Some(Doax2Pose {
             files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None, chest_frame: 0,
             rest_nodes: nodes.clone(),
+            hands, events, shared_files,
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -2025,6 +2061,22 @@ impl App {
                         for (piece, positions) in &pose.chest {
                             self.mesh.set_rest_positions(*piece, positions.iter().enumerate().map(|(v, p)| (v, p[0].lerp(p[target], weight))));
                         }
+                    }
+                    // Hands: the scripts' poses, blended as in DOAX.
+                    let key = if pose.shared_files[file] { motion.id as u16 | doax::SHARED_MOTION_FLAG } else { motion.id as u16 };
+                    let events = pose.events.get(&key).map_or(&[][..], Vec::as_slice);
+                    let entries: Vec<usize> = (0..64).map(crate::formats::doax2::hand_entry).collect();
+                    for (slot, piece, hand) in &pose.hands {
+                        let (from, to, weight) = doax::hand_blend(events, *slot, self.anim_time, &entries);
+                        let base = hand.poses.get(1).and_then(Option::as_ref);
+                        let (Some(a), Some(b)) = (hand.poses.get(from).and_then(Option::as_ref).or(base), hand.poses.get(to).and_then(Option::as_ref).or(base)) else { continue };
+                        self.mesh.set_rest_positions(
+                            *piece,
+                            hand.groups.iter().zip(a.iter().zip(b)).flat_map(|(group, (p, q))| {
+                                let position = glam::Vec3::from(*p).lerp(glam::Vec3::from(*q), weight);
+                                group.iter().map(move |&v| (v, position))
+                            }),
+                        );
                     }
                     let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect();
                     self.mesh.apply_pose(&self.ctx.queue, &nodes);

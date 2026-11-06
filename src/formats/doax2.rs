@@ -802,6 +802,122 @@ pub fn blend_bones(slot: u32, groups: usize) -> Option<&'static [usize]> {
     })
 }
 
+/// Argument counts of the 96 script operations, from the table at `0x82BDDC78` in the game's
+/// image (6 bytes an operation: number, count, two more bytes), the same layout as DOAX's.
+const SCRIPT_OP_ARGUMENTS: [u8; 96] = [
+    2, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 2, 3, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1,
+    1, 1, 1, 2, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 3, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 2, 2, 1, 1, 1,
+    2, 1, 0, 1, 0, 2, 1, 1, 0, 1, 2, 2,
+];
+
+/// The hand events of each motion in a script file (`<name>.bin`, `anime_cm.bin`): DOAX's
+/// scripts, big-endian. Word 0 is the offset of a table of script offsets; a script is 16-bit
+/// words, an operation and its arguments, up to 0xFF. 0 plays a motion (its first argument),
+/// 1 waits for a frame, 12 sets a hand's pose and 13 does so over some frames. Hand 2 is both.
+/// Motions of the shared files are their number plus 0x2000 in `anime_cm.bin`.
+pub fn hand_events(bin: &[u8]) -> std::collections::HashMap<u16, Vec<super::doax::HandEvent>> {
+    let mut events: std::collections::HashMap<u16, Vec<super::doax::HandEvent>> = std::collections::HashMap::new();
+    let Ok(table) = be32(bin, 0) else { return events };
+    let mut starts: Vec<usize> = (0..8000).filter_map(|i| be32(bin, table as usize + i * 4).ok()).map(|v| v as usize).filter(|&v| v < bin.len()).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    for start in starts {
+        let (mut at, mut motion, mut frame) = (start, None, 0u16);
+        for _ in 0..1000 {
+            let Ok(op) = be16(bin, at) else { break };
+            let Some(&count) = SCRIPT_OP_ARGUMENTS.get(op as usize) else { break };
+            let argument = |i: usize| be16(bin, at + 2 + i * 2).ok();
+            match op {
+                0 => {
+                    motion = argument(0);
+                    frame = 0;
+                    // The first script to play a motion decides its events.
+                    if let Some(motion) = motion {
+                        events.entry(motion).or_default();
+                    }
+                }
+                1 => frame = argument(0).unwrap_or(frame),
+                12 | 13 => {
+                    if let (Some(motion), Some(hand), Some(pose)) = (motion, argument(0), argument(1)) {
+                        let time = if op == 13 { argument(2).unwrap_or(0) } else { 0 };
+                        events.entry(motion).or_default().push(super::doax::HandEvent { frame, hand, pose, time });
+                    }
+                }
+                _ => {}
+            }
+            at += 2 + count as usize * 2;
+        }
+    }
+    events
+}
+
+/// A hand's pose file block (`MPP`): its object in the body, its vertex groups and, per pose
+/// number, each group's position.
+#[derive(Debug, Clone)]
+pub struct HandPoses {
+    pub object: usize,
+    pub groups: Vec<Vec<usize>>,
+    pub poses: Vec<Option<Vec<[f32; 3]>>>,
+}
+
+/// The two hands of a `hand_*.bin`: `MPV`, then an `MPP` block per hand: +0xC the hand's object,
+/// +0x14 the pose count, then the poses' offsets from the block. Pose 0 is the vertex list
+/// (byte offsets, 32 a vertex, a set bit 31 starting each group of copies, ended by -1); every
+/// other is 24 bytes a group, position then normal.
+pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
+    let mut hands = Vec::new();
+    let mut at = 0;
+    while at + 4 <= file.len() {
+        if &file[at..at + 4] != b"MPP\0" {
+            at += 4;
+            continue;
+        }
+        let object = be32(file, at + 0xC)? as usize;
+        let count = be32(file, at + 0x14)? as usize;
+        let offsets = (0..count).map(|i| Ok(be32(file, at + 0x18 + i * 4)? as usize)).collect::<Result<Vec<_>>>()?;
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut p = at + *offsets.first().context("hand block without poses")?;
+        loop {
+            let value = be32(file, p)?;
+            p += 4;
+            if value == u32::MAX {
+                break;
+            }
+            if value & 0x8000_0000 != 0 || groups.is_empty() {
+                groups.push(Vec::new());
+            }
+            groups.last_mut().unwrap().push((value & 0x7FFF_FFFF) as usize / 32);
+        }
+        let poses = offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &offset)| {
+                if i == 0 {
+                    return Ok(None);
+                }
+                (0..groups.len())
+                    .map(|g| {
+                        let q = at + offset + g * 24;
+                        Ok([bef32(file, q)?, bef32(file, q + 4)?, bef32(file, q + 8)?])
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .map(Some)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        hands.push(HandPoses { object, groups, poses });
+        at += 4;
+    }
+    Ok(hands)
+}
+
+/// The hand file entry a script's pose number takes: pose p is entry p + 1. Inferred, not read
+/// from the game: entry 1 is the base mesh, as pose 0 is in DOAX, and entries 2 to 13 are the
+/// first ones with their own data, matching poses 1 to 12 in the scripts. In a jet ski race both
+/// hands were on entry 13 exactly.
+pub fn hand_entry(pose: u16) -> usize {
+    pose as usize + 1
+}
+
 /// The name a character's motions go by.
 pub fn motion_name(code: &str) -> Option<&'static str> {
     Some(match code {
@@ -1112,6 +1228,37 @@ mod tests {
             let partial_bad = weights.iter().filter(|w| { let s: f32 = w[..w.len() - 1].iter().sum(); !(-0.01..=1.01).contains(&s) }).count();
             println!("   with the last implied: {partial_bad} out of range");
             println!("{} {placed:?} node {node}: {} vertices, sums {lo:.3}..{hi:.3}, {bad} odd, layouts {}", suit.label, piece.vertices.len(), Xpr2::parse(&tpr).map(|x| objects(&x).unwrap()[placed.object].decls.len()).unwrap());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn hands_and_scripts_read() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let hands = hand_poses(&chr.read("hand_vacance.bin").unwrap()).unwrap();
+        for hand in &hands {
+            let own = hand.poses.iter().filter(|p| p.is_some()).count();
+            println!("hand object {}: {} groups, {own} poses", hand.object, hand.groups.len());
+        }
+        assert_eq!(hands.iter().map(|h| h.object).collect::<Vec<_>>(), vec![31, 12]);
+        let body = chr.read("vtn1.tpr").unwrap();
+        let xpr = Xpr2::parse(&body).unwrap();
+        let objects = objects(&xpr).unwrap();
+        for hand in &hands {
+            let piece = object_piece(&xpr, &objects[hand.object]).unwrap();
+            let base = hand.poses[1].as_ref().unwrap();
+            for (group, position) in hand.groups.iter().zip(base) {
+                for &v in group {
+                    let d = Vec3::from(piece.vertices[v].position).distance(Vec3::from(*position));
+                    assert!(d < 1e-5, "object {} vertex {v}: {d}", hand.object);
+                }
+            }
+        }
+        for name in ["tina.bin", "anime_cm.bin"] {
+            let events = hand_events(&mot.read(name).unwrap());
+            let count: usize = events.values().map(Vec::len).sum();
+            println!("{name}: {} motions, {count} hand events", events.len());
         }
     }
 
