@@ -3,10 +3,11 @@
 Xbox 360 game, played here through DOAX2 Recomp (`/home/pandi/Ports/Apps/DeadOrAliveXtreme2-DOAX2Recomp`).
 Its disc files are in `extracted game files here/`. The viewer reads copies in `assets/doax2/`:
 `chr.afs`, `mot.afs`, `itm.afs`, `cmn.afs`, `werone.afs`, `wertwo.afs`, `default.xex`. All data is
-big-endian. Nothing here is compared with the running game yet. The viewer shows the body, the first head
-(`AA`) and a suit in the files' rest pose (T pose), with base textures; no motions, lights,
-skinning across bones or morphs yet. Do not assume a format matches
-DOAX or DOA3 because the names do.
+big-endian. Nothing here is compared with the running game yet. The viewer shows the body, the
+first head (`AA`) and a suit with base textures, plays the motions with DOAX's solve and blends
+weighted pieces across bones. No lights, hands, morphs or chest spring yet. Do not assume a
+format matches DOAX or DOA3 because the names do; where DOAX2 does match DOAX, it is measured
+below.
 
 ## Archives
 
@@ -53,7 +54,8 @@ A list of `ObjGeo` records (offsets from +0x30). Each:
 Element types: `0x2A23B9` float3, `0x2C23A5` float2, `0x1A23A6` float4, `0x2C235F` half2,
 `0x2A2190` three signed normalized values in 11, 11 and 10 bits from the low bits (normals and
 tangents: length 0.998 to 1.0 on Tina's body this way, 0.4 to 1.4 the other way round).
-Usages: 0 position, 1 blend weight (float2, float3 or float4 after the 32 bytes), 3 normal,
+Usages: 0 position, 1 blend weight (float2, float3 or float4 after the 32 bytes: two to four
+groups, the floats add up to one; see "Skinning"), 3 normal,
 5 texcoord (three sets), 6 tangent. Extra streams 1 to 3 hold more positions (usage 0 with
 index 1 to 3): morph shapes on the chest and some other objects. Six such streams on some
 objects: probably positions and normals.
@@ -92,14 +94,72 @@ in word 1. Not read further yet.
 Section kind 2 of the directory is a table of draw list offsets (zero for none). Each list is
 (game bone, object) pairs ended by -1, with a negative marker after some pairs: -4 eyes, -5 and
 -6 the two shapes of the same foot (-5 on the leg nodes, -6 on the parentless nodes 1 to 4),
--7 toes. Bodies and heads have one list, at the table's fourth entry; suits have up to five,
-each a whole set of the suit's objects, not told apart yet (the viewer draws the first).
-Bones seen: 0 chest, 1 head, 2 pelvis, 16 and 17 eyes, 18 and 21 collars, 20 neck, 23 spine.
+-7 toes. The table is indexed by body type. A body and its heads have one list, at their type:
+Kasumi and Ayane 0, Lei Fang, Kokoro and Hitomi 1, Helena and Lisa 2, Tina 3, Christie 4. A suit
+has a list per type, the same pieces fitted to each body; the viewer takes the body's type.
+The pair's first number is a bone: see "Skeleton".
 
 The head file's root node has no parent, and its own offset is not the body's. Put on the body's
-head node (the child of the neck, bone 20), the head's neck edge meets the body's with no gap on
+head node (the child of the neck node, CAT bone 20), the head's neck edge meets the body's with no gap on
 all five characters (`head_meets_neck`); hung from the neck with the head's own offset, the gap
 was 2 to 29 mm. Suits carry their own copy of the body's node tree.
 
 Suit CATs are 200 to 600 KB. Suit models hold their own copy of the hierarchy and several
 variants of the chest and pelvis objects (187 objects in `vtn_tk_b_m`).
+
+## Skeleton
+
+DOAX's 32-bone skeleton. Tina's node offsets are DOAX's offset rows for her to the millimetre
+(the rows are also in the game's image, `0x82BE21F0` on, 25 rows of 16 bytes per table with a
+256.0 marker, rows 20 to 23 first as in DOAX). DOAX bone to body node: 0 chest 5, 1 head 6,
+2 hips 0, 3 right ankle 12, 4 elbow 13, 5 wrist 14, 6 thigh 16, 7 knee 19, 8 shoulder 20,
+9 left ankle 29, 10 30, 11 31, 12 33, 13 36, 14 37, 16 right collar 9, 17 eye 11, 18 toe 21,
+19 neck 23, 20 left collar 26, 21 eye 28, 22 toe 38, 23 spine 40 (`BONE_NODES`; the same on the
+five bodies, `bone_nodes_follow_the_links`). Other nodes sit on these with no offset.
+
+CAT bone numbers 0 to 15 are DOAX bones. 16 to 23, from where bodies and heads put them: 16 and
+17 the eyes (DOAX 17, 21), 18 and 21 the collars (16, 20), 19 and 22 the toes (18, 22), 20 the
+neck (19), 23 the spine (23) (`SLOT_BONES`).
+
+## Motions
+
+`mot.afs`: per character `<name>.mot`, `bed_<name>.mot` and `gr_<name>NN<s|m|l|x>.mot`, with names
+`tina`, `hika` (Helena), `leifang`, `lisa`, `gokei` (Christie), `kasumi`, `ayane`, `kokoro`,
+`hitomi`; shared `comon*.mot`. About 550 motions per character.
+
+DOAX's format, big-endian: 8000 words of block offsets (unused ones point at the placeholder
+the first holds), a block word with 60 tracks in its high half and the frames in its low half,
+60 track offsets, and DOAX's packed keys. Every 16-bit field is swapped, and so are the two
+slope bytes at +8 and +9 of a cubic key, as if they were one 16-bit field: with that order,
+consecutive keys' slopes agree within 0.0002 (median), against 0.0064 the other way. Values
+come out as DOAX's: hips at 0.86 to 0.91 m, angles from 0 to 2 pi.
+
+The viewer feeds them to DOAX's solve with the body's rows. Each rigid piece follows the DOAX
+bone of its CAT number from where it sits at rest. Not compared with the game.
+
+## Skinning
+
+Pieces with blend weights have no bone list in the file; the game must hold one per CAT bone
+number. Not found in the image (DOAX's table at `0x33F988` has no match). The viewer uses a
+table inferred from the bodies (`blend_bones`):
+
+- Group 0 is the piece's own bone.
+- A group whose dominant vertices meet a rigid piece at rest takes that piece's bone: over 80
+  motion frames, any other bone opens the seam by 6 mm or more (`blend_groups_from_seams`).
+- The rest follow DOAX's groups for the same place: neck 1, 0, 19; spine 0, 2, 23; collars
+  16, 8, 0, 30 and 20, 14, 0, 31. The forearms' third group (13 vertices) is the shoulder, the
+  bone that stretched them least; the forearm still narrows near the elbow in some poses, so this
+  one is doubtful.
+
+Suits use only (bone number, group count) pairs that bodies have. Some suit weights add up to
+more than one (a single 2.307, or 1.16 to 1.23 over two groups, in Tina's `on_s_m`); they are
+scaled to one, since the game shows no spikes. Not checked against the game's shader.
+
+## Live memory
+
+DOAX2 Recomp runs under Wine. The guest's memory is mapped at host `0x200000000`: guest
+address `a` is at `0x200000000 + a`, and physical memory shows four times, at guest
+`0xA0000000`, `0xC0000000`, `0xE0000000` and higher. The XEX image is at guest `0x82000000`;
+`assets/doax2/image_82000000.bin` is a copy of 32 MB from there, read from a running game.
+Loaded CATs keep their lists but have their offsets turned into pointers.
+
