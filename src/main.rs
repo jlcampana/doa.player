@@ -53,7 +53,9 @@ impl ApplicationHandler for Handler {
             event_loop
                 .create_window(
                     attributes
-                        .with_title("DOA Player")
+                        // `shot.sh` gives its windows a title of their own, so as not to capture
+                        // another viewer that is open.
+                        .with_title(std::env::var("DOA_PLAYER_TITLE").unwrap_or_else(|_| "DOA Player".to_string()))
                         // Exporting from the command line needs the GPU, not a window on the desktop.
                         .with_visible(!std::env::args().any(|a| a == "--export" || a == "--export-all" || a == "--install-icon"))
                         .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
