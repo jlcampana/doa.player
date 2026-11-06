@@ -163,6 +163,16 @@ address `a` is at `0x200000000 + a`, and physical memory shows four times, at gu
 `assets/doax2/image_82000000.bin` is a copy of 32 MB from there, read from a running game.
 Loaded CATs keep their lists but have their offsets turned into pointers.
 
+`tools/re/doax2_live.py bones` finds the characters' bone arrays: 32 matrices of 64 bytes,
+row-major with the translation in the last row, in the guest heap around `0x93A00000` during a
+jet ski race. The array index is the CAT bone number (measured from the distances between
+bones: bones 0 to 14 and 23 to 31 at DOAX's places, 16 and 17 at the eyes, 18 and 21 at the
+collars, 19 and 22 at the toes, 20 at the neck, 15 under the hips on the ground). This confirms
+`SLOT_BONES`. DOAX's arm roll relations (bones 24 to 31) did not hold on the jet ski pose
+(errors of 0.4 to 0.6, except 0.03 for the hand's aligned bone); whether the race poses arms
+another way or DOAX2's roll differs is not known. The hips sat at exactly 0.6 m with 0.75 and
+0.01 next to them, which look like the race's constants, not motion tracks.
+
 ## Chest shapes
 
 Pieces whose layouts have seven streams (the body's chest, collars and spine, and the suits'
