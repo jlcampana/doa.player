@@ -135,7 +135,12 @@ consecutive keys' slopes agree within 0.0002 (median), against 0.0064 the other 
 come out as DOAX's: hips at 0.86 to 0.91 m, angles from 0 to 2 pi.
 
 The viewer feeds them to DOAX's solve with the body's rows. Each rigid piece follows the DOAX
-bone of its CAT number from where it sits at rest. Not compared with the game.
+bone of its CAT number from where it sits at rest.
+
+Compared with the running game (`live_poses_match_motions`, captures from
+`tools/re/doax2_live.py`): Tina in a match played `comon_pyn.mot` 512 and 506; 4 of 12 samples
+matched a whole frame within 6.9 mm at the worst bone (positions from the hips in the frame of
+bone 15), the rest 4 to 21 cm off, taken between frames or while the game blends motions.
 
 ## Skinning
 
@@ -218,8 +223,11 @@ Christie. Lei Fang's `BA` and `BB` add braids. The viewer uses `AA`.
 
 A head object holds three layouts: the face and scalp (opaque, stage 0 kind 1), small parts
 such as brows and lashes, and hair strands (up to 31 cm long) whose stage 0 is kind 0, a colour
-texture with alpha only at the strands' ragged ends, and stage 1 kind 1 a grey shine map. The
-viewer draws stage 0's texture.
+texture with alpha only at the strands' ragged ends (and black strand-shaped textures with alpha,
+shadows over the hair), and stage 1 kind 1 a grey band of shine, not a mask (seen on Tina's and
+Lei Fang's; taking it as a mask cut most of Tina's hair away). The viewer draws those draws as a
+translucent piece of their own, blended by stage 0's alpha after the solid pieces; it had drawn
+them solid with only an alpha test, which the user saw as wrong hair on all the girls.
 
 Lei Fang's fringe covers her eyes in the viewer on all four heads: it is opaque geometry at eye
 height, with the hair's top level with the scalp's, so nothing points at a misplaced layout. Not

@@ -878,15 +878,18 @@ impl App {
             }
         }
         let nodes = rest_nodes;
-        let inputs: Vec<PieceInput> = drawn
-            .iter()
-            .map(|d| PieceInput {
+        // Each piece as drawn, then its hair strands again as a translucent piece on the same
+        // node, blended by the texture's alpha after the solid ones. Pieces shaped at run time
+        // (chest, hands) have no strands, so their indices stay those of `drawn`.
+        fn input_of<'a>(d: &Drawn<'a>, blended: bool) -> PieceInput<'a> {
+            PieceInput {
                 node: d.node,
                 vertices: &d.piece.vertices,
                 draws: d
                     .piece
                     .materials
                     .iter()
+                    .filter(|m| crate::formats::doax2::is_blended(m) == blended)
                     .map(|m| (m.indices.as_slice(), m.base_texture(d.texture_count).map(|t| t + d.first_texture), m.cull_back, None))
                     .collect(),
                 parent: d.node,
@@ -894,9 +897,11 @@ impl App {
                 bend: None,
                 multi: d.multi.clone(),
                 welds: Vec::new(),
-                translucent: false,
-            })
-            .collect();
+                translucent: blended,
+            }
+        }
+        let mut inputs: Vec<PieceInput> = drawn.iter().map(|d| input_of(d, false)).collect();
+        inputs.extend(drawn.iter().filter(|d| d.piece.materials.iter().any(doax2::is_blended)).map(|d| input_of(d, true)));
         let pose_pieces = pose_nodes;
         // Hands: the pose file for holidays, the scripts' events. Hand k of the scripts is taken
         // to be the file's k-th block; not checked.

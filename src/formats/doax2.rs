@@ -361,8 +361,17 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
             }
         }
         flush(&mut strip, &mut indices);
-        let texture = draw.stages.iter().find(|s| s.0 == 0).map(|s| s.2);
-        materials.push(ModelMaterial { indices, textures: texture.into_iter().collect(), cull_back: false, look: None });
+        // Stage 0 of kind 0 (hair strands, and dark strand-shaped shadows over them) is a colour
+        // texture blended by its alpha; stage 1's grey texture there is a band of shine, not a
+        // mask (seen on Tina's and Lei Fang's). Such materials list both textures, which marks
+        // them for blending (`is_blended`); the viewer draws the first. Otherwise stage 0's.
+        let stage = |n: u32| draw.stages.iter().find(|s| s.0 == n);
+        let textures = match (stage(0), stage(1)) {
+            (Some(&(_, 0, color)), Some(&(_, 1, mask))) if mask != u32::MAX as usize => vec![color, mask],
+            (Some(&(_, _, color)), _) => vec![color],
+            _ => Vec::new(),
+        };
+        materials.push(ModelMaterial { indices, textures, cull_back: false, look: None });
     }
     Ok(ModelPiece { vertices, materials })
 }
@@ -441,6 +450,12 @@ pub fn object_shapes(xpr: &Xpr2, object: &Object, base: &[ModelVertex]) -> Resul
 /// The shapes the vertical chest spring uses: up (stream 5) and down (stream 6).
 pub const SHAPE_UP: usize = 4;
 pub const SHAPE_DOWN: usize = 5;
+
+/// Whether a material of `object_piece` is blended by its texture's alpha: hair strands,
+/// stage 0 of kind 0, listed with their shine texture as a second.
+pub fn is_blended(material: &ModelMaterial) -> bool {
+    material.textures.len() == 2
+}
 
 /// Xenos texture formats seen so far.
 const FMT_8888: u32 = 0x06;
@@ -729,7 +744,8 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
         pieces.push((piece, *node, placed));
         weights.push(object_weights(&xpr, object)?);
     }
-    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes, weights, shapes })
+    let textures = textures(&xpr);
+    Ok(Loaded { pieces, textures, rest, nodes, weights, shapes })
 }
 
 /// The body's node for each DOAX bone: DOAX2 has DOAX's skeleton, the same 24 offsets (Tina's
@@ -1295,6 +1311,106 @@ mod tests {
                         println!("  draw {k}: layout {}, indices {}, stages {:?}", draw.decl, draw.index_count, draw.stages);
                     }
                 }
+            }
+        }
+    }
+
+    /// Finds the motion and frame that best match bone arrays read from the running game
+    /// (`target/captures/doax2_live.txt`: address, sample, then 32 matrices of 16 numbers, rows
+    /// of column-vector matrices). Positions are compared from the hips, in the frame of bone
+    /// 15, the character's root.
+    #[test]
+    #[ignore]
+    fn live_poses_match_motions() {
+        use crate::formats::doax;
+        let text = std::fs::read_to_string("target/captures/doax2_live.txt").unwrap();
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let names: Vec<String> = mot.names().map(str::to_string).collect();
+        let codes: Vec<String> = std::env::var("DOAX2_CODES").map(|c| c.split(',').map(str::to_string).collect()).unwrap_or(vec!["tn".into(), "he".into(), "ls".into()]);
+        let flip = Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0));
+        let compared: Vec<usize> = (0..24).filter(|&b| b != 15).collect();
+        // Per character: (file, motion, frame, positions from the hips).
+        let mut candidates = Vec::new();
+        for code in &codes {
+            let body = load(&chr.read(&format!("v{code}1.tpr")).unwrap(), &chr.read(&format!("v{code}1.cat")).unwrap()).unwrap();
+            let rows = bone_rows(&body.rest).unwrap();
+            for file in motion_files(&names, code) {
+                let data = mot.read(&file).unwrap();
+                for motion in doax::list_motions_big(&data) {
+                    for frame in 0..motion.frames.max(1) {
+                        let Ok(values) = doax::eval_motion_endian(&data, &motion, frame as f32, true) else { continue };
+                        let bones = doax::solve_pose(&values, &rows).map(|b| flip * b);
+                        let hips = bones[2].w_axis.truncate();
+                        // DOAX bones by CAT number, as the game's arrays hold them.
+                        let by_slot: Vec<Vec3> = SLOT_BONES.iter().map(|&b| bones[b].w_axis.truncate() - hips).collect();
+                        candidates.push((code.clone(), file.clone(), motion.id, frame, by_slot));
+                    }
+                }
+            }
+        }
+        println!("{} candidate frames", candidates.len());
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let numbers: Vec<f32> = parts[2..].iter().map(|v| v.parse().unwrap()).collect();
+            let matrices: Vec<Mat4> = numbers.chunks_exact(16).map(|m| Mat4::from_cols_array(m.try_into().unwrap()).transpose()).collect();
+            let root = matrices[15];
+            let hips = matrices[2].w_axis.truncate();
+            let live: Vec<Vec3> = matrices[..24].iter().map(|m| root.inverse().transform_vector3(m.w_axis.truncate() - hips)).collect();
+            let mut best = (f32::MAX, String::new());
+            for (code, file, id, frame, by_slot) in &candidates {
+                let error = compared.iter().map(|&b| by_slot[b].distance(live[b])).fold(0f32, f32::max);
+                if error < best.0 {
+                    best = (error, format!("{code} {file} {id} frame {frame}"));
+                }
+            }
+            println!("{} {}: best {:.4} m at {}", parts[0], parts[1], best.0, best.1);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn hair_coordinates() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for code in ["tn", "le", "ls", "he", "cr"] {
+            let file = chr.read(&format!("v{code}AA.tpr")).unwrap();
+            let xpr = Xpr2::parse(&file).unwrap();
+            let object = &objects(&xpr).unwrap()[0];
+            let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+            for (d, decl) in object.decls.iter().enumerate() {
+                let uvs: Vec<&Element> = decl.elements.iter().filter(|e| e.usage == USAGE_TEXCOORD).collect();
+                let draws: Vec<_> = object.draws.iter().filter(|dr| dr.decl == d).map(|dr| dr.stages.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>()).collect();
+                let mut differ = 0;
+                if uvs.len() >= 2 {
+                    let (at, _) = xpr.buffer(vbufs[decl.streams[0].0], true).unwrap();
+                    let stride = decl.streams[0].1;
+                    for v in 0..decl.vertex_count {
+                        let a = be32(xpr.file, at + v * stride + uvs[0].offset as usize).unwrap();
+                        let b = be32(xpr.file, at + v * stride + uvs[1].offset as usize).unwrap();
+                        if a != b { differ += 1; }
+                    }
+                }
+                let tex = textures(&xpr);
+                if code == "tn" && d == 1 {
+                    if let Ok(dir) = std::env::var("DOAX2_TEXTURES") {
+                        for i in [1usize, 2, 11, 12, 15, 16] {
+                            let t = &tex[i];
+                            std::fs::write(format!("{dir}/tn{i:02}_{}x{}.rgba", t.width, t.height), &t.rgba).unwrap();
+                        }
+                    }
+                }
+                for dr in object.draws.iter().filter(|dr| dr.decl == d).take(6) {
+                    let st = |n: u32| dr.stages.iter().find(|s| s.0 == n).map(|s| s.2);
+                    if let (Some(c), Some(m)) = (st(0), st(1)) {
+                        if let (Some(ct), Some(mt)) = (tex.get(c), tex.get(m)) {
+                            let ca = ct.rgba.chunks_exact(4).filter(|p| p[3] > 25).count() as f32 / (ct.rgba.len() / 4) as f32;
+                            let mg = mt.rgba.chunks_exact(4).filter(|p| p[0] > 25).count() as f32 / (mt.rgba.len() / 4) as f32;
+                            let mean = mt.rgba.chunks_exact(4).map(|p| p[0] as f32).sum::<f32>() / (mt.rgba.len() / 4) as f32;
+                            println!("   draw: colour {c} {}x{} opaque {ca:.2}; mask {m} {}x{} over 0.1 {mg:.2}, mean grey {mean:.0}", ct.width, ct.height, mt.width, mt.height);
+                        }
+                    }
+                }
+                println!("{code} layout {d}: {} uv sets, uv0 != uv1 on {differ} of {}, stage kinds {:?}", uvs.len(), decl.vertex_count, draws.iter().take(4).collect::<Vec<_>>());
             }
         }
     }
