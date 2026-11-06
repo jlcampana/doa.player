@@ -163,3 +163,14 @@ address `a` is at `0x200000000 + a`, and physical memory shows four times, at gu
 `assets/doax2/image_82000000.bin` is a copy of 32 MB from there, read from a running game.
 Loaded CATs keep their lists but have their offsets turned into pointers.
 
+## Chest shapes
+
+Pieces whose layouts have seven streams (the body's chest, collars and spine, and the suits'
+pieces on the same bones) hold six whole position shapes after the base: streams 1 and 4
+sideways (+-1.5 cm on average on Tina's chest), 2 and 3 forward and back, 5 up (3.5 cm) and 6
+down (2.3 cm). The declaration binds three, so the game picks one of each pair: a spring along
+three axes. How DOAX2 drives them is not read. The viewer drives only up and down, with DOAX's
+vertical spring and weight on the chest bone: a positive value lowers the chest (DOAX's shape 1
+moves down 1.3 cm), a negative one raises it. Checked running: values from 0 to 0.91 in one of
+Tina's motions. The sideways and forward pairs stay at rest.
+

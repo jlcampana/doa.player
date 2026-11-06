@@ -405,6 +405,43 @@ pub fn object_weights(xpr: &Xpr2, object: &Object) -> Result<Vec<Vec<f32>>> {
     Ok(out)
 }
 
+/// An object's six extra position shapes, per vertex in `object_piece`'s order, for objects
+/// whose layouts have seven streams: streams 1 to 6 hold whole positions, in pairs along an
+/// axis (on Tina's chest, 1 and 4 move the vertices sideways by +-1.5 cm on average, 2 and 3
+/// forward and back, 5 up by 3.5 cm and 6 down by 2.3 cm). The declaration binds three of
+/// them, so the game picks one of each pair. Layouts without them keep the base positions.
+pub fn object_shapes(xpr: &Xpr2, object: &Object, base: &[ModelVertex]) -> Result<Option<Vec<[[f32; 3]; 6]>>> {
+    let file = xpr.file;
+    if !object.decls.iter().any(|d| d.streams.len() == 7) {
+        return Ok(None);
+    }
+    let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+    let mut out: Vec<[[f32; 3]; 6]> = base.iter().map(|v| [v.position; 6]).collect();
+    let mut first = 0;
+    for decl in &object.decls {
+        if decl.streams.len() == 7 {
+            for (shape, &(buffer, stride)) in decl.streams[1..].iter().enumerate() {
+                let (at, size) = xpr.buffer(*vbufs.get(buffer).context("VBUF out of range")?, true)?;
+                if stride < 12 || size < decl.vertex_count * stride {
+                    bail!("shape buffer {buffer} is short");
+                }
+                for v in 0..decl.vertex_count {
+                    let p = at + v * stride;
+                    if let Some(slot) = out.get_mut(first + v) {
+                        slot[shape] = [bef32(file, p)?, bef32(file, p + 4)?, bef32(file, p + 8)?];
+                    }
+                }
+            }
+        }
+        first += decl.vertex_count;
+    }
+    Ok(Some(out))
+}
+
+/// The shapes the vertical chest spring uses: up (stream 5) and down (stream 6).
+pub const SHAPE_UP: usize = 4;
+pub const SHAPE_DOWN: usize = 5;
+
 /// Xenos texture formats seen so far.
 const FMT_8888: u32 = 0x06;
 const FMT_DXT1: u32 = 0x12;
@@ -633,6 +670,8 @@ pub struct Loaded {
     pub nodes: Vec<Node>,
     /// Per piece, each vertex's blend weights; empty lists for pieces on one bone.
     pub weights: Vec<Vec<Vec<f32>>>,
+    /// Per piece, its six shapes if it has them.
+    pub shapes: Vec<Option<Vec<[[f32; 3]; 6]>>>,
 }
 
 /// `load_for` with the file's own first list.
@@ -676,6 +715,7 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
         .context("no draw list")?;
     let mut pieces = Vec::new();
     let mut weights = Vec::new();
+    let mut shapes = Vec::new();
     for placed in list {
         if placed.mark == Some(-6) {
             continue;
@@ -684,10 +724,12 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
             log::warn!("DOAX2: object {} is not in the model", placed.object);
             continue;
         };
-        pieces.push((object_piece(&xpr, object)?, *node, placed));
+        let piece = object_piece(&xpr, object)?;
+        shapes.push(object_shapes(&xpr, object, &piece.vertices)?);
+        pieces.push((piece, *node, placed));
         weights.push(object_weights(&xpr, object)?);
     }
-    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes, weights })
+    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes, weights, shapes })
 }
 
 /// The body's node for each DOAX bone: DOAX2 has DOAX's skeleton, the same 24 offsets (Tina's

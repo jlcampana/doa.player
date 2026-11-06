@@ -456,6 +456,10 @@ struct Doax2Pose {
     playing: Option<usize>,
     rows: [glam::Vec3; 24],
     pieces: Vec<(usize, glam::Mat4)>,
+    /// Pieces with chest shapes: the mesh piece, and each vertex's base, up and down positions.
+    chest: Vec<(usize, Vec<[glam::Vec3; 3]>)>,
+    chest_spring: Option<doa3::ChestSpring>,
+    chest_frame: u64,
 }
 
 /// What is needed to pose the loaded DOA3 character.
@@ -820,7 +824,9 @@ impl App {
         // (bone, place from the bone) and the rest matrix, per node.
         let mut pose_nodes: Vec<(usize, glam::Mat4)> = Vec::new();
         let mut rest_nodes: Vec<glam::Mat4> = Vec::new();
+        let mut chest = Vec::new();
         for (index, file) in files.iter().enumerate() {
+            let drawn_before = drawn.len();
             let texture_base = textures.len();
             let parent = if index == 1 { head_frame } else { glam::Mat4::IDENTITY };
             textures.extend(file.textures.iter().cloned());
@@ -847,6 +853,15 @@ impl App {
                         .collect();
                     crate::renderer::mesh::MultiBend { groups, weights: weights.clone() }
                 });
+                if let Some(Some(shapes)) = file.shapes.get(drawn.len() - drawn_before) {
+                    let positions = piece
+                        .vertices
+                        .iter()
+                        .zip(shapes)
+                        .map(|(v, s)| [glam::Vec3::from(v.position), s[doax2::SHAPE_UP].into(), s[doax2::SHAPE_DOWN].into()])
+                        .collect();
+                    chest.push((drawn.len(), positions));
+                }
                 drawn.push(Drawn { piece, first_texture: texture_base, texture_count: file.textures.len(), node, multi });
             }
         }
@@ -892,7 +907,9 @@ impl App {
         }
         self.doa3_pose = None;
         self.doax_pose = None;
-        self.doax2_pose = Some(Doax2Pose { files: motion_data, motions, playing: None, rows, pieces: pose_pieces });
+        self.doax2_pose = Some(Doax2Pose {
+            files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None, chest_frame: 0,
+        });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
@@ -1956,12 +1973,29 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
-        if let Some(pose) = &self.doax2_pose {
+        if let Some(pose) = &mut self.doax2_pose {
             let Some(index) = pose.playing else { return };
             let (file, motion) = pose.motions[index];
             match doax::eval_motion_endian(&pose.files[file], &motion, self.anim_time, true) {
                 Ok(values) => {
                     let bones = doax::solve_pose(&values, &pose.rows);
+                    // The chest: DOAX's vertical spring on the chest bone, as measured in
+                    // DOAX, on the up and down shapes. The sideways and forward pairs are not
+                    // driven; how DOAX2 drives them is not known.
+                    if !pose.chest.is_empty() {
+                        let clock = self.game_clock as u64;
+                        let spring = pose.chest_spring.get_or_insert_with(|| doa3::ChestSpring::with_parameters(&bones[0], doax::CHEST_SPRING));
+                        while pose.chest_frame < clock {
+                            spring.step(&bones[0]);
+                            pose.chest_frame += 1;
+                        }
+                        // DOAX's shape 1, for positive values, lowers the chest; shape 2 raises it.
+                        let (shape, weight) = doax::chest_weight(spring.value * self.bg_panel.bounce_scale);
+                        let target = if shape == 1 { 2 } else { 1 };
+                        for (piece, positions) in &pose.chest {
+                            self.mesh.set_rest_positions(*piece, positions.iter().enumerate().map(|(v, p)| (v, p[0].lerp(p[target], weight))));
+                        }
+                    }
                     let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect();
                     self.mesh.apply_pose(&self.ctx.queue, &nodes);
                 }
@@ -2248,6 +2282,7 @@ impl App {
 
     pub fn has_chest_spring(&self) -> bool {
         self.doax_pose.as_ref().is_some_and(|pose| !pose.chest_sets.is_empty())
+            || self.doax2_pose.as_ref().is_some_and(|pose| !pose.chest.is_empty())
             || self.doa3_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
     }
 
