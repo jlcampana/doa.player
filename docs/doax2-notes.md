@@ -79,7 +79,8 @@ and sit at the feet. The arms are out to the side (T pose), 1.56 m between hands
 `TX2D`: a 28-byte resource header, then the fetch constant: word 0 bit 31 tiled, word 1 format
 (low 6 bits), endian (bits 6 and 7: 1 swaps bytes in 16 bits, 2 in 32 bits), base address
 (bits 12 up), word 2 width - 1 (13 bits) and height - 1 (13 bits from bit 13). Formats seen:
-0x06 8888 (bytes B, G, R, A after the swap), 0x12 DXT1, 0x13 DXT3, 0x14 DXT5. Tiling as Xenia's
+0x06 8888 (bytes B, G, R, A after the swap), 0x12 DXT1, 0x13 DXT3, 0x14 DXT5 (most hair and
+lash textures). Tiling as Xenia's
 `TiledOffset2D`. Checked by eye on Tina's body textures: skin, nails and the body map come out
 whole.
 
@@ -226,13 +227,14 @@ Christie. Lei Fang's `BA` and `BB` add braids. The viewer uses `AA`.
 
 A head object holds three layouts: the face and scalp (opaque, stage 0 kind 1), small parts
 such as brows and lashes, and hair strands (up to 31 cm long) whose stage 0 is kind 0, a colour
-texture with alpha only at the strands' ragged ends (and black strand-shaped textures with alpha,
-shadows over the hair), and stage 1 kind 1 a grey band of shine, not a mask (seen on Tina's and
-Lei Fang's; taking it as a mask cut most of Tina's hair away). The viewer draws those draws as a
-translucent piece of their own, blended by stage 0's alpha after the solid pieces; it had drawn
-them solid with only an alpha test, which the user saw as wrong hair on all the girls.
+texture with alpha, and stage 1 kind 1 a grey band of shine, not a mask (taking it as a mask cut
+most of Tina's hair away). The viewer draws those draws, and any other whose texture has over 1%
+see-through texels (such as Tina's lash line, a black texture with alpha on a draw of kind 1), as
+a translucent piece of their own, blended by the texture's alpha after the solid pieces.
 
-Lei Fang's fringe covers her eyes in the viewer on all four heads: it is opaque geometry at eye
-height, with the hair's top level with the scalp's, so nothing points at a misplaced layout. Not
-compared with the game.
+DXT5 alpha was decoded into a quarter of each texture, block numbers taken for pixels, until
+2026-11-06: hair, lashes and every alpha texture came out opaque but in one corner. That was the
+wrong hair and too dark lashes the user saw, and why Lei Fang's fringe covered her eyes: with the
+alpha right her fringe stops above them.
+
 

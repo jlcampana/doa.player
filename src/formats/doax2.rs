@@ -451,8 +451,9 @@ pub fn object_shapes(xpr: &Xpr2, object: &Object, base: &[ModelVertex]) -> Resul
 pub const SHAPE_UP: usize = 4;
 pub const SHAPE_DOWN: usize = 5;
 
-/// Whether a material of `object_piece` is blended by its texture's alpha: hair strands,
-/// stage 0 of kind 0, listed with their shine texture as a second.
+/// Whether a material is blended by its texture's alpha: hair strands (stage 0 of kind 0,
+/// listed with their shine texture as a second) and, after `load`, draws whose texture has
+/// over 1% see-through texels (listed twice).
 pub fn is_blended(material: &ModelMaterial) -> bool {
     material.textures.len() == 2
 }
@@ -745,6 +746,22 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
         weights.push(object_weights(&xpr, object)?);
     }
     let textures = textures(&xpr);
+    // Other draws whose texture has some see-through texels are blended too, such as Tina's
+    // lash line, a black texture with alpha on a draw of kind 1, which drawn solid looked far
+    // too dark (the user's report). The second entry marks them, as for hair.
+    let see_through: Vec<bool> = textures
+        .iter()
+        .map(|t| t.rgba.chunks_exact(4).filter(|p| p[3] < 250).count() * 100 > t.rgba.len() / 4)
+        .collect();
+    for (piece, _, _) in &mut pieces {
+        for material in &mut piece.materials {
+            if let [texture] = material.textures[..] {
+                if see_through.get(texture).copied().unwrap_or(false) {
+                    material.textures.push(texture);
+                }
+            }
+        }
+    }
     Ok(Loaded { pieces, textures, rest, nodes, weights, shapes })
 }
 
@@ -1438,6 +1455,50 @@ mod tests {
             let (lo, hi) = piece.vertices.iter().fold((9f32, -9f32), |(l, h), v| (l.min(v.position[0]), h.max(v.position[0])));
             println!("object {k}: x {lo:.3}..{hi:.3}");
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn head_draw_alpha() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let code = std::env::var("DOAX2_CODE").unwrap_or("tn".into());
+        let file = chr.read(&format!("v{code}AA.tpr")).unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let tex = textures(&xpr);
+        for (k, object) in objects(&xpr).unwrap().iter().enumerate() {
+            for (i, draw) in object.draws.iter().enumerate() {
+                let base = draw.stages.iter().find(|s| s.0 == 0).copied();
+                let Some((_, kind, t)) = base else { continue };
+                let Some(texture) = tex.get(t) else { continue };
+                let n = (texture.rgba.len() / 4) as f32;
+                let partial = texture.rgba.chunks_exact(4).filter(|p| p[3] > 5 && p[3] < 250).count() as f32 / n;
+                let clear = texture.rgba.chunks_exact(4).filter(|p| p[3] <= 5).count() as f32 / n;
+                if let Ok(dir) = std::env::var("DOAX2_TEXTURES") {
+                    std::fs::write(format!("{dir}/d{i:02}_t{t}_{}x{}.rgba", texture.width, texture.height), &texture.rgba).unwrap();
+                }
+                println!("object {k} draw {i}: layout {} indices {} kind {kind} texture {t} {}x{} partial {partial:.2} clear {clear:.2}", draw.decl, draw.index_count, texture.width, texture.height);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn lash_texture_alpha() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let file = chr.read("vtnAA.tpr").unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let tex = textures(&xpr);
+        let headers: Vec<usize> = xpr.of_kind(b"TX2D").collect();
+        for i in [11usize, 12, 1, 15] {
+            let w1 = be32(xpr.file, headers[i] + 32).unwrap();
+            let mut hist = [0usize; 8];
+            for p in tex[i].rgba.chunks_exact(4) { hist[(p[3] / 32) as usize] += 1; }
+            let mut rgb = [0usize; 8];
+            for p in tex[i].rgba.chunks_exact(4) { rgb[(p[0] / 32) as usize] += 1; }
+            println!("texture {i}: format {:#x} endian {} tiled {} alpha by eighths {hist:?} red {rgb:?}", w1 & 0x3F, (w1 >> 6) & 3, be32(xpr.file, headers[i] + 28).unwrap() >> 31);
+        }
+        let objects = objects(&xpr).unwrap();
+        for (i, d) in objects[0].draws.iter().enumerate().skip(12) { println!("draw {i}: {:?}", d.stages); }
     }
 
     #[test]

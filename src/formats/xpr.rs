@@ -291,9 +291,9 @@ fn decode_dxt4(data: &[u8], offset: usize, width: u32, height: u32) -> Vec<u8> {
             // Apply pre-multiplied alpha correction for DXT2
             for py in 0..4usize {
                 for px in 0..4usize {
-                    let out_x = bx + px;
-                    let out_y = by + py;
-                    if out_x < width as usize && out_y * width as usize + out_x < rgba.len() / 4 {
+                    let out_x = bx * 4 + px;
+                    let out_y = by * 4 + py;
+                    if out_x < width as usize && out_y < height as usize {
                         let out_off = (out_y * width as usize + out_x) * 4;
                         rgba[out_off + 3] = alphas[py * 4 + px];
                     }
