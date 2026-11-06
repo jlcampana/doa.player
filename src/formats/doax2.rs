@@ -1758,6 +1758,28 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn hair_needles() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let names: Vec<String> = chr.names().map(str::to_string).collect();
+        let dir = std::env::var("DOAX2_OUT").unwrap();
+        let mut out = String::new();
+        for name in names.iter().filter(|n| n.ends_with(".tpr") && n.len() == 9 && n.starts_with('v')) {
+            let file = chr.read(name).unwrap();
+            let xpr = Xpr2::parse(&file).unwrap();
+            let object = &objects(&xpr).unwrap()[0];
+            let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+            // Layout 2's vertex 100: its position bytes as stored.
+            let Some(decl) = object.decls.get(2) else { continue };
+            let (buffer, stride) = decl.streams[0];
+            let (at, _) = xpr.buffer(vbufs[buffer], true).unwrap();
+            let p = at + 100 * stride;
+            out += &format!("{name} {} {}\n", stride, file[p..p + 12].iter().map(|b| format!("{b:02x}")).collect::<String>());
+        }
+        std::fs::write(format!("{dir}/hair_needles.txt"), out).unwrap();
+    }
+
+    #[test]
+    #[ignore]
     fn suit_reads() {
         let wear = LazyArchive::open("assets/doax2/wertwo.afs").unwrap();
         let names: Vec<String> = wear.names().map(str::to_string).collect();

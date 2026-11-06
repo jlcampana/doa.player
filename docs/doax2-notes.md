@@ -281,3 +281,20 @@ What drives the mouth is not known (op 94, two small arguments, is a candidate; 
 Script events are now taken from the first script that plays a motion only: several scripts
 play the same motion, and their events were added up (Tina's hand events 454 to 426).
 
+
+## Hair
+
+Searched live memory (2026-11-06) for vertex 100 of each head's layout 2 (`hair_needles`, an
+ignored test, writes the needles; vertex 100 of `vlsAA` is all zeros and was skipped). With
+the game on the menus, only `vksAA`, `vleAA` and `vleAB` were found:
+
+- `vleAA` and `vleAB`: one static copy each, the file's.
+- `vksAA`: the file's copy, plus two more at +0x14000 and +0x28000, the size of layout 2
+  (3413 vertices of 24 bytes). These two change between reads half a second apart: 1616
+  vertices move, in bytes 0 to 15 (position and the packed word after it), never in 16 to 23.
+  Positions stay near the file's (a few mm to 1 cm off), so they are in the head's space.
+
+So the game writes animated hair vertices on the CPU, double buffered, rather than in a
+shader. Not known yet: what writes them, which vertices are free and which follow the head,
+and whether the section of the head CAT read in `vheAA` drives it. `vks` is Kasumi, who stays
+out of the roster; confirm this on an adult (Tina, Lei Fang, Helena) on screen.
