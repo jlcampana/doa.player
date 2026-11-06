@@ -115,6 +115,11 @@ pub struct Draw {
     pub first_index: usize,
     pub index_count: usize,
     pub stages: Vec<(u32, u32, usize)>,
+    /// From +0x70: diffuse, ambient, specular (vec4 each) and the specular power.
+    pub diffuse: [f32; 3],
+    pub ambient: [f32; 3],
+    pub specular: [f32; 3],
+    pub power: f32,
 }
 
 /// One `ObjGeo`.
@@ -202,11 +207,16 @@ pub fn objects(xpr: &Xpr2) -> Result<Vec<Object>> {
                             Ok((be32(file, p)?, be32(file, p + 4)?, be32(file, p + 8)? as usize))
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    let vec3 = |at: usize| -> Result<[f32; 3]> { Ok([bef32(file, at)?, bef32(file, at + 4)?, bef32(file, at + 8)?]) };
                     Ok(Draw {
                         decl: be32(file, draw + 8)? as usize,
                         first_index: be32(file, draw + 0x10)? as usize,
                         index_count: be32(file, draw + 0x14)? as usize,
                         stages,
+                        diffuse: vec3(draw + 0x70)?,
+                        ambient: vec3(draw + 0x80)?,
+                        specular: vec3(draw + 0x90)?,
+                        power: bef32(file, draw + 0xA0)?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -371,7 +381,26 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
             (Some(&(_, _, color)), _) => vec![color],
             _ => Vec::new(),
         };
-        materials.push(ModelMaterial { indices, textures, cull_back: false, look: None });
+        // The draw's colours, lit as the viewer lights DOA2U's materials. DOAX2's shaders also
+        // take a two-tone ambient and point lights, which this leaves out.
+        let sane = |c: [f32; 3]| c.iter().all(|v| v.is_finite() && (0.0..=8.0).contains(v));
+        let look = (sane(draw.diffuse) && sane(draw.ambient) && sane(draw.specular)).then(|| super::model::MaterialLook {
+            diffuse: [draw.diffuse[0], draw.diffuse[1], draw.diffuse[2], 1.0],
+            ambient: draw.ambient,
+            specular: draw.specular,
+            emissive: [0.0; 3],
+            power: if draw.power.is_finite() { draw.power } else { 0.0 },
+            // The draws' specular (0.3, 0.2, 0.2 at power 15 on skin) washed every colour out
+            // without the game's shine maps, which are not read. Left off.
+            specular_on: false,
+            no_depth_write: false,
+            alpha_from_texture: textures.len() == 2,
+            layer: None,
+            base_reflects: false,
+            layer_reflects: false,
+            unlit: false,
+        });
+        materials.push(ModelMaterial { indices, textures, cull_back: false, look });
     }
     Ok(ModelPiece { vertices, materials })
 }
@@ -758,6 +787,9 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
             if let [texture] = material.textures[..] {
                 if see_through.get(texture).copied().unwrap_or(false) {
                     material.textures.push(texture);
+                    if let Some(look) = &mut material.look {
+                        look.alpha_from_texture = true;
+                    }
                 }
             }
         }
@@ -951,6 +983,39 @@ pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
 /// hands were on entry 13 exactly.
 pub fn hand_entry(pose: u16) -> usize {
     pose as usize + 1
+}
+
+/// DOAX2's light sets for the viewer, read from the running game while a match played: the
+/// three sets of the shaders' constants (`AmbientLightP1` c68, `DirLightVec` c71-74,
+/// `DirLightCol` c75-78), found together in the heap. Directions as stored, towards the light. The ambient is `AmbientLightP1`;
+/// `P2`, a second tone, is left out. Which set is which scene is not known.
+pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
+    let set = |ambient: [f32; 3], lights: [([f32; 3], [f32; 3]); 4]| crate::renderer::mesh::SceneLights {
+        ambient,
+        // The shaders' `DirLightVec` points towards the light; the viewer wants the way the
+        // light travels. Taken as stored, faces were lit from behind.
+        lights: lights.map(|(direction, diffuse)| (direction.map(|v| -v), diffuse, diffuse.map(|c| c * 0.3))),
+    };
+    vec![
+        ("Match, set 1".to_string(), set([0.33, 0.32, 0.3], [
+            ([-0.031, -0.537, 0.843], [1.4, 1.15, 0.8]),
+            ([0.532, 0.485, 0.694], [0.75, 0.7, 0.55]),
+            ([-0.592, 0.407, -0.696], [0.71, 0.61, 0.65]),
+            ([0.0, -1.0, 0.0], [0.0, 0.0, 0.0]),
+        ])),
+        ("Match, set 2".to_string(), set([0.4, 0.36, 0.3], [
+            ([0.02, -0.284, 0.959], [1.55, 1.15, 0.9]),
+            ([0.001, -0.059, -0.998], [0.4, 0.5, 0.65]),
+            ([-0.991, -0.079, -0.107], [0.8, 0.6, 0.4]),
+            ([0.981, -0.179, 0.077], [0.7, 0.66, 0.5]),
+        ])),
+        ("Match, set 3".to_string(), set([0.38, 0.38, 0.4], [
+            ([-0.949, -0.296, 0.113], [1.45, 1.34, 1.3]),
+            ([0.992, -0.038, -0.124], [0.7, 0.8, 0.95]),
+            ([-0.025, -0.105, -0.994], [0.65, 0.6, 0.5]),
+            ([0.103, 0.028, 0.994], [0.74, 0.71, 0.53]),
+        ])),
+    ]
 }
 
 /// The name a character's motions go by.
@@ -1499,6 +1564,27 @@ mod tests {
         }
         let objects = objects(&xpr).unwrap();
         for (i, d) in objects[0].draws.iter().enumerate().skip(12) { println!("draw {i}: {:?}", d.stages); }
+    }
+
+    #[test]
+    #[ignore]
+    fn see_through_textures() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let wear: Vec<LazyArchive> = ["werone", "wertwo"].iter().map(|n| LazyArchive::open(format!("assets/doax2/{n}.afs")).unwrap()).collect();
+        let names: Vec<Vec<String>> = wear.iter().map(|w| w.names().map(str::to_string).collect()).collect();
+        let suit = &suits(&names, "tn")[2];
+        let _ = &chr;
+        let loaded = load_for(&wear[suit.archive].read_index(suit.entry).unwrap(), &wear[suit.archive].read_index(suit.entry + 1).unwrap(), Some(3)).unwrap();
+        for (piece, _, placed) in &loaded.pieces {
+            for m in &piece.materials {
+                if is_blended(m) {
+                    let t = &loaded.textures[m.textures[0]];
+                    let n = t.rgba.len() / 4;
+                    let low = t.rgba.chunks_exact(4).filter(|p| p[3] < 250).count();
+                    println!("body object {} blended: texture {} {}x{}, {:.1}% below 250", placed.object, m.textures[0], t.width, t.height, 100.0 * low as f32 / n as f32);
+                }
+            }
+        }
     }
 
     #[test]

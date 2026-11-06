@@ -397,6 +397,7 @@ pub struct App {
     pub app_icon: Option<ModelTexture>,
     pub doax_characters: Vec<CharacterEntry>,
     pub doax_stage_lights: Vec<(String, crate::renderer::mesh::SceneLights)>,
+    pub doax2_stage_lights: Vec<(String, crate::renderer::mesh::SceneLights)>,
     /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
     doax_pose: Option<DoaxPose>,
     doax2_pose: Option<Doax2Pose>,
@@ -685,6 +686,7 @@ impl App {
             doax_hdd,
             doax_dvd,
             doax2_characters,
+            doax2_stage_lights: crate::formats::doax2::stage_lights(),
             doax2_chr,
             doax2_wear,
             doax2_wear_names,
@@ -721,7 +723,11 @@ impl App {
     /// The stage lights picked in the panel.
     /// The list the stage lights selector offers, for the game on show.
     pub fn stage_light_list(&self) -> &[(String, crate::renderer::mesh::SceneLights)] {
-        if self.char_panel.selected_source == GameSource::Doax { &self.doax_stage_lights } else { &self.stage_lights }
+        match self.char_panel.selected_source {
+            GameSource::Doax => &self.doax_stage_lights,
+            GameSource::Doax2 => &self.doax2_stage_lights,
+            _ => &self.stage_lights,
+        }
     }
 
     pub fn current_stage_lights(&self) -> crate::renderer::mesh::SceneLights {
@@ -896,7 +902,7 @@ impl App {
                     .materials
                     .iter()
                     .filter(|m| crate::formats::doax2::is_blended(m) == blended)
-                    .map(|m| (m.indices.as_slice(), m.base_texture(d.texture_count).map(|t| t + d.first_texture), m.cull_back, None))
+                    .map(|m| (m.indices.as_slice(), m.base_texture(d.texture_count).map(|t| t + d.first_texture), m.cull_back, m.look))
                     .collect(),
                 parent: d.node,
                 skin: None,
@@ -964,7 +970,7 @@ impl App {
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
         self.loaded_name = ("DOAX2".to_string(), display_name.clone(), suit.label.clone());
-        self.mesh.set_lights(None);
+        self.mesh.set_lights(Some(self.current_stage_lights()));
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         let pieces = inputs.len();
