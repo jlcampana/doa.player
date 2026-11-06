@@ -465,6 +465,10 @@ struct Doax2Pose {
     rest_nodes: Vec<glam::Mat4>,
     /// Per hand: the scripts' hand number, the mesh piece, its poses.
     hands: Vec<(u16, usize, crate::formats::doax2::HandPoses)>,
+    /// Blinks by motion key, as hand events: (frame, eye shape).
+    blinks: std::collections::HashMap<u16, Vec<(u16, u16)>>,
+    /// The head's face shape sets and the piece they shape.
+    faces: Vec<(usize, crate::formats::doax2::HandPoses)>,
     /// Hand events by motion key: own motions by number, shared ones by number + 0x2000.
     events: std::collections::HashMap<u16, Vec<doax::HandEvent>>,
     /// Per motion file, whether it is a shared one.
@@ -847,6 +851,7 @@ impl App {
         let mut rest_nodes: Vec<glam::Mat4> = Vec::new();
         let mut chest = Vec::new();
         let mut body_objects = Vec::new();
+        let mut head_objects = Vec::new();
         for (index, file) in files.iter().enumerate() {
             let drawn_before = drawn.len();
             let texture_base = textures.len();
@@ -887,6 +892,9 @@ impl App {
                 if index == 0 {
                     body_objects.push((placed.object, drawn.len()));
                 }
+                if index == 1 {
+                    head_objects.push((placed.object, drawn.len()));
+                }
                 drawn.push(Drawn { piece, first_texture: texture_base, texture_count: file.textures.len(), node, multi });
             }
         }
@@ -920,10 +928,22 @@ impl App {
         let pose_pieces = pose_nodes;
         // Hands: the pose file for holidays, the scripts' events. Hand k of the scripts is taken
         // to be the file's k-th block; not checked.
+        // Face shapes: the head CAT's pose sets, from the offset in its word 3.
+        let faces: Vec<(usize, doax2::HandPoses)> = chr
+            .read(&format!("{head}.cat"))
+            .ok()
+            .and_then(|cat| {
+                let start = u32::from_be_bytes(cat.get(12..16)?.try_into().ok()?) as usize;
+                doax2::hand_poses(cat.get(start..)?, &files[1].objects).map_err(|e| log::warn!("DOAX2 faces: {e:#}")).ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|set| Some((head_objects.iter().find(|(object, _)| *object == set.object)?.1, set)))
+            .collect();
         let hands: Vec<(u16, usize, doax2::HandPoses)> = chr
             .read("hand_vacance.bin")
             .ok()
-            .and_then(|file| doax2::hand_poses(&file).map_err(|e| log::warn!("DOAX2 hands: {e:#}")).ok())
+            .and_then(|file| doax2::hand_poses(&file, &files[0].objects).map_err(|e| log::warn!("DOAX2 hands: {e:#}")).ok())
             .unwrap_or_default()
             .into_iter()
             .enumerate()
@@ -933,6 +953,7 @@ impl App {
             })
             .collect();
         let mut events = std::collections::HashMap::new();
+        let mut blinks = std::collections::HashMap::new();
         let mut shared_files = Vec::new();
         let mut motion_data = Vec::new();
         let mut motions = Vec::new();
@@ -942,10 +963,12 @@ impl App {
             if let Some(name) = doax2::motion_name(&code) {
                 if let Ok(bin) = mot.read(&format!("{name}.bin")) {
                     events.extend(doax2::hand_events(&bin));
+                    blinks.extend(doax2::eye_events(&bin));
                 }
             }
             if let Ok(bin) = mot.read("anime_cm.bin") {
                 events.extend(doax2::hand_events(&bin));
+                blinks.extend(doax2::eye_events(&bin));
             }
             for file in doax2::motion_files(&names, &code) {
                 let Ok(data) = mot.read(&file) else { continue };
@@ -967,7 +990,7 @@ impl App {
         self.doax2_pose = Some(Doax2Pose {
             files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None, chest_frame: 0,
             rest_nodes: nodes.clone(),
-            hands, events, shared_files,
+            hands, events, shared_files, faces, blinks,
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -2099,6 +2122,24 @@ impl App {
                                 group.iter().map(move |&v| (v, position))
                             }),
                         );
+                    }
+                    // Blinks: the scripts' op 22, on the head's eye shapes (the face set with
+                    // three entries), from open to the asked shape and back.
+                    let blinks = pose.blinks.get(&key).map_or(&[][..], Vec::as_slice);
+                    if let Some((piece, eyes)) = pose.faces.iter().find(|(_, set)| set.poses.len() == 4) {
+                        let started = blinks.iter().rev().find(|(frame, _)| *frame as f32 <= self.anim_time);
+                        let (shape, weight) = started.map_or((2, 0.0), |&(frame, shape)| (shape as usize, crate::formats::doax2::blink_weight(self.anim_time - frame as f32)));
+                        let base = eyes.poses.get(1).and_then(Option::as_ref);
+                        let target = eyes.poses.get(shape).and_then(Option::as_ref).or(base);
+                        if let (Some(a), Some(b)) = (base, target) {
+                            self.mesh.set_rest_positions(
+                                *piece,
+                                eyes.groups.iter().zip(a.iter().zip(b)).flat_map(|(group, (p, q))| {
+                                    let position = glam::Vec3::from(*p).lerp(glam::Vec3::from(*q), weight);
+                                    group.iter().map(move |&v| (v, position))
+                                }),
+                            );
+                        }
                     }
                     let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect();
                     self.mesh.apply_pose(&self.ctx.queue, &nodes);

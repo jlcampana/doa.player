@@ -260,3 +260,24 @@ looked far too dark, as the user saw. The viewer lights DOAX2 like DOA2U's mater
 three sets, ambient from `P1` (`P2` left out). "Game lights" in the Shading window switches to
 the viewer's plain shading. Not compared with the game.
 
+## Faces
+
+A head CAT's word 3 is the offset of an `MPV` block of face shape sets, read like the hands'
+(`hand_poses`), with two differences: list entries carry the vertex layout in bits 24 to 30
+(the head has three layouts of strides 32, 20 and 24), and a face pose is 12 bytes a group,
+the position alone. Each head has two sets on object 0:
+
+- Eyes, 4 entries: 0 the lists, 1 the base (open, the mesh exactly), 2 shut, 3 shut smiling.
+- Mouth, 8 entries: 1 the base, then A, I, U, E, O and a closed smile (seen on Tina).
+
+No working buffer holds them in the running game (only the file's copies were found): the
+blend is done on the GPU, so the weights in use cannot be read from memory.
+
+Blinks: the scripts' op 22 comes every 20 to 30 frames, mostly with 2 or 3, which the viewer
+takes as a blink to that eye entry: shut over 3 frames, held 2, open over 4 (`blink_weight`,
+timing chosen, not read). Checked by eye on Tina's motion 77, shut at frame 10 and open at 30.
+What drives the mouth is not known (op 94, two small arguments, is a candidate; voices may).
+
+Script events are now taken from the first script that plays a motion only: several scripts
+play the same motion, and their events were added up (Tina's hand events 454 to 426).
+

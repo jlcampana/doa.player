@@ -717,6 +717,8 @@ pub struct Loaded {
     pub weights: Vec<Vec<Vec<f32>>>,
     /// Per piece, its six shapes if it has them.
     pub shapes: Vec<Option<Vec<[[f32; 3]; 6]>>>,
+    /// The model's objects, for reading pose sets against.
+    pub objects: Vec<Object>,
 }
 
 /// `load_for` with the file's own first list.
@@ -794,7 +796,7 @@ pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
             }
         }
     }
-    Ok(Loaded { pieces, textures, rest, nodes, weights, shapes })
+    Ok(Loaded { pieces, textures, rest, nodes, weights, shapes, objects })
 }
 
 /// The body's node for each DOAX bone: DOAX2 has DOAX's skeleton, the same 24 offsets (Tina's
@@ -896,9 +898,10 @@ pub fn hand_events(bin: &[u8]) -> std::collections::HashMap<u16, Vec<super::doax
             let argument = |i: usize| be16(bin, at + 2 + i * 2).ok();
             match op {
                 0 => {
-                    motion = argument(0);
+                    // The first script to play a motion decides its events; others that play
+                    // it again add none.
+                    motion = argument(0).filter(|m| !events.contains_key(m));
                     frame = 0;
-                    // The first script to play a motion decides its events.
                     if let Some(motion) = motion {
                         events.entry(motion).or_default();
                     }
@@ -918,6 +921,58 @@ pub fn hand_events(bin: &[u8]) -> std::collections::HashMap<u16, Vec<super::doax
     events
 }
 
+/// The blinks of each motion in a script file: op 22's argument at its frame, the eye shape
+/// to close to (entry 2, eyes shut, or 3, shut smiling, of the head's three-entry face set).
+/// Inferred: op 22 comes every 20 to 30 frames, mostly with 2 or 3, as blinks do; not compared
+/// with the game.
+pub fn eye_events(bin: &[u8]) -> std::collections::HashMap<u16, Vec<(u16, u16)>> {
+    let mut events: std::collections::HashMap<u16, Vec<(u16, u16)>> = std::collections::HashMap::new();
+    let Ok(table) = be32(bin, 0) else { return events };
+    let mut starts: Vec<usize> = (0..8000).filter_map(|i| be32(bin, table as usize + i * 4).ok()).map(|v| v as usize).filter(|&v| v < bin.len()).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    for start in starts {
+        let (mut at, mut motion, mut frame) = (start, None, 0u16);
+        for _ in 0..1000 {
+            let Ok(op) = be16(bin, at) else { break };
+            let Some(&count) = SCRIPT_OP_ARGUMENTS.get(op as usize) else { break };
+            let argument = |i: usize| be16(bin, at + 2 + i * 2).ok();
+            match op {
+                0 => {
+                    // The first script to play a motion decides its events; others that play
+                    // it again add none.
+                    motion = argument(0).filter(|m| !events.contains_key(m));
+                    frame = 0;
+                    if let Some(motion) = motion {
+                        events.entry(motion).or_default();
+                    }
+                }
+                1 => frame = argument(0).unwrap_or(frame),
+                22 => {
+                    if let (Some(motion), Some(shape)) = (motion, argument(0)) {
+                        events.entry(motion).or_default().push((frame, shape));
+                    }
+                }
+                _ => {}
+            }
+            at += 2 + count as usize * 2;
+        }
+    }
+    events
+}
+
+/// How far a blink has closed the eyes, `t` frames after it starts: shut over 3 frames, held
+/// for 2, open over 4. The game's timing is not read.
+pub fn blink_weight(t: f32) -> f32 {
+    match t {
+        t if t < 0.0 => 0.0,
+        t if t < 3.0 => t / 3.0,
+        t if t < 5.0 => 1.0,
+        t if t < 9.0 => 1.0 - (t - 5.0) / 4.0,
+        _ => 0.0,
+    }
+}
+
 /// A hand's pose file block (`MPP`): its object in the body, its vertex groups and, per pose
 /// number, each group's position.
 #[derive(Debug, Clone)]
@@ -927,11 +982,14 @@ pub struct HandPoses {
     pub poses: Vec<Option<Vec<[f32; 3]>>>,
 }
 
-/// The two hands of a `hand_*.bin`: `MPV`, then an `MPP` block per hand: +0xC the hand's object,
-/// +0x14 the pose count, then the poses' offsets from the block. Pose 0 is the vertex list
-/// (byte offsets, 32 a vertex, a set bit 31 starting each group of copies, ended by -1); every
-/// other is 24 bytes a group, position then normal.
-pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
+/// The pose sets of an `MPV` block: a `hand_*.bin`'s two hands, or a head CAT's face shapes
+/// (from the offset in its word 3). Each `MPP` block: +0xC its object, +0x14 the pose count,
+/// then the poses' offsets from the block. Pose 0 is the vertex list: entries with the vertex
+/// layout in bits 24 to 30 and a byte offset in that layout below, a set bit 31 starting each
+/// group of copies, ended by -1. Every other pose is 24 bytes a group, position then normal, or
+/// 12, the position alone (face sets).
+/// `objects` gives the layouts' strides, to number vertices as `object_piece` does.
+pub fn hand_poses(file: &[u8], objects: &[Object]) -> Result<Vec<HandPoses>> {
     let mut hands = Vec::new();
     let mut at = 0;
     while at + 4 <= file.len() {
@@ -941,6 +999,21 @@ pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
         }
         let object = be32(file, at + 0xC)? as usize;
         let count = be32(file, at + 0x14)? as usize;
+        // Each layout's first vertex and stride.
+        let layouts: Vec<(usize, usize)> = objects
+            .get(object)
+            .map(|o| {
+                let mut first = 0;
+                o.decls
+                    .iter()
+                    .map(|d| {
+                        let entry = (first, d.streams.first().map_or(32, |s| s.1.max(1)));
+                        first += d.vertex_count;
+                        entry
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let offsets = (0..count).map(|i| Ok(be32(file, at + 0x18 + i * 4)? as usize)).collect::<Result<Vec<_>>>()?;
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut p = at + *offsets.first().context("hand block without poses")?;
@@ -953,8 +1026,17 @@ pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
             if value & 0x8000_0000 != 0 || groups.is_empty() {
                 groups.push(Vec::new());
             }
-            groups.last_mut().unwrap().push((value & 0x7FFF_FFFF) as usize / 32);
+            let layout = ((value >> 24) & 0x7F) as usize;
+            let (first, stride) = layouts.get(layout).copied().unwrap_or((0, 32));
+            groups.last_mut().unwrap().push(first + (value & 0xFF_FFFF) as usize / stride);
         }
+        // 24 bytes a group (position and normal) in the hands' files, 12 (position) in the
+        // heads' face sets: the smallest gap between poses tells.
+        let mut distinct: Vec<usize> = offsets.iter().skip(1).copied().collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let gap = distinct.windows(2).map(|w| w[1] - w[0]).min().unwrap_or(usize::MAX);
+        let size = if groups.is_empty() || gap >= groups.len() * 24 { 24 } else { 12 };
         let poses = offsets
             .iter()
             .enumerate()
@@ -964,7 +1046,7 @@ pub fn hand_poses(file: &[u8]) -> Result<Vec<HandPoses>> {
                 }
                 (0..groups.len())
                     .map(|g| {
-                        let q = at + offset + g * 24;
+                        let q = at + offset + g * size;
                         Ok([bef32(file, q)?, bef32(file, q + 4)?, bef32(file, q + 8)?])
                     })
                     .collect::<Result<Vec<_>>>()
@@ -1336,7 +1418,9 @@ mod tests {
     fn hands_and_scripts_read() {
         let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
         let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
-        let hands = hand_poses(&chr.read("hand_vacance.bin").unwrap()).unwrap();
+        let body_file = chr.read("vtn1.tpr").unwrap();
+        let body_objects = objects(&Xpr2::parse(&body_file).unwrap()).unwrap();
+        let hands = hand_poses(&chr.read("hand_vacance.bin").unwrap(), &body_objects).unwrap();
         for hand in &hands {
             let own = hand.poses.iter().filter(|p| p.is_some()).count();
             println!("hand object {}: {} groups, {own} poses", hand.object, hand.groups.len());
@@ -1609,6 +1693,65 @@ mod tests {
                     total += 1; if face.dot(n) > 0.0 { agree += 1; }
                 }}
                 println!("{name} object {k}: {:.0}% normals point out from the centre, {:.0}% of faces wind with their normals", 100.0 * out as f32 / piece.vertices.len() as f32, 100.0 * agree as f32 / total.max(1) as f32);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn head_nodes() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for name in ["vheAA", "vcrAA", "vtnAA"] {
+            let file = chr.read(&format!("{name}.tpr")).unwrap();
+            let xpr = Xpr2::parse(&file).unwrap();
+            let nodes = hierarchy(&xpr).unwrap();
+            let objects = objects(&xpr).unwrap();
+            let rest = rest_pose(&nodes);
+            println!("{name}: {} nodes, {} objects", nodes.len(), objects.len());
+            for (k, node) in nodes.iter().enumerate().take(12) {
+                println!("  node {k}: object {} parent {:?} at {:?}", node.object, node.parent, rest[k].w_axis.truncate());
+            }
+            for (k, o) in objects.iter().enumerate() {
+                let weights = object_weights(&xpr, o).unwrap();
+                println!("  object {k}: {} vertices, layouts {}, weights per vertex {:?}", o.vertex_count(), o.decls.len(), o.decls.iter().map(|d| d.elements.iter().filter(|e| e.usage == USAGE_BLENDWEIGHT).count()).collect::<Vec<_>>());
+                let _ = weights;
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn face_poses_read() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        for code in ["he", "tn", "le"] {
+            let cat = chr.read(&format!("v{code}AA.cat")).unwrap();
+            let start = be32(&cat, 12).unwrap() as usize;
+            println!("v{code}AA.cat: word 3 at {start:#x}, MPV count {}", be32(&cat, start + 12).unwrap());
+            let file = chr.read(&format!("v{code}AA.tpr")).unwrap();
+            let xpr = Xpr2::parse(&file).unwrap();
+            let objects = objects(&xpr).unwrap();
+            for hand in hand_poses(&cat[start..], &objects).unwrap() {
+                if let Ok(dir) = std::env::var("DOAX2_FACE_DUMP") {
+                    let lines: Vec<String> = hand.poses.iter().flatten().map(|pose| pose.iter().flat_map(|p| p.iter().map(|v| format!("{:08x}", v.to_bits()))).collect::<Vec<_>>().join(" ")).collect();
+                    std::fs::write(format!("{dir}/face_{code}_{}.txt", hand.groups.len()), lines.join("\n")).unwrap();
+                }
+                let piece = object_piece(&xpr, &objects[hand.object]).unwrap();
+                let members: usize = hand.groups.iter().map(Vec::len).sum();
+                let top = hand.groups.iter().flatten().max().copied().unwrap_or(0);
+                print!("  block: object {}, {} groups ({members} vertices, highest {top}), {} entries:", hand.object, hand.groups.len(), hand.poses.len());
+                for (e, pose) in hand.poses.iter().enumerate() {
+                    let Some(pose) = pose else { print!(" {e}:lists"); continue };
+                    let mut worst = 0f32;
+                    for (group, p) in hand.groups.iter().zip(pose) {
+                        if let Some(v) = piece.vertices.get(group[0]) { worst = worst.max(Vec3::from(v.position).distance(Vec3::from(*p))); }
+                    }
+                    let diffs: Vec<Vec3> = hand.groups.iter().zip(pose).filter_map(|(g, p)| piece.vertices.get(g[0]).map(|v| Vec3::from(*p) - Vec3::from(v.position))).collect();
+                    let mean = diffs.iter().fold(Vec3::ZERO, |a, d| a + *d) / diffs.len().max(1) as f32;
+                    let residual = diffs.iter().map(|d| (*d - mean).length()).fold(0f32, f32::max);
+                    let moved = diffs.iter().filter(|d| (**d - mean).length() > 0.001).count();
+                    print!(" {e}:mean {:?} residual {residual:.4} moved {moved}", (mean * 1000.0).round() / 1000.0);
+                }
+                println!();
             }
         }
     }
