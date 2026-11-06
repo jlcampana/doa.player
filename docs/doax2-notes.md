@@ -284,17 +284,47 @@ play the same motion, and their events were added up (Tina's hand events 454 to 
 
 ## Hair
 
-Searched live memory (2026-11-06) for vertex 100 of each head's layout 2 (`hair_needles`, an
-ignored test, writes the needles; vertex 100 of `vlsAA` is all zeros and was skipped). With
-the game on the menus, only `vksAA`, `vleAA` and `vleAB` were found:
+Long hair is a cloth simulation described in the head CAT. Word 5 is the offset of a
+`MULTI_CLOTH` block: +0x18 the number of cloths, from +0x40 their offsets from the block. Each
+`CLOTH_DATA` (name at +0x70, such as `vksAAlong_l`) holds sections with 16-byte name tags:
+`PROPERTY`, `GRID_DATA`, `EDGE`, `TRIANGLE`, `FACE_TABLE`, `FACE`, `FIX_GRID`, `GRID_WRITE`,
+`THREAD_DATA`. Offsets inside are from the start of `GRID_DATA`.
 
-- `vleAA` and `vleAB`: one static copy each, the file's.
-- `vksAA`: the file's copy, plus two more at +0x14000 and +0x28000, the size of layout 2
-  (3413 vertices of 24 bytes). These two change between reads half a second apart: 1616
-  vertices move, in bytes 0 to 15 (position and the packed word after it), never in 16 to 23.
-  Positions stay near the file's (a few mm to 1 cm off), so they are in the head's space.
+- `GRID_DATA`: +0x24 the number of particles, from +0x40 one of 0x30 bytes each: position
+  (head space, w 1), the number and offset of its edges, of its triangles, of its faces, its
+  row (0 at the root) and a word the game turns into a pointer to its state.
+- `EDGE`: per particle, entries of 16 bytes: the other particle (as an offset), the rest
+  length (the file's distance to 1e-8), kind 1, 2 or 3, zero. Each edge is listed from both
+  ends. On `vksAAlong_l` (14 strands of 25 rows): kind 1 joins neighbours in a row and along a
+  strand, kind 2 the diagonals, kind 3 a particle with the one two rows down.
+- `FIX_GRID`: +0x1C the count; entries of 0x20 bytes, a position and (1, particle, 2, 0). The
+  14 fixed particles are row 0, at their file positions.
+- `GRID_WRITE`: +0x20 the count; from +0x60 pairs (0x80000000 | particle, layout << 24 | byte
+  offset in that layout's vertex buffer). Every particle writes one vertex of layout 2, and
+  that vertex is the particle in the file. So the hair mesh's vertices are the particles.
+- `THREAD_DATA`: chains of particles (per strand, 24 or 25 entries of (particle, two small
+  numbers)) with angle limits (0.2618 = 15 degrees, 1.5708 = 90 degrees). Not decoded further.
+- `PROPERTY`: floats such as 0.2875, -0.03, -0.022, 0.2, 0.1, 1.125, 0.4. Not decoded.
 
-So the game writes animated hair vertices on the CPU, double buffered, rather than in a
-shader. Not known yet: what writes them, which vertices are free and which follow the head,
-and whether the section of the head CAT read in `vheAA` drives it. `vks` is Kasumi, who stays
-out of the roster; confirm this on an adult (Tina, Lei Fang, Helena) on screen.
+Heads with cloth: Kasumi (`vks` AA and AB: long, mid and uchi, left and right), Ayane, Kokoro,
+Hitomi and Lei Fang (`vleAA` and `vleAB`, the same six names). Tina, Helena, Lisa and Christie
+have none; Lei Fang's braided `BA` and `BB` have none.
+
+Live (2026-11-06, `tools/re/doax2_hair_capture.py`): the loaded `CLOTH_DATA`'s word 10 points
+to the particle states, 0x80 bytes each in particle order: world position at +0, a vector near
+(0, -0.0115, 0) at +0x10 (zero on fixed particles), the normal at +0x20, the previous position
+at +0x30 (equal to the position on fixed particles). The game writes them in bursts; between
+quiet states the previous position is exactly the last position, so each burst is one step.
+Pointers into guest 0xE0000000 and up are 0x1000 below where the data shows in the host view.
+
+Fitting single steps of Kasumi's `long_l` (49 steps, little motion): velocity is kept partly
+in the head's moving frame (inertia 0.85, carried by the head 0.63) and edges pull towards
+their rest length (kinds 1 and 3 about 0.07 and 0.02 a step, kind 2 none). That leaves 0.19 mm
+near the root and 1.2 to 1.4 mm in the middle rows, where the tips get a steady push the same
+way each step, likely collision with the body. The field at +0x10 adds nothing to the step.
+The game lets the hair stretch: near the root its segments are 12 to 15 percent longer than
+at rest. So this is a fit, not the game's method yet.
+
+Other vertices of layout 2 (2844 to 3367 on `vksAA`) also move but are not particles. The head
+CAT has blocks tagged 0x06010001 from 0x1680 (two values 0.3 and 0.8, a point behind the head,
+offsets) that may drive them. Not decoded.

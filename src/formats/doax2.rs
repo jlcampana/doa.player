@@ -1778,6 +1778,40 @@ mod tests {
         std::fs::write(format!("{dir}/hair_needles.txt"), out).unwrap();
     }
 
+    /// Writes a head's layouts for study: per layout its elements, stride and vertex count, and
+    /// the raw vertex and index buffers. `DOAX2_HEAD` names the head, `DOAX2_OUT` the folder.
+    #[test]
+    #[ignore]
+    fn head_layout_dump() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let head = std::env::var("DOAX2_HEAD").unwrap();
+        let dir = std::env::var("DOAX2_OUT").unwrap();
+        let file = chr.read(&format!("{head}.tpr")).unwrap();
+        let xpr = Xpr2::parse(&file).unwrap();
+        let object = &objects(&xpr).unwrap()[0];
+        let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+        let ibufs: Vec<usize> = xpr.of_kind(b"IBUF").collect();
+        let mut out = String::new();
+        for (d, decl) in object.decls.iter().enumerate() {
+            let (buffer, stride) = decl.streams[0];
+            out += &format!("layout {d} vertices {} stride {stride} streams {:?} indices {}\n", decl.vertex_count, decl.streams, decl.index_count);
+            for e in &decl.elements {
+                out += &format!("  {e:?}\n");
+            }
+            let (at, _) = xpr.buffer(vbufs[buffer], true).unwrap();
+            std::fs::write(format!("{dir}/{head}_v{d}.bin"), &file[at..at + decl.vertex_count * stride]).unwrap();
+            if let Some(&ib) = ibufs.get(decl.index_buffer) {
+                let (at, _) = xpr.buffer(ib, false).unwrap();
+                std::fs::write(format!("{dir}/{head}_i{d}.bin"), &file[at..at + decl.index_count * 2]).unwrap();
+            }
+        }
+        for dr in &object.draws {
+            out += &format!("draw layout {} first {} count {} stages {:?}\n", dr.decl, dr.first_index, dr.index_count, dr.stages);
+        }
+        std::fs::write(format!("{dir}/{head}_layouts.txt"), out).unwrap();
+        std::fs::write(format!("{dir}/{head}.cat"), chr.read(&format!("{head}.cat")).unwrap()).unwrap();
+    }
+
     #[test]
     #[ignore]
     fn suit_reads() {
