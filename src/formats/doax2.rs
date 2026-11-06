@@ -367,6 +367,44 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
     Ok(ModelPiece { vertices, materials })
 }
 
+/// Each vertex's blend weights, the layouts one after another as in `object_piece`: the
+/// blend weight element (usage 1 on stream 0), two to four floats that add up to one (scaled
+/// to, where a file's do not). Empty for objects without them.
+pub fn object_weights(xpr: &Xpr2, object: &Object) -> Result<Vec<Vec<f32>>> {
+    let file = xpr.file;
+    let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+    let mut out = Vec::new();
+    for decl in &object.decls {
+        let element = decl.elements.iter().find(|e| e.stream == 0 && e.usage == USAGE_BLENDWEIGHT);
+        let count = match element.map(|e| e.kind) {
+            Some(FLOAT2) => 2,
+            Some(FLOAT3) => 3,
+            Some(FLOAT4) => 4,
+            _ => 0,
+        };
+        let &(buffer, stride) = decl.streams.first().context("no stream 0")?;
+        let (at, _) = xpr.buffer(*vbufs.get(buffer).context("VBUF out of range")?, true)?;
+        for v in 0..decl.vertex_count {
+            let mut weights = Vec::with_capacity(count);
+            if let Some(element) = element {
+                for k in 0..count {
+                    weights.push(bef32(file, at + v * stride + element.offset as usize + k * 4)?);
+                }
+            }
+            // Some suits' weights add up to more than one: a single 2.307 in Tina's `on_s_m`,
+            // or 1.16 to 1.23 over two groups. Taken as they are, those vertices fly off; the
+            // game shows no such spikes, so they are scaled to add up to one. Not checked
+            // against the game's shader.
+            let sum: f32 = weights.iter().sum();
+            if sum > 1e-4 && (sum - 1.0).abs() > 1e-3 {
+                weights.iter_mut().for_each(|w| *w /= sum);
+            }
+            out.push(weights);
+        }
+    }
+    Ok(out)
+}
+
 /// Xenos texture formats seen so far.
 const FMT_8888: u32 = 0x06;
 const FMT_DXT1: u32 = 0x12;
@@ -532,11 +570,12 @@ fn cat_section(cat: &[u8], kind: u16) -> Option<usize> {
     None
 }
 
-/// The draw lists of a CAT: section kind 2 holds their offsets, zero for none. Each list is
-/// (bone, object) pairs, a negative marker after some pairs, ended by -1. Bodies and heads
-/// have one list, at the table's fourth entry; suits have five, all whole sets of the suit's
-/// objects, not yet told apart.
-pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Placed>>> {
+/// The draw lists of a CAT by body type: section kind 2 holds their offsets, zero for none.
+/// Each list is (bone, object) pairs, a negative marker after some pairs, ended by -1. A body
+/// and its heads have one list, at their body type: Kasumi and Ayane 0, Lei Fang, Kokoro and
+/// Hitomi 1, Helena and Lisa 2, Tina 3, Christie 4. A suit has a list per type, the same
+/// pieces fitted to each body.
+pub fn draw_lists_by_type(cat: &[u8]) -> Result<Vec<Option<Vec<Placed>>>> {
     if cat.get(..4) != Some(&b"CAT\0"[..]) {
         bail!("not a CAT");
     }
@@ -547,6 +586,7 @@ pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Placed>>> {
     for k in 0..6 {
         let offset = be32(cat, table + k * 4)?;
         if offset < 0x18 || offset % 4 != 0 || offset as usize >= cat.len() {
+            lists.push(None);
             continue;
         }
         let mut at = offset as usize;
@@ -569,9 +609,19 @@ pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Placed>>> {
                 bail!("draw list at {offset:#x} does not end");
             }
         }
-        lists.push(list);
+        lists.push(Some(list));
     }
     Ok(lists)
+}
+
+/// The lists a CAT has, in order of body type.
+pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Placed>>> {
+    Ok(draw_lists_by_type(cat)?.into_iter().flatten().collect())
+}
+
+/// A body CAT's body type: the place of its one list.
+pub fn body_type(cat: &[u8]) -> Result<usize> {
+    draw_lists_by_type(cat)?.iter().position(Option::is_some).context("no draw list")
 }
 
 /// A model file ready to draw: its pieces with their nodes, its textures and rest pose.
@@ -581,6 +631,13 @@ pub struct Loaded {
     pub textures: Vec<ModelTexture>,
     pub rest: Vec<Mat4>,
     pub nodes: Vec<Node>,
+    /// Per piece, each vertex's blend weights; empty lists for pieces on one bone.
+    pub weights: Vec<Vec<Vec<f32>>>,
+}
+
+/// `load_for` with the file's own first list.
+pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
+    load_for(tpr, cat, None)
 }
 
 /// The body's neck bone. The body's head node is the neck node's child.
@@ -603,16 +660,22 @@ impl Loaded {
     }
 }
 
-/// Reads a model and the first draw list of its CAT. Of a foot's two shapes, the one on the
-/// leg (marker -5) is drawn and the one on the free foot nodes (-6) is left out.
-pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
+/// Reads a model and its CAT's draw list for a body type, or its first if it has none for
+/// that type. Of a foot's two shapes, the one on the leg (marker -5) is drawn and the one on
+/// the free foot nodes (-6) is left out.
+pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
     let xpr = Xpr2::parse(tpr)?;
     let objects = objects(&xpr)?;
     let nodes = hierarchy(&xpr)?;
     let rest = rest_pose(&nodes);
     let placed_nodes = object_nodes(&nodes, objects.len());
-    let list = draw_lists(cat)?.into_iter().next().context("no draw list")?;
+    let lists = draw_lists_by_type(cat)?;
+    let list = body
+        .and_then(|b| lists.get(b).cloned().flatten())
+        .or_else(|| lists.iter().flatten().next().cloned())
+        .context("no draw list")?;
     let mut pieces = Vec::new();
+    let mut weights = Vec::new();
     for placed in list {
         if placed.mark == Some(-6) {
             continue;
@@ -622,8 +685,9 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<Loaded> {
             continue;
         };
         pieces.push((object_piece(&xpr, object)?, *node, placed));
+        weights.push(object_weights(&xpr, object)?);
     }
-    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes })
+    Ok(Loaded { pieces, textures: textures(&xpr), rest, nodes, weights })
 }
 
 /// The body's node for each DOAX bone: DOAX2 has DOAX's skeleton, the same 24 offsets (Tina's
@@ -662,6 +726,38 @@ pub fn bone_rest(rows: &[Vec3; 24]) -> [Mat4; super::doax::BONE_COUNT] {
         positions[bone] = positions[base];
     }
     positions.map(Mat4::from_translation)
+}
+
+/// The DOAX bones of a blended piece's weight groups, by its CAT number and group count.
+///
+/// Inferred from the bodies, not read from the game: group 0 is the piece's own bone; a group
+/// whose vertices meet a rigid piece at rest takes that piece's bone (`blend_groups_from_seams`,
+/// clear by 6 mm or more over 80 frames); the rest are DOAX's groups for the same place
+/// (`0x33F988` in DOAX: neck 19, 1, 0; spine 23, 2, 0; shoulder 30, 0, 19, 16), and the
+/// forearms' third group is the shoulder, the bone that stretched them least. Suits use only
+/// combinations the bodies have.
+pub fn blend_bones(slot: u32, groups: usize) -> Option<&'static [usize]> {
+    Some(match (slot, groups) {
+        (3, 2) => &[3, 7],
+        (4, 2) => &[4, 8],
+        (4, 3) => &[4, 5, 8],
+        (5, 2) => &[5, 4],
+        (6, 2) => &[6, 2],
+        (7, 2) => &[7, 6],
+        (9, 2) => &[9, 13],
+        (10, 2) => &[10, 14],
+        (10, 3) => &[10, 11, 14],
+        (11, 2) => &[11, 10],
+        (12, 2) => &[12, 2],
+        (13, 2) => &[13, 12],
+        (18, 4) => &[16, 8, 0, 30],
+        (19, 2) => &[18, 3],
+        (20, 3) => &[1, 0, 19],
+        (21, 4) => &[20, 14, 0, 31],
+        (22, 2) => &[22, 9],
+        (23, 3) => &[0, 2, 23],
+        _ => return None,
+    })
 }
 
 /// The name a character's motions go by.
@@ -786,6 +882,194 @@ mod tests {
             let files = motion_files(&names, code);
             let count: usize = files.iter().map(|f| crate::formats::doax::list_motions_big(&mot.read(f).unwrap()).len()).sum();
             println!("{code}: {} files, {count} motions", files.len());
+        }
+    }
+
+    /// For each weight group of the body's blended pieces, the DOAX bone that keeps its seam
+    /// vertices on the rigid pieces they touch at rest, over many motion frames.
+    #[test]
+    #[ignore]
+    fn blend_groups_from_seams() {
+        use crate::formats::doax;
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let code = std::env::var("DOAX2_CODE").unwrap_or("tn".into());
+        let tpr = chr.read(&format!("v{code}1.tpr")).unwrap();
+        let body = load(&tpr, &chr.read(&format!("v{code}1.cat")).unwrap()).unwrap();
+        let xpr = Xpr2::parse(&tpr).unwrap();
+        let objects = objects(&xpr).unwrap();
+        let rows = bone_rows(&body.rest).unwrap();
+        let rest_bones = bone_rest(&rows);
+        let pelvis = body.rest[0].w_axis.truncate();
+        let rest_of = |node: usize| Mat4::from_translation(-pelvis) * body.rest[node];
+        // Frames from the character's own motions.
+        let data = mot.read(&format!("{}.mot", motion_name(&code).unwrap())).unwrap();
+        let mut frames = Vec::new();
+        for motion in doax::list_motions_big(&data).iter().take(40) {
+            for f in [0, motion.frames / 2] {
+                let values = doax::eval_motion_endian(&data, motion, f as f32, true).unwrap();
+                frames.push(doax::solve_pose(&values, &rows));
+            }
+        }
+        // Rigid pieces' vertices at rest and posed.
+        let mut rigid: Vec<(Vec3, usize, Vec3)> = Vec::new(); // rest position, bone, local to bone
+        for (piece, node, placed) in &body.pieces {
+            if !object_weights(&xpr, &objects[placed.object]).unwrap().iter().all(|w| w.is_empty()) {
+                continue;
+            }
+            let bone = SLOT_BONES[placed.slot as usize];
+            for v in &piece.vertices {
+                let p = rest_of(*node).transform_point3(v.position.into());
+                rigid.push((p, bone, rest_bones[bone].inverse().transform_point3(p)));
+            }
+        }
+        // The head file's pieces, on the body's head node, follow bone 1.
+        let head = load(&chr.read(&format!("v{code}AA.tpr")).unwrap(), &chr.read(&format!("v{code}AA.cat")).unwrap()).unwrap();
+        let head_place = Mat4::from_translation(-pelvis) * body.head_frame().unwrap() * head.rest[0].inverse();
+        for (piece, node, placed) in &head.pieces {
+            let bone = SLOT_BONES[placed.slot as usize];
+            for v in &piece.vertices {
+                let p = (head_place * head.rest[*node]).transform_point3(v.position.into());
+                rigid.push((p, bone, rest_bones[bone].inverse().transform_point3(p)));
+            }
+        }
+        for (piece, node, placed) in &body.pieces {
+            let weights = object_weights(&xpr, &objects[placed.object]).unwrap();
+            let groups = weights.first().map_or(0, |w| w.len());
+            if groups == 0 {
+                continue;
+            }
+            println!("object {} slot {} node {node}: {groups} groups", placed.object, placed.slot);
+            let mut chosen: Vec<Option<usize>> = vec![None; groups];
+            for g in 0..groups {
+                // Seam vertices dominated by this group, with their rigid partners.
+                let mut pairs = Vec::new();
+                for (v, w) in piece.vertices.iter().zip(&weights) {
+                    if w[g] < 0.95 {
+                        continue;
+                    }
+                    let p = rest_of(*node).transform_point3(v.position.into());
+                    if let Some(partner) = rigid.iter().find(|r| r.0.distance(p) < 0.001) {
+                        pairs.push((p, partner.1, partner.2));
+                    }
+                }
+                let dominant = weights.iter().filter(|w| w[g] >= 0.95).count();
+                if pairs.is_empty() {
+                    println!("  group {g}: {dominant} dominant vertices, no seam");
+                    continue;
+                }
+                let mut scores: Vec<(f32, usize)> = (0..doax::BONE_COUNT)
+                    .map(|b| {
+                        let mut total = 0.0;
+                        for bones in &frames {
+                            for (p, partner_bone, partner_local) in &pairs {
+                                let mine = bones[b] * rest_bones[b].inverse();
+                                total += mine.transform_point3(*p).distance(bones[*partner_bone].transform_point3(*partner_local));
+                            }
+                        }
+                        (total / (frames.len() * pairs.len()) as f32, b)
+                    })
+                    .collect();
+                scores.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let partners: std::collections::BTreeSet<usize> = pairs.iter().map(|p| p.1).collect();
+                println!("  group {g}: {dominant} dominant, {} seam pairs on bones {partners:?}, best {:?}", pairs.len(), &scores[..3].iter().map(|(s, b)| (*b, (s * 1000.0).round() / 1000.0)).collect::<Vec<_>>());
+                chosen[g] = Some(scores[0].1);
+            }
+            // Group 0 is the piece's own bone when no seam says otherwise.
+            if chosen[0].is_none() {
+                chosen[0] = Some(SLOT_BONES[placed.slot as usize]);
+            }
+            // The rest: the bone that stretches the piece's edges least, in turn.
+            let rest_points: Vec<Vec3> = piece.vertices.iter().map(|v| rest_of(*node).transform_point3(v.position.into())).collect();
+            let edges: Vec<(u32, u32)> = piece.materials.iter().flat_map(|m| m.indices.chunks_exact(3).flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])).collect();
+            let stretch = |assign: &[usize]| -> f32 {
+                let mut total = 0.0;
+                for bones in frames.iter().step_by(3) {
+                    let posed: Vec<Vec3> = rest_points
+                        .iter()
+                        .zip(&weights)
+                        .map(|(p, w)| w.iter().zip(assign).map(|(&wt, &b)| (bones[b] * rest_bones[b].inverse()).transform_point3(*p) * wt).sum())
+                        .collect();
+                    for &(a, b) in &edges {
+                        let rest = rest_points[a as usize].distance(rest_points[b as usize]).max(1e-4);
+                        total += (posed[a as usize].distance(posed[b as usize]) - rest).abs() / rest;
+                    }
+                }
+                total
+            };
+            for g in 0..groups {
+                if chosen[g].is_some() {
+                    continue;
+                }
+                let base: Vec<usize> = chosen.iter().map(|c| c.unwrap_or(SLOT_BONES[placed.slot as usize])).collect();
+                // Bones that move as one already chosen would make the group pointless.
+                let same = |a: usize, b: usize| frames.iter().all(|bones| bones[a].abs_diff_eq(bones[b], 1e-4));
+                let mut scores: Vec<(f32, usize)> = (0..doax::BONE_COUNT)
+                    .filter(|&b| b != 15 && !chosen.iter().flatten().any(|&c| same(c, b)))
+                    .map(|b| {
+                        let mut assign = base.clone();
+                        assign[g] = b;
+                        (stretch(&assign), b)
+                    })
+                    .collect();
+                scores.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                println!("  group {g} by stretch: best {:?}", &scores[..5].iter().map(|(s, b)| (*b, s.round())).collect::<Vec<_>>());
+                chosen[g] = Some(scores[0].1);
+            }
+            println!("  => {:?}", chosen.iter().map(|c| c.unwrap()).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn suit_weight_groups() {
+        let wear: Vec<LazyArchive> = ["werone", "wertwo"].iter().map(|n| LazyArchive::open(format!("assets/doax2/{n}.afs")).unwrap()).collect();
+        let names: Vec<Vec<String>> = wear.iter().map(|w| w.names().map(str::to_string).collect()).collect();
+        let mut seen = std::collections::BTreeMap::new();
+        for (_, code) in ROSTER {
+            for suit in suits(&names, code) {
+                let tpr = wear[suit.archive].read_index(suit.entry).unwrap();
+                let cat = wear[suit.archive].read_index(suit.entry + 1).unwrap();
+                let xpr = Xpr2::parse(&tpr).unwrap();
+                let objects = objects(&xpr).unwrap();
+                for list in draw_lists(&cat).unwrap() {
+                    for placed in list {
+                        let groups = object_weights(&xpr, &objects[placed.object]).unwrap().first().map_or(0, |w| w.len());
+                        *seen.entry((placed.slot, groups)).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        println!("(slot, groups): pieces {seen:?}");
+        for index in [20usize, 21, 22] {
+            let suit = &suits(&names, "tn")[index];
+            let tpr = wear[suit.archive].read_index(suit.entry).unwrap();
+            let cat = wear[suit.archive].read_index(suit.entry + 1).unwrap();
+            let xpr = Xpr2::parse(&tpr).unwrap();
+            let objects = objects(&xpr).unwrap();
+            for (k, list) in draw_lists(&cat).unwrap().iter().enumerate() {
+                let summary: Vec<(u32, usize)> = list.iter().map(|p| (p.slot, objects[p.object].vertex_count())).collect();
+                println!("suit {index} {} list {k}: {summary:?}", suit.label);
+            }
+        }
+        let suit = &suits(&names, "tn")[2];
+        let tpr = wear[suit.archive].read_index(suit.entry).unwrap();
+        let cat = wear[suit.archive].read_index(suit.entry + 1).unwrap();
+        let loaded = load(&tpr, &cat).unwrap();
+        for ((piece, node, placed), weights) in loaded.pieces.iter().zip(&loaded.weights) {
+            if weights.first().map_or(true, |w| w.is_empty()) {
+                continue;
+            }
+            let sums: Vec<f32> = weights.iter().map(|w| w.iter().sum()).collect();
+            let bad = weights.iter().filter(|w| w.iter().any(|x| !x.is_finite() || *x < -0.01 || *x > 1.01)).count();
+            let lo = sums.iter().cloned().fold(f32::MAX, f32::min);
+            let hi = sums.iter().cloned().fold(f32::MIN, f32::max);
+            for w in weights.iter().filter(|w| w.iter().sum::<f32>() > 1.01).take(4) {
+                println!("   odd weights {w:?}, first ones add up to {}", w[..w.len() - 1].iter().sum::<f32>());
+            }
+            let partial_bad = weights.iter().filter(|w| { let s: f32 = w[..w.len() - 1].iter().sum(); !(-0.01..=1.01).contains(&s) }).count();
+            println!("   with the last implied: {partial_bad} out of range");
+            println!("{} {placed:?} node {node}: {} vertices, sums {lo:.3}..{hi:.3}, {bad} odd, layouts {}", suit.label, piece.vertices.len(), Xpr2::parse(&tpr).map(|x| objects(&x).unwrap()[placed.object].decls.len()).unwrap());
         }
     }
 

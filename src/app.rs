@@ -779,10 +779,13 @@ impl App {
         let suit = suits.get(costume_idx).context("unknown suit")?;
         let wear = &self.doax2_wear[suit.archive];
         let head = format!("v{code}AA");
+        let body_cat = chr.read(&format!("v{code}1.cat"))?;
+        // Suits hold a list per body type; the body's CAT says which is hers.
+        let body_type = doax2::body_type(&body_cat).ok();
         let files = [
-            doax2::load(&chr.read(&format!("v{code}1.tpr"))?, &chr.read(&format!("v{code}1.cat"))?).context("body")?,
+            doax2::load(&chr.read(&format!("v{code}1.tpr"))?, &body_cat).context("body")?,
             doax2::load(&chr.read(&format!("{head}.tpr"))?, &chr.read(&format!("{head}.cat"))?).context("head")?,
-            doax2::load(&wear.read_index(suit.entry)?, &wear.read_index(suit.entry + 1)?).context("suit")?,
+            doax2::load_for(&wear.read_index(suit.entry)?, &wear.read_index(suit.entry + 1)?, body_type).context("suit")?,
         ];
         // Each file has its own node tree; they are laid one after another. The feet stand
         // on the ground: the lowest body vertex at rest is put at height 0.
@@ -794,58 +797,80 @@ impl App {
             .flat_map(|(piece, node, _)| piece.vertices.iter().map(move |v| body_rest[*node].transform_point3(v.position.into()).y))
             .fold(f32::MAX, f32::min);
         let lift = glam::Mat4::from_translation(glam::Vec3::Y * -floor.min(0.0));
-        let mut nodes = Vec::new();
         let mut textures = Vec::new();
-        let mut placed = Vec::new();
         // The head file's root goes on the body's head node.
         let head_frame = match (files[0].head_frame(), files[1].rest.first()) {
             (Some(frame), Some(root)) => frame * root.inverse(),
             _ => glam::Mat4::IDENTITY,
         };
+        // Motions use DOAX's tracks and solve, with the body's offsets. Each piece follows the
+        // DOAX bone of its CAT number from where it sits at rest; a blended piece gets a node per
+        // weight group, on that group's bone.
+        let rows = doax2::bone_rows(&files[0].rest)?;
+        let bone_rest = doax2::bone_rest(&rows);
+        let pelvis = files[0].rest[0].w_axis.truncate();
+        struct Drawn<'a> {
+            piece: &'a crate::formats::model::ModelPiece,
+            first_texture: usize,
+            texture_count: usize,
+            node: usize,
+            multi: Option<crate::renderer::mesh::MultiBend>,
+        }
+        let mut drawn = Vec::new();
+        // (bone, place from the bone) and the rest matrix, per node.
+        let mut pose_nodes: Vec<(usize, glam::Mat4)> = Vec::new();
+        let mut rest_nodes: Vec<glam::Mat4> = Vec::new();
         for (index, file) in files.iter().enumerate() {
-            let (node_base, texture_base) = (nodes.len(), textures.len());
+            let texture_base = textures.len();
             let parent = if index == 1 { head_frame } else { glam::Mat4::IDENTITY };
-            nodes.extend(file.rest.iter().map(|m| flip * lift * parent * *m));
             textures.extend(file.textures.iter().cloned());
-            for (piece, node, _) in &file.pieces {
-                placed.push((piece, node_base + node, texture_base, file.textures.len()));
+            for ((piece, node, placed), weights) in file.pieces.iter().zip(&file.weights) {
+                let rest = glam::Mat4::from_translation(-pelvis) * parent * file.rest[*node];
+                let shown = flip * lift * parent * file.rest[*node];
+                let own_bone = doax2::SLOT_BONES.get(placed.slot as usize).copied().unwrap_or(2);
+                let groups = weights.first().map_or(0, |w| w.len());
+                let bones = doax2::blend_bones(placed.slot, groups).filter(|_| groups > 0);
+                if groups > 0 && bones.is_none() {
+                    log::warn!("DOAX2: no groups for bone number {} with {groups} weights", placed.slot);
+                }
+                let node = pose_nodes.len();
+                pose_nodes.push((own_bone, bone_rest[own_bone].inverse() * rest));
+                rest_nodes.push(shown);
+                let multi = bones.map(|bones| {
+                    let groups = bones
+                        .iter()
+                        .map(|&bone| {
+                            pose_nodes.push((bone, bone_rest[bone].inverse() * rest));
+                            rest_nodes.push(shown);
+                            (pose_nodes.len() - 1, glam::Vec3::ZERO)
+                        })
+                        .collect();
+                    crate::renderer::mesh::MultiBend { groups, weights: weights.clone() }
+                });
+                drawn.push(Drawn { piece, first_texture: texture_base, texture_count: file.textures.len(), node, multi });
             }
         }
-        // One node per piece, so that each can follow its own bone.
-        let nodes: Vec<glam::Mat4> = placed.iter().map(|&(_, node, _, _)| nodes[node]).collect();
-        let inputs: Vec<PieceInput> = placed
+        let nodes = rest_nodes;
+        let inputs: Vec<PieceInput> = drawn
             .iter()
-            .enumerate()
-            .map(|(index, &(piece, _, first, count))| PieceInput {
-                node: index,
-                vertices: &piece.vertices,
-                draws: piece
+            .map(|d| PieceInput {
+                node: d.node,
+                vertices: &d.piece.vertices,
+                draws: d
+                    .piece
                     .materials
                     .iter()
-                    .map(|m| (m.indices.as_slice(), m.base_texture(count).map(|t| t + first), m.cull_back, None))
+                    .map(|m| (m.indices.as_slice(), m.base_texture(d.texture_count).map(|t| t + d.first_texture), m.cull_back, None))
                     .collect(),
-                parent: index,
+                parent: d.node,
                 skin: None,
                 bend: None,
-                multi: None,
+                multi: d.multi.clone(),
                 welds: Vec::new(),
                 translucent: false,
             })
             .collect();
-        // Motions: DOAX's tracks and solve, with the body's offsets. Each piece follows the DOAX
-        // bone of its CAT number, from where it sits at rest.
-        let rows = doax2::bone_rows(&files[0].rest)?;
-        let bone_rest = doax2::bone_rest(&rows);
-        let pelvis = files[0].rest[0].w_axis.truncate();
-        let mut pose_pieces = Vec::new();
-        for (index, file) in files.iter().enumerate() {
-            let parent = if index == 1 { head_frame } else { glam::Mat4::IDENTITY };
-            for (_, node, placed) in &file.pieces {
-                let bone = doax2::SLOT_BONES.get(placed.slot as usize).copied().unwrap_or(2);
-                let rest = glam::Mat4::from_translation(-pelvis) * parent * file.rest[*node];
-                pose_pieces.push((bone, bone_rest[bone].inverse() * rest));
-            }
-        }
+        let pose_pieces = pose_nodes;
         let mut motion_data = Vec::new();
         let mut motions = Vec::new();
         let mut animations = Vec::new();
