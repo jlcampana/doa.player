@@ -729,22 +729,28 @@ impl App {
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {
-        // A paused motion stays paused, on the same frame, if the new list has the same motion.
-        let paused = (!self.anim_panel.playing)
-            .then(|| self.anim_panel.selected_anim_idx.and_then(|i| self.current_animations.get(i)))
-            .flatten()
+        // The motion carries over, playing or paused, on the same frame, if the new list has
+        // the same motion: changing a costume keeps what was on screen. A paused motion stays
+        // paused even when the new list lacks it.
+        let playing = self.anim_panel.playing;
+        let kept = self
+            .anim_panel
+            .selected_anim_idx
+            .and_then(|i| self.current_animations.get(i))
             .map(|entry| (entry.name.clone(), entry.doa3_motion_id, self.anim_time));
         self.doax_pose = None;
         self.doax2_pose = None;
         self.load_character_files(char_idx, costume_idx);
-        if let Some((name, id, time)) = paused {
+        if let Some((name, id, time)) = kept {
             let same = self.current_animations.iter().position(|a| a.name == name)
                 .or_else(|| self.current_animations.iter().position(|a| a.doa3_motion_id == id));
             if let Some(index) = same {
                 self.select_motion(index);
                 self.anim_time = time;
+                self.anim_panel.playing = playing;
+            } else if !playing {
+                self.anim_panel.playing = false;
             }
-            self.anim_panel.playing = false;
             self.update_doa3_pose();
         }
     }
