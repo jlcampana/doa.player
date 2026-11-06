@@ -325,6 +325,43 @@ way each step, likely collision with the body. The field at +0x10 adds nothing t
 The game lets the hair stretch: near the root its segments are 12 to 15 percent longer than
 at rest. So this is a fit, not the game's method yet.
 
+### The game's cloth step (from the code, 2026-11-06)
+
+Read from `assets/doax2/image_82000000.bin` with capstone and a small VMX128 decoder (capstone
+does not decode VMX128; the opcodes are Xenia's). The tag strings are at `0x822A7A94` on; the
+loader reads `GRID_DATA` at `0x8249834C`, `FIX_GRID` `0x8249854C`, `GRID_WRITE` `0x82498634`,
+`THREAD_DATA` `0x824986CC`. The step is `0x82493920` (r3 the cloth; +0x20 its working
+`PROPERTY`, +0x24 the grid, +0x28 the states, +0x34 the threads, +0x44 the colliders, +0x4C the
+owner). `P[x]` below is the working `PROPERTY` at offset x from its tag.
+
+1. The owner's 0xA0 bytes of property are copied to the working `PROPERTY`, then scaled: 0x34 by
+   owner+0xC0, 0x38 by owner+0xA4, 0x40 by a time ratio (owner+0xA0), 0x44, 0x4C to 0x60 and 0x70
+   to 0x78 by a global factor (`0x833B84CC`, 1 when 0).
+2. The owner counts frames (+0xAC up to +0xA8): on frames in between, and when owner+0xC4 bit
+   0x10 is set, the particles (position, previous position, normal) are only carried by the
+   head's motion, the new matrix times the inverse of the last (kept at owner+0xF0). That is
+   why the live states change in bursts.
+3. On a step: previous = position, velocity = (position - previous - vm) * P[0x40] + vm, kept
+   at +0x10 with the lock mask at +0x40; vm = (1 - owner[0x120]) * owner[0xB0], the frame's
+   velocity. P[0x40] is 0.2 on Kasumi: most of the velocity relative to the head is lost.
+4. `0x824949A8`, forces per particle: the relative velocity, plus gravity, plus air (wind from
+   P[0x70..0x78], turned by the matrix if P[0x3C] bit 0x20; random noise from `0x825C9F98` if
+   bit 0x01; drag against the particle's normal), plus springs over its edges,
+   k * (|d| - L) along d, with k by kind and sign: kind 1 P[0x4C] stretched, P[0x50]
+   compressed; kind 2 P[0x54], P[0x58]; kind 3 0 stretched, P[0x5C] compressed. The sum is cut
+   to length P[0x44] and the velocity becomes it plus vm.
+5. A callback of the owner (+0xCC), then `0x82495030`: collisions by collider type (1, 2, 3,
+   4, 8, 9), each with its own function (`0x8249B430`, `0x824A2318`, `0x824A2490`,
+   `0x824A4690`, `0x8249B750`...). Not read yet; where the position moves by the velocity is
+   not found yet.
+6. One or two passes (owner+0xC4 bit 0x08 gives two) of: threads (`0x82499900`, f1 = P[0x48]),
+   `0x82494380`, `0x824948B8`, colliders of kinds 1 and 2 (`0x824AB4B8`, `0x824ABBE8`),
+   `0x824944A8`, `0x82495FE8`. Thread type 1 (Kasumi's) caps each link at its edge's rest
+   length times P[0x48] (1.125), root first, moving the child only (masked by +0x40). That is
+   the 12 to 15 percent stretch seen near the root. Types 2 and 5 call `0x82498EE0`, 3 and 4
+   `0x824988D0`, and every thread first calls `0x824988D0`.
+7. `0x824970D8` and `0x82497450` then write the vertices.
+
 Other vertices of layout 2 (2844 to 3367 on `vksAA`) also move but are not particles. The head
 CAT has blocks tagged 0x06010001 from 0x1680 (two values 0.3 and 0.8, a point behind the head,
 offsets) that may drive them. Not decoded.
