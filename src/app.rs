@@ -460,6 +460,8 @@ struct Doax2Pose {
     chest: Vec<(usize, Vec<[glam::Vec3; 3]>)>,
     chest_spring: Option<doa3::ChestSpring>,
     chest_frame: u64,
+    /// The nodes as first shown, before a motion: the export's bind pose.
+    rest_nodes: Vec<glam::Mat4>,
 }
 
 /// What is needed to pose the loaded DOA3 character.
@@ -909,6 +911,7 @@ impl App {
         self.doax_pose = None;
         self.doax2_pose = Some(Doax2Pose {
             files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None, chest_frame: 0,
+            rest_nodes: nodes.clone(),
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -1750,6 +1753,33 @@ impl App {
         use anyhow::Context;
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
+        if let Some(pose) = &self.doax2_pose {
+            // A node per piece and per weight group, each driven by its DOAX bone. The chest
+            // shapes are not exported.
+            let chosen: Vec<usize> = if all_motions {
+                (0..pose.motions.len()).collect()
+            } else {
+                self.anim_panel.selected_anim_idx.into_iter().collect()
+            };
+            let mut clips = Vec::new();
+            for index in chosen {
+                let Some(&(file, motion)) = pose.motions.get(index) else { continue };
+                let mut frames = Vec::new();
+                for frame in 0..motion.frames {
+                    let values = doax::eval_motion_endian(&pose.files[file], &motion, frame as f32, true)?;
+                    let bones = doax::solve_pose(&values, &pose.rows);
+                    frames.push(pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect());
+                }
+                let hands = vec![Vec::new(); frames.len()];
+                clips.push(ExportClip { name: self.current_animations[index].name.clone(), frames, hands });
+            }
+            let (game, character, costume) = &self.loaded_name;
+            let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
+            let names = pose.pieces.iter().enumerate().map(|(i, (bone, _))| format!("node_{i}_bone_{bone}")).collect();
+            let parents = vec![None; pose.pieces.len()];
+            write_glb(&Export { model: &self.export_source, bind: pose.rest_nodes.clone(), parents, names, clips: &clips, hands: &[] }, &path)?;
+            return Ok(path);
+        }
         if let Some(pose) = &self.doax_pose {
             // Hands, then the chest spring's sets, which follow the spring as in the viewer.
             let hands: Vec<ExportHand> = pose
