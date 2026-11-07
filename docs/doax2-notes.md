@@ -21,9 +21,7 @@ read by their place.
 - `mot.afs`: motions, `anime_cm.bin`, `comon*.mot`, `<name>.bin` and `.mot`.
 - `itm.afs`: accessories and items (`acc_hea`, `acc_wri`, presents).
 - Characters: `tn` Tina, `ks` Kasumi, `he` Helena, `co` Kokoro, `le` Lei Fang, `ay` Ayane,
-  `ls` Lisa, `cr` Christie, `ht` Hitomi. The limit on soft bodies and the DOAX roster rule apply:
-  only Tina, Helena, Lei Fang, Lisa and Christie are in the viewer. Kokoro is left out with
-  Kasumi, Ayane and Hitomi, as she is young in the series.
+  `ls` Lisa, `cr` Christie, `ht` Hitomi.
 
 ## XPR2 (`.tpr`)
 
@@ -144,6 +142,8 @@ matched a whole frame within 6.9 mm at the worst bone (positions from the hips i
 bone 15), the rest 4 to 21 cm off, taken between frames or while the game blends motions. Lei Fang in a match played
 `leifang.mot` 1299: 6 of 12 samples matched consecutive frames within 2.7 mm, the rest within
 0.8 to 4.6 cm. This checks the tracks, DOAX's solve and the rows from the node tree.
+
+**Pending:** Integrate and validate the character-specific animations for Kasumi, Ayane, Kokoro and Hitomi. Their motion files are present in `mot.afs`, but their animations are not yet implemented in the viewer.
 
 ## Skinning
 

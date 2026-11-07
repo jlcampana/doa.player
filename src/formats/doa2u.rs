@@ -258,22 +258,15 @@ pub fn soft_body_offsets(cat: &[u8], wanted: u32) -> Result<(usize, Vec<usize>)>
     Ok((base, offsets))
 }
 
-/// Characters whose body has no soft bodies in the viewer, by choice: Kasumi,
-/// Ayane, Hitomi and `ytina`, taken to be Tina as a girl from her name and not checked.
-/// Fixed in code, and not a limit of the game or its files.
-const NO_SOFT_CLOTH_IDS: [usize; 4] = [5, 13, 18, 21];
-
 /// Whether a character's body may have soft bodies in the viewer.
 pub fn allows_body_soft_bodies(character_id: usize) -> bool {
-    !NO_SOFT_CLOTH_IDS.contains(&character_id)
+    return true;
 }
 
 /// The costume's cloth: kind 2 in the soft body list. Roots on vertices start
 /// on the file's shape, and `SoftCloth::follow_vertices` keeps them up to date.
 pub fn soft_cloth(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<SoftCloth>> {
-    if NO_SOFT_CLOTH_IDS.contains(&character_id) {
-        return Ok(Vec::new());
-    }
+
     let (base, offsets) = soft_body_offsets(cat, 2)?;
     let mut cloth = parse_cloth_records(cat, base, &offsets);
     cloth.retain(|sheet| sheet.object < model.pieces.len());
@@ -285,7 +278,6 @@ pub fn soft_cloth(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<
 }
 
 /// The costume's chains: kind 1 in the soft body list, for hair and similar. On
-/// `NO_SOFT_CLOTH_IDS` only the head's chains are kept, as the rest are on the body.
 pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec<SoftChain>> {
     let (base, offsets) = soft_body_offsets(cat, 1)?;
     let mut chains = parse_chain_records(cat, base, &offsets);
@@ -301,9 +293,6 @@ pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec
         }
     }
     chains.retain(|chain| chain.bone != usize::MAX);
-    if NO_SOFT_CLOTH_IDS.contains(&character_id) {
-        chains.retain(|chain| chain.bone == 1);
-    }
     Ok(chains)
 }
 
@@ -714,9 +703,6 @@ fn read_hand(cat: &[u8], base: usize, entry_index: usize, stride: usize) -> Resu
     }
 }
 
-/// Characters with the chest spring in the viewer: Tina, Helena and Lei Fang.
-/// Fixed in code, by choice: adult characters only.
-const CHEST_SPRING_IDS: [usize; 3] = [1, 7, 12];
 
 /// `sub_0005ADA0`, with the table at 0x64C894. The rest value is half of the 0.3
 /// there. Measured on Helena and Lei Fang: see the notes.
@@ -730,9 +716,6 @@ pub const CHEST_SPRING: ChestSpringParameters =
 /// floats per group, with offsets from the section. A list holds vertex byte
 /// offsets, where the low bit means another follows.
 pub fn chest_morph(cat: &[u8], character_id: usize) -> Result<Option<(usize, Vec<ChestMorphGroup>)>> {
-    if !CHEST_SPRING_IDS.contains(&character_id) {
-        return Ok(None);
-    }
     let base = read_u32(cat, 0xC)? as usize;
     if slice(cat, base, 4)? != b"apv\0" || read_u32(cat, base + 4)? < 5 {
         return Ok(None);

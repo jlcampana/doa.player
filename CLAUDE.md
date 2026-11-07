@@ -12,13 +12,11 @@ Native Linux viewer in Rust (wgpu 22, winit 0.30, egui 0.29, glam) for Dead or A
 
 - `docs/doa2u-notes.md`: DOA2U formats and cipher. `docs/doa3-internals.md`: DOA3 internals. `docs/viewer-mode-feasibility.md`: reading live memory.
 - `src/formats/doa2u.rs`, `doa3*.rs`, `doax.rs`, `model.rs`: parsers. `src/app.rs`: roster and loading. `src/renderer/mesh.rs`: pose and skinning.
-- `tools/re/`: `doa2u_crypt.py` (decrypt, AFS), `doa2u_obj_dump.py` (dump an OBJ), `doa2u_live.py` and `doa3_live.py` (read-only memory oracles; more under "Tools for this work"), `shot.sh` (render to PNG).
-- DOA2U data the viewer reads: `assets/doa2u/` (`DOA2.xbe`, `datahdd.afs`, `datahdd2.afs`, `datadvd.afs`, `voice.afs`), copied from the install. Other archives, such as `bgm.afs`, are only in the install.
+- `tools/re/`: `doa2u_crypt.py` (decrypt, AFS), `doa2u_obj_dump.py` (dump an OBJ), `doa2u_live.py` and `doa3_live.py` (read-only memory oracles; more under "Tools for this work"), `shot.sh` (render to PNG). DOA2U data the viewer reads: `assets/doa2u/` (`DOA2.xbe`, `datahdd.afs`, `datahdd2.afs`, `datadvd.afs`, `voice.afs`), copied from the install. Other archives, such as `bgm.afs`, are only in the install.
 - DOA2U install: `/home/pandi/Ports/Apps/DeadOrAlive2Ultimate-Doa2uRe/private/`, through a link to the Stuff disk, which is slower. `play-disc/DOA2/` has the archives, `program/runtime-sources/recomp_00NN.c` the generated C. The user's builds may rewrite `generated`. The public repo github.com/NoRain211/doa2u-re has no game code.
 - DOA3 generated C: github.com/parkerallan/doa3-recomp, `doa3/src/game/recomp/gen`.
 
 ## Commands
-
 ```bash
 cargo test
 DOA2U_DISC=assets/doa2u cargo test -- --ignored --nocapture    # all encrypted costumes
@@ -31,15 +29,18 @@ EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"              
 EXTRA="--doax2" tools/re/shot.sh out "Tina Armstrong|2|0|200|2.2|1.1"              # a DOAX2 suit and motion
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
-target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/<game>/<character>/<costume>.glb
+
+target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/\<game>/\<character>/\<costume>.glb
+
 target/fast/doa_player --export-all                                                 # every costume, no visible window; DOA2U and DOA3 about 3.5 minutes, DOAX far longer
 target/fast/doa_player --export-all --doax                                          # only DOAX
 target/fast/doa_player --export-all --doax2                                         # only DOAX2, not measured for time or memory
+
 target/release/doa_player --install-icon                                            # icon and desktop entry in ~/.local/share, needed on Wayland
+
 ```
 
 ## Current state of DOA2U (2026-11-04)
-
 Measured against the running game; see `docs/doa2u-notes.md` for numbers and code addresses.
 
 - Pose: limbs, hands, forearm twists, upper arms and motion tracks. `doa2u::solve_pose`.
@@ -52,14 +53,7 @@ Measured against the running game; see `docs/doa2u-notes.md` for numbers and cod
 
 Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same, so this is the viewer's convention, not a pose bug.
 
-## Limit on soft bodies
-
-Claude set this and told the user: no chest spring, cloth or other body soft bodies for Kasumi, Ayane and Hitomi, skirts included, as they are teenagers or young in the series. `ytina` (`yti00`, ID 18), by her name Tina as a girl, is on the same list. Their hair stays on: `NO_SOFT_CLOTH_IDS` in `doa2u.rs` keeps only chains on the head. The DOA2U chest spring, at the user's request, is only for Tina, Helena and Lei Fang (`CHEST_SPRING_IDS`). Develop and validate cloth on adult characters: Helena, Tina (`tin16`), Lei Fang. Diagnose those three from data, and use an adult for close-up body renders.
-
-`CHEST_SPRING_CHARACTER_IDS` and `TORSO_FRONT_CHAIN_CHARACTER_IDS` in `doa3.rs`, and `characters.toml`, do include them, against an older note in memory. The user was asked how that came about and has not answered. It was left unchanged, and is not to be carried over to DOA2U.
-
 ## Next steps, in order
-
 1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: drawing in the game's order, fog, timed lightning (a held flash is in the list), real point lights with a fighter position, and which areas change their table in code.
 2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
 3. **Remaining soft body error.** `hel00` chain 7 (5 mm) and chains 0, 1, 6, 8 (under 0.4 mm), and shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each; a new capture should confirm it, because the rest of their pairs are not one step apart. Wind was 0 in the cloth captures, so it is untested.
@@ -68,7 +62,6 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 6. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
 
 ## Tools for this work
-
 - `tools/re/doa2u_live.py`: read-only guest memory. `capture` writes pose frames.
 - `tools/re/doa2u_capture_objects.py`: records the objects the game rewrites.
 - `tools/re/doa2u_cloth_pairs.py`, `tools/re/doa2u_chain_pairs.py`: consecutive particle frames. They wait for quiet, because reads otherwise catch sheets half written.
@@ -82,45 +75,45 @@ Claude set this and told the user: no chest spring, cloth or other body soft bod
 - Captures are in `target/captures/`, not tracked. `cargo clean` deletes them, and the tools above recreate them.
 
 ## Exporting to Blender
-
 `src/export.rs` writes a `.glb` per costume: a mesh per piece, an armature of 25 bones with the pose solve's hierarchy, skin weights, embedded PNG textures, and baked motions at 60 frames per second. `exports/` is gitignored: the files hold game data and must not be committed or published. The Costume and All costumes buttons are in the character panel, and All costumes does one costume per frame so the window keeps responding. Checked by importing in `blender -b`: DOA2U, an `A0` model and DOA3, and all 698 motions of `zac00` (25 MB, 8 s); a frame of `zac00` was compared with the viewer by eye.
 
 DOAX exports its 32 bones from the rest pose, arms out, with hands as shape keys and blended pieces by their weights. Checked in `blender -b` on two costumes, and one frame of `tina 0077` by eye against the viewer. Bulk export over DOAX was measured for 97 s only: 227 costumes, memory flat.
 
-Not exported: soft bodies (they stay on their bone, in the file's shape), DOA3 and `A0` hand poses, and faces. DOA2U hands are shape keys, driven by the move scripts. Joint pieces bend by quaternion in the game and by weights here, so they differ slightly from the viewer away from the rest pose. The chest spring is exported for DOAX only: its sets on the chest, upper arms and suit are shape keys, weighted per frame by the spring, which starts at rest on each motion's first frame and follows the Bounce slider (checked in `blender -b` on `mdAy00tn`). DOA3 and DOA2U do not export it. If soft bodies are ever baked, the limit on soft bodies above applies to the export too.
+Soft body animations are not exported for DOA3 or DOA2U yet. Soft-body-driven pieces currently remain attached to their bones and retain their undeformed shape from the files. Exporting their animated deformations is still pending.
+
+DOA3 and `A0` hand poses and facial animations are also not exported. DOA2U hands are exported as shape keys, driven by the move scripts.
+
+The chest spring is exported for DOAX only: its sets on the chest, upper arms and suit are shape keys, weighted per frame by the spring, which starts at rest on each motion's first frame and follows the Bounce slider (checked in `blender -b` on `mdAy00tn`). DOA3 and DOA2U do not export it yet.
 
 Do not run a visible window for long from tests: a window that does not process events looks hung on the user's desktop.
 
 GPU memory does not show in any process's memory use, and `--export-all` runs in one loop with no frames. Without a submit and a poll per costume it grew 28 MB per costume until the desktop froze (2026-11-05). When changing a bulk path, watch `MemAvailable` and `mem_info_vram_used`/`mem_info_gtt_used` under `/sys/class/drm/card*/device/`, and kill the run below a floor. The All costumes button goes through frames: 49 costumes of Lei Fang left VRAM flat (805 to 861 MB).
 
 ## Development notes
-
 - Anime shading (`cel_shaded`, `vs_outline` in `mesh.rs`) is the viewer's own and applies to all games: two cool shadow tones from the strongest light, a hard highlight, a thin rim, and an inverted hull ink line. The user asked for something more worked, in the style of Fire Emblem. Its values were chosen without seeing them against that game.
 
-- Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character. Validate close-ups on an adult, as the limit above says, not on Kasumi, which an older version of this note suggested.
+- Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character.
+
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.
 - Lighting: DOA2U is done as far as the notes say. DOA3 keeps the viewer's own shading; its materials may work the same way, but this is not checked.
 
 ## Unverified in DOA2U
-
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
 - Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.
 
 ## Backlog
-
 1. DOA2U: stages, other soft body kinds.
 2. DOA3: other face targets, ring mode 1 in tubes, the knife in Kasumi's hand, real stage wind, vertex normals (6 to 12 percent of the file's are over 60 degrees from their surface, measured on Kasumi, Ayane and Bayman with faces turned to the file's side; an earlier count of 40 to 53 percent was wrong, as it took strips' alternating winding as the surface's side. The viewer works normals out from the posed triangles each frame for materials without the game's lighting, over the whole model, in `smooth_normals`), 0xFA sections, visual defects (Tina's forearm bands, Zack's chin item).
 3. Kasumi's DOA3 fringe: the user thinks it looks the same as in the game (2026-11-04). No change needed unless a closer comparison shows otherwise.
-4. Unlocking everything: DOA2U's costumes are already at the maximum in this save, and the viewer shows everything regardless. Save flags are read from code and `tools/re/doa2u_unlocks.py` prints their state, see "Unlocks" in the notes. What they open and what locks the CG gallery are not known. The save file is encrypted and its format was not read.
+4. Complete chest bounce animations: implement the remaining two bounce axes in the viewer and support exporting the complete bounce animation to Blender, including all axes and shape deformations.
 5. Voices: DOA2U's clips play from the Voices window. Not done: DOA3's clips, which have no names, and playing clips with moves.
-6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 5 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3. The limit on soft bodies applies, and Kasumi, Ayane and Hitomi stay out of its roster, as the notes say.
-7. DOAX2: Dead or Alive Xtreme 2 (Xbox 360), asked for by the user (2026-11-06). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtreme2-DOAX2Recomp`, data copied to `assets/doax2/` (with a 32 MB copy of the game's image from memory). `src/formats/doax2.rs` reads XPR2 models, the node tree, Xbox 360 textures and CAT draw lists by body type; the viewer shows body, head and suit, plays the motions with DOAX's solve, blends weighted pieces by an inferred table, and drives the chest's up and down shapes with DOAX's spring (`--doax2`). Export writes a node per piece, without the chest shapes. `tools/re/doax2_live.py` reads bone arrays from the running game. Findings in `docs/doax2-notes.md`. Order set by the user (2026-11-06): 1 lights, 2 hair animation, 3 facial animation, 4 the chest's other two axes, 5 choosing hairstyles, 6 the hand file per scene, 7 the game's material colours, 8 export with the bounce, then DOAX: hand intermediate shapes, arm roll, light sets per stage. Details: lights (shader constants found: `DirLightVec` c71-74, `DirLightCol` c75-78, `AmbientLightP1/P2` c68-69, point and spot lights after; a table of light sets lives in the guest heap from `0x4007E280`, 0x1E0 bytes a set: ambient, 4 directions, 4 colours; its source file is being looked for), hair animation (the head CATs' unread sections), facial animation (blinks done from script op 22; the mouth's vowel shapes are read, their trigger is not). Then: the chest's sideways and forward pairs, other heads, which hand file per scene, the game's material colours. Poses are checked live (Tina, Lei Fang). Same roster limit as DOAX, and Kokoro is left out too.
+6. DOAX: support Dead or Alive Xtreme Beach Volleyball in the viewer, asked for by the user (2026-11-05). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtremeBeachVolleyball-DOAXVBNativePCPort`. In the viewer: 8 characters with suits and motions, data in `assets/doax/`. The motion evaluator is confirmed against the game, and joints and blended pieces are in. Arm rotations are not exact. Findings in `docs/doax-notes.md`; `tools/re/doax_live.py` and `doax_capture.py` read its memory. Do not assume its formats match DOA2U or DOA3.
+7. DOAX2: Dead or Alive Xtreme 2 (Xbox 360), asked for by the user (2026-11-06). Install: `/home/pandi/Ports/Apps/DeadOrAliveXtreme2-DOAX2Recomp`, data copied to `assets/doax2/` (with a 32 MB copy of the game's image from memory). `src/formats/doax2.rs` reads XPR2 models, the node tree, Xbox 360 textures and CAT draw lists by body type; the viewer shows body, head and suit, plays the motions with DOAX's solve, blends weighted pieces by an inferred table, and drives the chest's up and down shapes with DOAX's spring (`--doax2`). Export writes a node per piece, without the chest shapes. `tools/re/doax2_live.py` reads bone arrays from the running game. Findings in `docs/doax2-notes.md`. Order set by the user (2026-11-07): 1 complete chest bounce animations (remaining axes in the viewer and full bounce export), 2 lights, 3 hair animation, 4 facial animation, 5 choosing hairstyles, 6 the hand file per scene, 7 the game's material colours. Then DOAX: hand intermediate shapes, arm roll, light sets per stage. Details: lights (shader constants found: `DirLightVec` c71-74, `DirLightCol` c75-78, `AmbientLightP1/P2` c68-69, point and spot lights after; a table of light sets lives in the guest heap from `0x4007E280`, 0x1E0 bytes a set: ambient, 4 directions, 4 colours; its source file is being looked for), hair animation (the head CATs' unread sections), facial animation (blinks done from script op 22; the mouth's vowel shapes are read, their trigger is not). Then: the chest's sideways and forward pairs, other heads, which hand file per scene, the game's material colours. Poses are checked live (Tina, Lei Fang).
 
 ## Development principles
-
-- Costume discovery should cover all available archives and variations, not just those exposed by the original game menus. Keep archive enumeration independent from the original select screen roster and costume limits.
+- Costume discovery should cover all available archives and variations, not just those exposed by the original game menus. Keep archive enumeration independent from the original select screen roster.
 - Keep format parsing comprehensive. Document all known CAT record types, sections, matrix slots and vertex layouts, including those not currently used by the viewer.
 - Do not assume unimplemented sections or data fields are irrelevant. Investigate their purpose before deciding whether they can be ignored.
 - Treat implementation limitations and technical assumptions as provisional. Do not assume hardcoded character lists, supported modes or rejected record variants reflect actual game limitations. Investigate whether they are imposed by the game, the file format, the current implementation or simply missing research.

@@ -587,14 +587,17 @@ pub fn bounds(xpr: &Xpr2) -> Result<(Vec3, Vec3)> {
     Ok((lo, hi))
 }
 
-/// The characters in the viewer: the adults only, as for DOAX. Kasumi (`ks`), Ayane (`ay`),
-/// Hitomi (`ht`) and Kokoro (`co`) are left out on purpose.
-pub const ROSTER: [(&str, &str); 5] = [
+/// The characters in the viewer, with their code for the wear archives and the viewer's label.
+pub const ROSTER: [(&str, &str); 9] = [
     ("Tina Armstrong", "tn"),
     ("Helena Douglas", "he"),
     ("Lei Fang", "le"),
     ("Lisa", "ls"),
     ("Christie", "cr"),
+    ("Kasumi", "ks"),
+    ("Ayane", "ay"),
+    ("Hitomi", "ht"),
+    ("Kokoro", "co"),
 ];
 
 /// A suit: which wear archive, the entry of its XPR2 (its CAT follows), and a label.
@@ -1108,6 +1111,10 @@ pub fn motion_name(code: &str) -> Option<&'static str> {
         "le" => "leifang",
         "ls" => "lisa",
         "cr" => "gokei",
+        "ay" => "ayane",
+        "ko" => "kokoro",
+        "hi" => "hitomi",
+        "ka" => "kasumi",
         _ => return None,
     })
 }

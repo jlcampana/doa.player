@@ -255,7 +255,7 @@ Not measured: what a motion ID in the game is at a given moment, so no script wa
 
 ## Chest spring
 
-Only for Tina, Helena and Lei Fang in the viewer, fixed in code (`CHEST_SPRING_IDS`). Kasumi, Ayane and Hitomi have the data in the game, and the viewer does not use it for them.
+Implemented in both the viewer and the exporter for Tina, Helena and Lei Fang. Support for the remaining fighters is still pending, even though Kasumi, Ayane and Hitomi also have the required data in the game.
 
 State per fighter at `0x850538`, stride `0x70`, step in `sub_0005ADA0` and `sub_0005ABA0`. Parameters are copied from the table at `0x64C894`: stiffness 0.075, damping 0.9, drive 30, rest 0.3, of which half is used. DOA3's are 0.128, 0.85, 10 and 0.125. The formula has DOA3's form. A state field at +0x6C selects another path, which was not read, and was 0 in the fighters measured.
 
@@ -312,7 +312,7 @@ Other unlocks, read from the generated C. Nothing was changed in the save. `tool
 - Counters: 0x45 words at +0x2E48, capped at 9999, added from `0xDF4A10` by `sub_000C80E0`.
 - CG gallery: the executable names 364 images (`sprite\\cggallery_pic\\spPic*`) and 31 pages (`sprite\\cggallery\\spGal*`), named by a table around `0x695004`. What locks them was not found: nothing refers to that address directly. The user found no gallery in the game's menus with this save (2026-11-05), so it is locked, hidden or unused. The user's guess is that finishing the game opens it. DOA3's own tool is `tools/doa3_unlock_save.py`.
 
-## Not done
+## Pending work
 
 - Not ported from the pose: the head's `sub_000EDBF0`, feet on slopes, the scale at `0x8A73B4`, and the fighter's root turn.
 - Soft bodies of kinds other than 1, 2, 3, 250 and 251.

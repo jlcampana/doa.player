@@ -10,6 +10,7 @@ It reads files from your own copy of the games. No game data is in this reposito
 
 ```bash
 ./build.sh                                # release build
+./build.sh --allow-dead-code              # release build, suppress "is never used" warnings
 ./build.sh --run                          # build and open the viewer
 ./build.sh --run --load "Zack" 0 --doa2u  # open a DOA2U character directly
 cargo test

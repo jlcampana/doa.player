@@ -53,7 +53,12 @@ Joint pieces read with DOA2U's parser, with each record's own parent, and kind 2
 
 `src/formats/doax.rs`, `--doax`, and the DOAX button. A body with a suit and motions, for 5 characters. The up and down keys walk the costume list, for any game. The body's chest, hips and waist are in the common part of the list, so the game draws them whatever the suit, with the suit over them, and so does the viewer. (code) The viewer offers no way of removing the suit.
 
-Not done: morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Which bone table is whose is inferred from piece sizes (`ROSTER`). Nothing has been compared with the game's picture.
+Kasumi's DOAX character code is `ks` (confirmed by successful compilation).
+
+Not done:
+- Add support for the 3 remaining DOAX characters.
+- Identify and verify which of the 8 bone-offset tables belongs to each character. The current `ROSTER` mapping is inferred from piece sizes.
+- Morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Nothing has been compared with the game's picture.
 
 ## Chest spring
 
@@ -67,6 +72,3 @@ D3D's fixed function lights, as DOA2U: `tools/re/doax_lights.py` lists the ones 
 
 The viewer's list has the three sets most often seen in a demo first, by hand, then the table's. Which set is a character's during a frame was not settled: a check on the world transform passes nearly always, so it told nothing. Which set belongs to which stage and time of day is not known. Sets are not tied to a stage in the viewer. Not done: stages themselves, sun shadows, fog. Not compared with the game's picture.
 
-## Limits
-
-Kasumi, Ayane and Hitomi are left out of the viewer's DOAX roster, as is anything built on them, such as exports. DOAX shows its characters almost only in swimwear and the project treats these three as teenagers or young. Claude's decision; it told the user. `CLAUDE.md`'s limit on soft bodies also applies. Validate on Tina, Helena, Lei Fang, Christie and Lisa, and use full body views at a distance.

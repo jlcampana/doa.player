@@ -35,8 +35,10 @@ const FOOT_HEIGHT: f32 = 0.1;
 
 /// A character the viewer offers, with the file code in her models' names and her table of
 /// bone offsets. The table numbers are inferred from her piece sizes, and not confirmed.
-/// Kasumi, Ayane and Hitomi are left out: see "Limits" in the notes.
-pub const ROSTER: [(&str, &str, u32); 5] = [
+pub const ROSTER: [(&str, &str, u32); 8] = [
+    ("Kasumi", "ks", 4),
+    ("Ayane", "ay", 1),
+    ("Hitomi", "ht", 5),
     ("Tina Armstrong", "tn", 0),
     ("Helena Douglas", "he", 2),
     ("Lei Fang", "le", 3),
@@ -121,6 +123,9 @@ fn suit_endings(code: &str) -> &'static [&'static str] {
         "ls" => &["ls"],
         "he" => &["he", "ls"],
         "le" => &["le", "ht"],
+        "ay" => &["ay", "ht"],
+        "ht" => &["ht"],
+        "ks" => &["ks", "ht"],
         _ => &[],
     }
 }
@@ -548,6 +553,9 @@ pub fn hand_blend(events: &[HandEvent], slot: u16, t: f32, shapes: &[usize]) -> 
 pub fn motion_files(code: &str) -> Vec<String> {
     let stem = match code {
         "tn" => "tina",
+        "ay" => "ayane",
+        "ht" => "hitomi",
+        "ks" => "kasumi",
         "he" => "hika",
         "le" => "leifang",
         "cr" => "gokei",
