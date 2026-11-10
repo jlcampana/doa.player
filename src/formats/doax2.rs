@@ -1253,9 +1253,11 @@ pub fn motion_name(code: &str) -> Option<&'static str> {
         "ls" => "lisa",
         "cr" => "gokei",
         "ay" => "ayane",
-        "ko" => "kokoro",
-        "hi" => "hitomi",
-        "ka" => "kasumi",
+        // The body codes of `ROSTER`; `ko`, `hi` and `ka` were here before and matched no body,
+        // so these three had no motions.
+        "co" => "kokoro",
+        "ht" => "hitomi",
+        "ks" => "kasumi",
         _ => return None,
     })
 }

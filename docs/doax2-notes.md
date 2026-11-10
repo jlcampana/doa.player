@@ -143,7 +143,13 @@ bone 15), the rest 4 to 21 cm off, taken between frames or while the game blends
 `leifang.mot` 1299: 6 of 12 samples matched consecutive frames within 2.7 mm, the rest within
 0.8 to 4.6 cm. This checks the tracks, DOAX's solve and the rows from the node tree.
 
-**Pending:** Integrate and validate the character-specific animations for Kasumi, Ayane, Kokoro and Hitomi. Their motion files are present in `mot.afs`, but their animations are not yet implemented in the viewer.
+**Pending:** Validate the character-specific animations for Kasumi, Ayane, Kokoro and Hitomi. Kasumi's, Kokoro's and Hitomi's were not loaded at all until 2026-11-10: `motion_name` looked them up as `ka`, `ko` and `hi`, while their bodies are `ks`, `co` and `ht`. They load and play now (checked by eye on Kasumi and Hitomi); none is compared with the game.
+
+Spring bones against the game (2026-11-10, `live_spring_bones_match`, the game's own array at
+0x833B5310): Helena standing still matched no motion frame closer than 17 cm (likely a blend or
+a pose the game adjusts). Kasumi sitting matched `gr_kasumi01m.mot` 12 frame 1046 within 8.8 cm
+at the worst bone; there bone 0 turned 1.2 degrees from the game's, bone 8 2.3 and bone 14 16.7,
+the springs' points 14 to 22 mm off. Not a clean frame match, so not conclusive for bone 14.
 
 ## Skinning
 
