@@ -252,6 +252,17 @@ one update. The weights are |s|. The raw values jump by up to 0.3 between update
 come from is not read. Some sub-blocks hold a point 0.2 to 0.3 m from a chest and fixed to it
 (+0x40 or +0x50), perhaps the anchor.
 
+A second log (683 states in 25 s, four characters on the beach) gives the sub-block layout, three
+per character (0x70 bytes each, the first character's at 0x933A10D0): +00 the output, +10 the
+new raw vector, +20 the raw one before it (it shifts in 97 percent of updates), +30 a vector
+that never leaves -0.2..0.2 and changes smoothly, +40 a world point 0.17 m from that
+character's chest (moving with it), +50 a small vector, +60 a parameter (0.03 on the first
+sub-block). The first two sub-blocks' points sit at the chest's height about 10 cm apart, the
+third lower. Linear fits of the raw value against +30, its previous step and itself fail
+(rms 0.13 against 0.2), so the rule is not a plain second-order spring on these fields. A
+search of the code for 0.3, 0.2, -0.2, 1 and -1 loaded together found nothing; the constants
+may come from the block (+60) or a table.
+
 The next step is the update rule: log these blocks with the chest matrices at every change (they
 change about 38 times a second), or find the code that writes them from a pointer to them.
 
