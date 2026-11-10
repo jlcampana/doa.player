@@ -194,12 +194,29 @@ moves down 1.3 cm), a negative one raises it. Checked running: values from 0 to 
 Tina's motions. The sideways and forward pairs stay at rest. Export writes the up and down
 shapes as shape keys on the same spring.
 
-The skin shaders take the shapes' weights in `PosWeight` (c49) and, on the shaders with
-`BlendSup`, `PosWeight2` (c105), with how many shape streams are bound in the booleans
-`PosNumBool` (b13 to b15); from the shaders' constant tables in the image (for example at
-`0x820695E0` and `0x821F53F8`). The code that fills them was not found statically: searching for
-the register numbers lands in a generic table of the D3D layer (`0x82836440`). The next step is
-reading the constants or the character's spring state live, in a scene where Tina moves.
+How the game blends them, read live on 2026-11-10 (`tools/re/doax2_gpu_constants.py`). The Xbox
+360 D3D layer writes vertex shader constants as PM4 type-0 packets to registers 0x4000 + 4 c in
+the command buffers (physical memory, guest 0xA0000000 on); the ring keeps about 16 frames.
+Vertex fetch constant 95 - n holds stream n's buffer (physical address | 3).
+
+- The chest declaration has four positions: `POSITION0` on stream 0 (the base) and `POSITION1`
+  to `POSITION3` on streams 1 to 3. Per draw the game binds one shape of each pair to them:
+  stream 1 shape 1 or 4 (sideways), stream 2 shape 2 or 3 (forward, back), stream 3 shape 5 or
+  6 (up, down). All eight combinations were seen on Ayane's and Kasumi's body (`vay1`, `vks1`,
+  the same data).
+- The skin shader (microcode after the constant table at `0x82240500`: fetches of constants
+  95 to 91 into r0, r3, r8, r5, r4, then `MUL`/`MAD` by c49) computes
+  `pos = x * base + y * stream1 + z * stream2 + w * stream3` with `PosWeight` c49 = (x, y, z, w).
+  The weights always add up to 1, so x = 1 - y - z - w: y, z and w are the shape weights, never
+  below 0, the pair's member giving the sign. y reached 1.0 (a clamp) with x down to -0.72.
+  Shaders with `BlendSup` repeat the sum with `PosWeight2` c105 and stream 4.
+- Seen in a scene with three characters: y 0.02 to 1.0, z 0.2 to 0.47, w 0 to 0.41, changing
+  smoothly frame to frame.
+
+Not known yet: the code that computes the weights (searching for the constant numbers lands in
+a generic table of the D3D layer, `0x82836440`; the weights are not stored in the heap as sent),
+so the spring behind them. Fitting it needs one character on screen, so that the series and the
+chest bone (`doax2_live.py bones`) belong together.
 
 ## Hands
 
@@ -255,6 +272,17 @@ c108 on, `DirLightBool` b5-8, `PointLightBool` b9-12; some take `SunDir` c200 an
 ambients, four booleans, four directions, four colours, then point lights with range 100) sit in
 the heap at `0x4007E270`, `0x4007E450` and `0x4007E630` during a match: three light sets, found in
 no file on disk or in the image, so built at run time.
+
+The command buffers hold the same constants per draw (`tools/re/doax2_gpu_constants.py lights`).
+In a scene read on 2026-11-10 (three characters; which scene was not noted): `AmbientLightP1`
+(0.39, 0.32, 0.289), `AmbientLightP2` (-0.01, 0, 0.022), three fixed directions (0.549, -0.361,
+-0.753), (-0.942, 0.334, 0.028), (-0.079, -0.991, 0.104) with colours (0.41, 0.3, 0.195),
+(0.05, 0.05, 0.1), (0.34, 0.33, 0.2), and a fourth whose direction and colour change per object
+(colours 0.35, 0.33, 0.25 or 0.7, 0.66, 0.5 or 0.322, 0.317, 0.265), perhaps a light placed for
+each character. `HemisphereMat` c4-c6 is the identity on most draws and a rotation on others.
+`SpeqObjCol` c67 is a specular colour with the power in w (0.14 and 2; 0.574, 0.51, 0.477 and
+17.7; and others). None of these is in the viewer yet: how the shaders combine the two ambients,
+the hemisphere matrix and the fourth light is not read.
 
 `DirLightVec` is the way the light travels in Direct3D's camera space (z into the screen): the
 strongest light of each set comes down and away from the camera, lighting faces from the front

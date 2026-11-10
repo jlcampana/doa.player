@@ -1453,6 +1453,63 @@ mod tests {
         }
     }
 
+    /// Prints the chest shapes' declaration elements and how the six shapes sit around the
+    /// base on Tina's body, to read the skin shaders' `PosWeight` against.
+    #[test]
+    #[ignore]
+    fn chest_shape_layouts() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let tpr = chr.read("vtn1.tpr").unwrap();
+        let xpr = Xpr2::parse(&tpr).unwrap();
+        for (k, object) in objects(&xpr).unwrap().iter().enumerate() {
+            let Some(decl) = object.decls.iter().find(|d| d.streams.len() == 7) else { continue };
+            println!("object {k}: elements {:?}", decl.elements.iter().map(|e| (e.stream, e.offset, e.kind, e.usage, e.usage_index)).collect::<Vec<_>>());
+            let piece = object_piece(&xpr, object).unwrap();
+            let shapes = object_shapes(&xpr, object, &piece.vertices).unwrap().unwrap();
+            let mut mean = [Vec3::ZERO; 6];
+            let mut pair_mid = [0.0f32; 3];
+            for (v, s) in piece.vertices.iter().zip(&shapes) {
+                let base = Vec3::from(v.position);
+                for i in 0..6 {
+                    mean[i] += Vec3::from(s[i]) - base;
+                }
+                for (j, (a, b)) in [(0, 3), (1, 2), (4, 5)].iter().enumerate() {
+                    pair_mid[j] = pair_mid[j].max(((Vec3::from(s[*a]) + Vec3::from(s[*b])) * 0.5 - base).length());
+                }
+            }
+            let n = piece.vertices.len() as f32;
+            println!("  mean offsets {:?}", mean.map(|m| (m / n).to_array().map(|x| (x * 1000.0).round() / 1000.0)));
+            println!("  largest distance of a pair's middle from the base {:?}", pair_mid);
+        }
+    }
+
+    /// Writes, per body, the first 64 bytes of each stream of its chest layout (object 0), as
+    /// `name stream hex` lines in `target/captures/doax2_chest_streams.txt`, to find them in the
+    /// running game's memory.
+    #[test]
+    #[ignore]
+    fn chest_stream_heads() {
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let names: Vec<String> = chr.names().filter(|n| n.len() == 8 && n.ends_with("1.tpr")).map(str::to_string).collect();
+        let mut out = String::new();
+        for name in names {
+            let tpr = chr.read(&name).unwrap();
+            let Ok(xpr) = Xpr2::parse(&tpr) else { continue };
+            let Ok(objects) = objects(&xpr) else { continue };
+            let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+            for (k, object) in objects.iter().enumerate() {
+                let Some(decl) = object.decls.iter().find(|d| d.streams.len() == 7) else { continue };
+                for (stream, &(buffer, _)) in decl.streams.iter().enumerate() {
+                    let (at, size) = xpr.buffer(vbufs[buffer], true).unwrap();
+                    let head: String = tpr[at..at + 64.min(size)].iter().map(|b| format!("{b:02x}")).collect();
+                    out += &format!("{name} {k} {stream} {size} {head}\n");
+                }
+            }
+        }
+        std::fs::create_dir_all("target/captures").unwrap();
+        std::fs::write("target/captures/doax2_chest_streams.txt", out).unwrap();
+    }
+
     #[test]
     #[ignore]
     fn heads_differ() {
