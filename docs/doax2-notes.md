@@ -379,6 +379,12 @@ In a scene read on 2026-11-10 (the beach at sunset, on a deck chair in the shade
 (0.05, 0.05, 0.1), (0.34, 0.33, 0.2), and a fourth whose direction and colour change per object
 (colours 0.35, 0.33, 0.25 or 0.7, 0.66, 0.5 or 0.322, 0.317, 0.265), perhaps a light placed for
 each character. `HemisphereMat` c4-c6 is the identity on most draws and a rotation on others.
+At the pool (2026-11-10, Kasumi on a deck chair, in the viewer as "Pool, deck chair"):
+`P1` (0.465, 0.455, 0.5), `P2` (0.045, 0.055, 0), lights (-0.578, -0.79, 0.205) (0.445, 0.44,
+0.401), (0.544, 0.291, 0.787) (0.165, 0.165, 0.145), (0.206, -0.954, -0.219) (0.155, 0.145,
+0.15), and a fourth near (-0.867, -0.494, 0.065) (0.37, 0.355, 0.265). There `HemisphereMat`
+was not the identity on many draws but a rotation drifting frame to frame, as if it followed the
+character's body (she was lying down), so the hemisphere's "up" may be the character's.
 `SpeqObjCol` c67 is a specular colour with the power in w (0.14 and 2; 0.574, 0.51, 0.477 and
 17.7; and others).
 
@@ -607,7 +613,17 @@ from the file this time:
 The viewer's collision: a particle whose move enters a collider stops where the move crosses
 its surface; one already inside may stay but no deeper than it sat at rest (the viewer's rule,
 to keep the roots from sinking into the head; what the game does after a hit, sliding or the
-move's rest, is not read). Pushing to the nearest surface point instead tore the locks by the
+move's rest, is not read).
+
+A second read with Kasumi sitting up from a deck chair (1900 states in 12 s,
+`target/captures/doax2_hair_kasumi_sit.npz`) puts hundreds of particles exactly on the surface
+(within 0.1 percent) of every unflagged collider, boxes (158, 141) and the capsule (853)
+included, which confirms those shapes. While she moves, many particles are also well inside:
+down to 0.6 of the boxes' size, 0.74 of the capsule's, 0.85 of the head's ellipsoid. The game
+only tests the particle's own move, so a body moving into the hair leaves it inside; the
+viewer's "no deeper than at rest" is stricter than that. Consecutive states are never one step
+apart in this read (the carry between steps moves the previous position too), so the response
+to a hit could not be isolated. Pushing to the nearest surface point instead tore the locks by the
 shoulders apart. Angle limits are not applied. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
 from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
 rule. Not compared with the game in motion; the export does not carry the hair's motion.

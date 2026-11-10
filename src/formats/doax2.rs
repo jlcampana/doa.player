@@ -1233,6 +1233,14 @@ pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
             ([-0.079, -0.991, 0.104], [0.34, 0.33, 0.2]),
             ([0.65, 0.73, 0.209], [0.35, 0.33, 0.25]),
         ])),
+        // Read the same way on 2026-11-10 at the pool, Kasumi on a deck chair. The fourth light
+        // again changes a little per object.
+        ("Pool, deck chair".to_string(), set([0.465, 0.455, 0.5], [0.045, 0.055, 0.0], [
+            ([-0.578, -0.79, 0.205], [0.445, 0.44, 0.401]),
+            ([0.544, 0.291, 0.787], [0.165, 0.165, 0.145]),
+            ([0.206, -0.954, -0.219], [0.155, 0.145, 0.15]),
+            ([-0.867, -0.494, 0.065], [0.37, 0.355, 0.265]),
+        ])),
     ]
 }
 
