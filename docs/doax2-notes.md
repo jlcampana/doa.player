@@ -227,6 +227,25 @@ per-axis second order fit over runs of frames leaves 0.001 (forward) and 0.012 (
 but its coefficients are near (2, -1), so the frames are smooth and the spring's constants are
 not pinned down yet: this needs longer runs and the weight curve (DOAX uses (1 - k) v + k sqrt v).
 
+Found in memory during a beach volleyball match with four players (2026-11-10, host view
+0x933A0000 on, which is guest 0x833A0000 on, the bone arrays' heap):
+
+- `0x933B4340`, records of 0x30 bytes, one per character in play: `PosWeight` (c49) as sent,
+  then `PosWeight2` (c105), then 16 zero bytes. Every weight vector adds up to one. In jumps they
+  reached (-2, 1, 1, 1): each shape weight clamps at 1, and the base weight takes the rest.
+- `0x933A1000` on, blocks of 0x180 bytes per character (characters at 0x933A1010 + 0x180 k)
+  holding the springs' state as clamped vectors (components in -1..1) with their previous
+  values, deltas, a world point and a velocity. Over 40 simultaneous reads, each weight equals
+  the absolute value of one field exactly: for the character at block k, sideways = |x| and
+  forward = |z| of the vector at 0x933A1330 + 0x180 (k - 1), vertical = |y| of the vector at
+  0x933A1254 + 0x180 (k - 1). So the signed spring values live there, and the pair's member is
+  their sign. The layout of the rest of the block (sub-blocks of 0x70: current, previous,
+  before that, delta, point, velocity) is a first reading, not checked. `tools/re/` has no
+  reader for it yet; the scratch scripts read 0x600 bytes from 0x933A1000 with the bone arrays.
+
+The next step is the update rule: log these blocks with the chest matrices at every change (they
+change about 38 times a second), or find the code that writes them from a pointer to them.
+
 Not known yet: the code that computes the weights (searching for the constant numbers lands in
 a generic table of the D3D layer, `0x82836440`; the weights are not stored in the heap as sent),
 so the spring behind them. Fitting it needs one character on screen, so that the series and the

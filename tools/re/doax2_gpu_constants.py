@@ -192,8 +192,54 @@ def log(guest, out, seconds):
     print(len(rows), 'draws', collections.Counter(r[2] for r in rows))
 
 
+def log_any(guest, out, seconds):
+    """Every draw with chest weights, whatever the body: time, address, the buffers bound to
+    streams 0 to 3 (physical, from the fetch constants after the weights), c49 and the
+    constants set before the draw. Bodies are named at the end from `body_streams`."""
+    import pickle
+    rows, seen = [], set()
+    start = time.time()
+    while time.time() - start < seconds:
+        now = time.time()
+        for a, words in guest.chunks(0xBC000000, 0xC0000000):
+            for j, first, count in constant_packets(words):
+                if not first <= 49 < first + count:
+                    continue
+                weights = block(words, j, first, 49, 1)
+                if not np.isfinite(weights).all() or abs(weights.sum() - 1) > 1e-3 or weights[0] > 0.9999:
+                    continue
+                # The fetch constants follow: streams 0, 1, 2, 3 at i, i - 2, i - 4, i - 6.
+                window = words[j:j + 4000]
+                fetch = ((window & 3) == 3) & ((np.roll(window, -1) >> 28) == 1)
+                hits = np.nonzero(fetch[6:] & fetch[4:-2] & fetch[2:-4] & fetch[:-6])[0]
+                if not len(hits):
+                    continue
+                i = j + int(hits[0]) + 6
+                # The last of the run is stream 0.
+                while i + 2 < len(words) and (words[i + 2] & 3) == 3 and (words[i + 3] >> 28) == 1:
+                    i += 2
+                bound = tuple(int(words[i - 2 * k]) & ~3 for k in range(4))
+                key = (a + 4 * i, bound, tuple(np.round(weights, 5)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append((now, a + 4 * i, bound, weights, state_before(words, i)))
+    names = body_streams(guest)
+    def which(address):
+        for (s, e), value in names.items():
+            if s <= address < e:
+                return value
+        return (None, -1)
+    rows = [(t, at, which(b[0])[0], tuple(which(x)[1] for x in b[1:]), w, regs, b) for t, at, b, w, regs in rows]
+    pickle.dump(rows, open(out, 'wb'))
+    print(len(rows), 'draws', collections.Counter((r[2], r[6][0]) for r in rows).most_common(12))
+
+
 def main():
     guest = Guest()
+    if len(sys.argv) > 2 and sys.argv[1] == 'logany':
+        log_any(guest, sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 30.0)
+        return
     if len(sys.argv) > 1 and sys.argv[1] == 'lights':
         lights(guest)
     elif len(sys.argv) > 2 and sys.argv[1] == 'log':
