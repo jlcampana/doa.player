@@ -213,6 +213,20 @@ Vertex fetch constant 95 - n holds stream n's buffer (physical address | 3).
 - Seen in a scene with three characters: y 0.02 to 1.0, z 0.2 to 0.47, w 0 to 0.41, changing
   smoothly frame to frame.
 
+Each chest draw also carries the piece's `WorldMtx` (c0-c3, rows as axes, translation in c3)
+set just before it, so weights and the chest's matrix come in pairs per frame
+(`doax2_gpu_constants.py log`; captures `target/captures/doax2_chest_log1.pkl`, Tina and a
+second character on her body, and `doax2_chest_log2.pkl`, Kasumi moving). The ring holds about 18
+consecutive frames per character, so one read every 0.3 s gives runs of consecutive frames.
+
+First readings (2026-11-10): the forward and back weight follows gravity seen from the chest.
+Kasumi lying back on a deck chair, gravity -0.936 along the chest's z: shape 3 (back) at 0.465,
+steady. Tina standing, gravity +0.21 to +0.38 along z: shape 2 (forward) at 0.40 times it,
+following it frame by frame. The sideways weight swings widely while walking (0 to 1). A
+per-axis second order fit over runs of frames leaves 0.001 (forward) and 0.012 (sideways) rms,
+but its coefficients are near (2, -1), so the frames are smooth and the spring's constants are
+not pinned down yet: this needs longer runs and the weight curve (DOAX uses (1 - k) v + k sqrt v).
+
 Not known yet: the code that computes the weights (searching for the constant numbers lands in
 a generic table of the D3D layer, `0x82836440`; the weights are not stored in the heap as sent),
 so the spring behind them. Fitting it needs one character on screen, so that the series and the

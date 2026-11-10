@@ -9,6 +9,9 @@ The Xbox 360 D3D layer writes shader constants as PM4 type-0 packets to register
                                        specular (c67), most common first
   doax2_gpu_constants.py chest [secs]  per draw of a body whose chest base buffer is found:
                                        the bound shape streams and PosWeight (c49)
+  doax2_gpu_constants.py log OUT [secs]  the same per draw with the constants set before it
+                                       (WorldMtx c0-c3, c48-c63), relocating the bodies every
+                                       8 s, pickled to OUT
 
 `chest` needs the chest streams' heads, written by the ignored test `chest_stream_heads`
 (target/captures/doax2_chest_streams.txt). The skin shader blends
@@ -122,10 +125,79 @@ def chest(guest, seconds):
         print(*row)
 
 
+def body_streams(guest):
+    """Chest stream buffers of object 0 of every body found: (start, end) -> (body, stream)."""
+    heads = [line.split() for line in open('target/captures/doax2_chest_streams.txt')]
+    found = {}
+    for a, words in guest.chunks(*COMMANDS):
+        raw = words.tobytes()
+        for name, obj, stream, size, head in heads:
+            if obj != '0':
+                continue
+            at = raw.find(bytes.fromhex(head))
+            if at >= 0:
+                start = a + at - 0xA0000000
+                found[(start, start + int(size))] = (name, int(stream))
+    return found
+
+
+def state_before(words, i, span=6000):
+    """The last values written to c0-c3 and c48-c63 in the packets before word i."""
+    low = max(0, i - span)
+    regs = {}
+    for j, first, count in constant_packets(words[low:i]):
+        j += low
+        if j + 1 + 4 * count > i:
+            continue
+        data = np.array(words[j + 1:j + 1 + 4 * count], dtype='>u4').view('>f4').astype(np.float64).reshape(-1, 4)
+        for r, row in enumerate(data):
+            if first + r < 4 or 48 <= first + r < 64:
+                regs[first + r] = row
+    return regs
+
+
+def log(guest, out, seconds):
+    """Per chest draw: time, address, body, bound shapes, c49 and the constants before it."""
+    import pickle
+    rows, seen = [], set()
+    start = last = time.time()
+    streams = body_streams(guest)
+    while time.time() - start < seconds:
+        if time.time() - last > 8:
+            streams, last = body_streams(guest), time.time()
+        bases = [(s, e, name) for (s, e), (name, k) in streams.items() if k == 0]
+        lookup = sorted(streams.items())
+        def which(address):
+            for (s, e), value in lookup:
+                if s <= address < e:
+                    return value
+            return (None, -1)
+        now = time.time()
+        for a, words in guest.chunks(0xBC000000, 0xC0000000):
+            fetch = (words & 3) == 3
+            for s, e, name in bases:
+                for i in np.nonzero(fetch & (words >= s) & (words < e))[0]:
+                    i = int(i)
+                    key = (a + 4 * i, int(words[i - 2]), int(words[i - 4]), int(words[i - 6]))
+                    if key in seen:
+                        continue
+                    regs = state_before(words, i)
+                    weights = regs.get(49)
+                    if weights is None or not np.isfinite(weights).all() or abs(weights.sum() - 1) > 1e-3:
+                        continue
+                    seen.add(key)
+                    bound = tuple(which(int(words[i - 2 * k]) & ~3)[1] for k in (1, 2, 3))
+                    rows.append((now, a + 4 * i, name, bound, weights, regs))
+    pickle.dump(rows, open(out, 'wb'))
+    print(len(rows), 'draws', collections.Counter(r[2] for r in rows))
+
+
 def main():
     guest = Guest()
     if len(sys.argv) > 1 and sys.argv[1] == 'lights':
         lights(guest)
+    elif len(sys.argv) > 2 and sys.argv[1] == 'log':
+        log(guest, sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 30.0)
     elif len(sys.argv) > 1 and sys.argv[1] == 'chest':
         chest(guest, float(sys.argv[2]) if len(sys.argv) > 2 else 2.0)
     else:
