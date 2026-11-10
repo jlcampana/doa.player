@@ -274,14 +274,14 @@ the heap at `0x4007E270`, `0x4007E450` and `0x4007E630` during a match: three li
 no file on disk or in the image, so built at run time.
 
 The command buffers hold the same constants per draw (`tools/re/doax2_gpu_constants.py lights`).
-In a scene read on 2026-11-10 (three characters; which scene was not noted): `AmbientLightP1`
+In a scene read on 2026-11-10 (the beach at sunset, on a deck chair in the shade, three characters; in the viewer as its fourth set): `AmbientLightP1`
 (0.39, 0.32, 0.289), `AmbientLightP2` (-0.01, 0, 0.022), three fixed directions (0.549, -0.361,
 -0.753), (-0.942, 0.334, 0.028), (-0.079, -0.991, 0.104) with colours (0.41, 0.3, 0.195),
 (0.05, 0.05, 0.1), (0.34, 0.33, 0.2), and a fourth whose direction and colour change per object
 (colours 0.35, 0.33, 0.25 or 0.7, 0.66, 0.5 or 0.322, 0.317, 0.265), perhaps a light placed for
 each character. `HemisphereMat` c4-c6 is the identity on most draws and a rotation on others.
 `SpeqObjCol` c67 is a specular colour with the power in w (0.14 and 2; 0.574, 0.51, 0.477 and
-17.7; and others). None of these is in the viewer yet: how the shaders combine the two ambients,
+17.7; and others). The viewer takes the ambient P1 and the four lights; how the shaders combine the two ambients,
 the hemisphere matrix and the fourth light is not read.
 
 `DirLightVec` is the way the light travels in Direct3D's camera space (z into the screen): the

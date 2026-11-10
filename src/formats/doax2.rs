@@ -1100,6 +1100,15 @@ pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
             ([-0.025, -0.105, -0.994], [0.65, 0.6, 0.5]),
             ([0.103, 0.028, 0.994], [0.74, 0.71, 0.53]),
         ])),
+        // Read from the GPU command buffers on 2026-11-10 (`tools/re/doax2_gpu_constants.py
+        // lights`): the beach at sunset, on a deck chair in the shade. The fourth light changes
+        // direction and colour per object; this is its most common value.
+        ("Beach at sunset, deck chair in the shade".to_string(), set([0.39, 0.32, 0.289], [
+            ([0.549, -0.361, -0.753], [0.41, 0.3, 0.195]),
+            ([-0.942, 0.334, 0.028], [0.05, 0.05, 0.1]),
+            ([-0.079, -0.991, 0.104], [0.34, 0.33, 0.2]),
+            ([0.65, 0.73, 0.209], [0.35, 0.33, 0.25]),
+        ])),
     ]
 }
 
