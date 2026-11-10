@@ -187,7 +187,7 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
         // not to lie down.
         (&["nin"], &[], "ryu", "Hayate", 10),
         (&["sui"], &[], "karate", "Brad Wong", 22),
-        (&["gok"], &[], "genfu", "Christie", 23),
+        (&["gok", "cr"], &[], "genfu", "Christie", 23),
     ];
     roster
         .iter()
