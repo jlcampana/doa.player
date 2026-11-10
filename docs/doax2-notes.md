@@ -243,6 +243,15 @@ Found in memory during a beach volleyball match with four players (2026-11-10, h
   before that, delta, point, velocity) is a first reading, not checked. `tools/re/` has no
   reader for it yet; the scratch scripts read 0x600 bytes from 0x933A1000 with the bone arrays.
 
+Per character the block holds sub-blocks of 0x70 bytes from 0x933A1010 + 0x70 n (vertical at
+0x933A1250 for the second character, then one unused by the weights at 0x933A12C0, then the
+sideways and forward one at 0x933A1330). In each, +0x10 is a new raw vector (clamped to -1..1),
++0x20 the raw one before it, and +0x00 the output, which moves 30 percent of the way to the new
+raw value at each update: s = previous + 0.3 (new - previous), checked on all three components of
+one update. The weights are |s|. The raw values jump by up to 0.3 between updates; where they
+come from is not read. Some sub-blocks hold a point 0.2 to 0.3 m from a chest and fixed to it
+(+0x40 or +0x50), perhaps the anchor.
+
 The next step is the update rule: log these blocks with the chest matrices at every change (they
 change about 38 times a second), or find the code that writes them from a pointer to them.
 
