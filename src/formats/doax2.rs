@@ -480,6 +480,125 @@ pub fn object_shapes(xpr: &Xpr2, object: &Object, base: &[ModelVertex]) -> Resul
 pub const SHAPE_UP: usize = 4;
 pub const SHAPE_DOWN: usize = 5;
 
+/// The chest's three springs, as the game runs them (`0x82489D68` steps them, `0x8248A640`
+/// drives the steps and `0x8248A348` turns them into `PosWeight`; state at `0x833A10D0` +
+/// 0x180 per character). Each spring is a point hung from a bone that lags behind it: points 0
+/// and 1 hang 10 cm to either side of the upper arms (bones 8 and 14), point 2 at (0, 0.3, 1)
+/// from the chest (bone 0). Their value is a vector clamped to -1..1. Point 0's y gives the up
+/// and down weight, point 2's x the sideways one and its z the forward one; point 1's y fills
+/// the second weight set (`PosWeight2`), which the body's chest does not use. Checked by
+/// stepping logged states: 44 of 55 steps match the next state exactly, the rest were read
+/// during a step.
+#[derive(Debug, Clone)]
+pub struct ChestSprings {
+    points: [SpringPoint; 3],
+    /// Point 0's pull towards point 1, which settles at 0.03 while the points are still.
+    coupling: f32,
+    /// The game's tick count since the start, in steps; steps are 30 a second.
+    steps: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SpringPoint {
+    value: Vec3,
+    previous: Vec3,
+    velocity: Vec3,
+    /// The world point where the bone held the point at the last step.
+    point: Vec3,
+    /// That point seen from the bone at the last step, less its place at rest.
+    offset: Vec3,
+    /// Steps left without pull after a sudden move.
+    quiet: u32,
+}
+
+impl ChestSprings {
+    const BONES: [usize; 3] = [8, 14, 0];
+    const REST: [Vec3; 3] = [Vec3::new(-0.1, 0.0, 0.0), Vec3::new(0.1, 0.0, 0.0), Vec3::new(0.0, 0.3, 1.0)];
+    /// Parameter row 0 of three (`0x83C0A740`, `0x83C0A770`, `0x83C0A7A0`), the one every
+    /// character used in the logs; row 1 damps y by 0.96, row 2 has stiffness -8 on x.
+    const STIFFNESS: Vec3 = Vec3::new(-7.0, -8.0, -3.0);
+    const PULL: Vec3 = Vec3::new(-0.04, -0.08, -0.03);
+    const DAMPING: Vec3 = Vec3::new(0.9, 0.97, 0.5);
+    const GRAVITY: Vec3 = Vec3::new(0.0, -1.0, 0.0);
+    const GRAVITY_SCALE: Vec3 = Vec3::new(-0.2, 0.01, 0.03);
+    const SPEED_LIMIT: f32 = 0.2;
+    pub const STEPS_PER_SECOND: f32 = 30.0;
+
+    /// At rest on `bones` (in the game's space), as the game sets them up.
+    pub fn new(bones: &[Mat4]) -> Self {
+        let points = std::array::from_fn(|k| SpringPoint {
+            point: bones[Self::BONES[k]].transform_point3(Self::REST[k]),
+            ..Default::default()
+        });
+        Self { points, coupling: 0.0, steps: 0 }
+    }
+
+    /// Steps until `ticks` steps have run (the game starts with one) and returns the shape
+    /// values in between the last two steps, by the tick's fraction, as the game draws them.
+    pub fn advance(&mut self, bones: &[Mat4], ticks: f32) -> [Vec3; 3] {
+        let ticks = ticks.max(0.0) + 1.0;
+        // A clock set back (a reload) starts the count again from here.
+        if self.steps as f32 > ticks.floor() + 1.0 {
+            self.steps = ticks.floor() as u64;
+        }
+        while (self.steps as f32) < ticks.floor() {
+            self.step(bones);
+            self.steps += 1;
+        }
+        let fraction = ticks.fract();
+        self.points.map(|p| p.previous + (p.value - p.previous) * fraction)
+    }
+
+    /// One step (`0x82489D68`), with the bones in the game's space.
+    pub fn step(&mut self, bones: &[Mat4]) {
+        for p in &mut self.points {
+            p.previous = p.value;
+        }
+        for k in 0..3 {
+            let bone = bones[Self::BONES[k]];
+            let inverse = bone.inverse();
+            let partner = self.points[1].value;
+            let p = &mut self.points[k];
+            let offset = inverse.transform_point3(p.point) - Self::REST[k];
+            let push = Self::STIFFNESS * (offset - p.offset) + Self::PULL * p.value;
+            let mut drift = (inverse.transform_vector3(Self::GRAVITY) - Self::GRAVITY) * Self::GRAVITY_SCALE;
+            let moved = offset.length() - p.offset.length();
+            if moved.abs() > 0.01 && p.quiet < 10 {
+                p.quiet = 10;
+            }
+            if p.quiet > 0 {
+                p.quiet -= 1;
+                if k == 0 {
+                    self.coupling = 0.0;
+                }
+            } else if k == 0 {
+                self.coupling = (0.03 + self.coupling) * 0.5;
+                drift += (partner - p.value) * self.coupling;
+            }
+            let velocity = p.velocity + push;
+            let value = p.value + velocity + drift;
+            p.value = value.clamp(Vec3::splat(-1.0), Vec3::ONE);
+            let free = Vec3::select(value.cmplt(Vec3::ONE) & value.cmpgt(Vec3::splat(-1.0)), Vec3::ONE, Vec3::ZERO);
+            p.velocity = (velocity * Self::DAMPING).clamp(Vec3::splat(-Self::SPEED_LIMIT), Vec3::splat(Self::SPEED_LIMIT)) * free;
+            p.point = bone.transform_point3(Self::REST[k]);
+            p.offset = offset;
+        }
+    }
+
+    /// The chest's shape weights from the values `advance` gives: (shape, weight) for the
+    /// sideways, forward and vertical axes, shapes numbered as `object_shapes` holds them
+    /// (`0x8248A348`: x below 0 picks shape 4, z above 0 shape 2, y below 0 shape 5 (up)).
+    /// The base takes 1 less their sum, which goes below 0 when they add up to more than 1.
+    pub fn weights(values: &[Vec3; 3], scale: f32) -> [(usize, f32); 3] {
+        let (side, front, up) = (values[2].x * scale, values[2].z * scale, values[0].y * scale);
+        [
+            (if side < 0.0 { 3 } else { 0 }, side.abs().min(1.0)),
+            (if front > 0.0 { 1 } else { 2 }, front.abs().min(1.0)),
+            (if up < 0.0 { SHAPE_UP } else { SHAPE_DOWN }, up.abs().min(1.0)),
+        ]
+    }
+}
+
 /// Whether a material is blended by its texture's alpha: hair strands (stage 0 of kind 0,
 /// listed with their shine texture as a second) and, after `load`, draws whose texture has
 /// over 1% see-through texels (listed twice).
@@ -1460,6 +1579,41 @@ mod tests {
             let count: usize = events.values().map(Vec::len).sum();
             println!("{name}: {} motions, {count} hand events", events.len());
         }
+    }
+
+    /// Steps the chest springs from states read in the running game and compares them with
+    /// the next state read, from `target/captures/doax2_spring_steps.txt` (per line: three
+    /// points' value, velocity, point, offset and quiet steps, the coupling, bones 8, 14 and 0
+    /// as rows, then the next values and velocities). Some reads catch the game mid step, so
+    /// most steps, not all, must match.
+    #[test]
+    #[ignore]
+    fn chest_springs_match_logged_steps() {
+        let text = std::fs::read_to_string("target/captures/doax2_spring_steps.txt").unwrap();
+        let (mut exact, mut total) = (0, 0);
+        for line in text.lines() {
+            let v: Vec<f32> = line.split(' ').map(|x| x.parse().unwrap()).collect();
+            let vec3 = |at: usize| Vec3::new(v[at], v[at + 1], v[at + 2]);
+            let points = std::array::from_fn(|k| {
+                let at = k * 13;
+                SpringPoint { value: vec3(at), previous: vec3(at), velocity: vec3(at + 3), point: vec3(at + 6), offset: vec3(at + 9), quiet: v[at + 12] as u32 }
+            });
+            let mut bones = vec![Mat4::IDENTITY; 32];
+            for (k, bone) in ChestSprings::BONES.iter().enumerate() {
+                bones[*bone] = Mat4::from_cols_slice(&v[40 + 16 * k..56 + 16 * k]);
+            }
+            let mut springs = ChestSprings { points, coupling: v[39], steps: 0 };
+            springs.step(&bones);
+            let error = (0..3)
+                .map(|k| (springs.points[k].value - vec3(88 + 6 * k)).abs().max_element().max((springs.points[k].velocity - vec3(91 + 6 * k)).abs().max_element()))
+                .fold(0.0f32, f32::max);
+            total += 1;
+            if error < 1e-4 {
+                exact += 1;
+            }
+        }
+        println!("{exact} of {total} steps match");
+        assert!(exact * 4 >= total * 3, "{exact} of {total}");
     }
 
     /// Prints the chest shapes' declaration elements and how the six shapes sit around the

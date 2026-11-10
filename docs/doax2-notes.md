@@ -188,11 +188,8 @@ Pieces whose layouts have seven streams (the body's chest, collars and spine, an
 pieces on the same bones) hold six whole position shapes after the base: streams 1 and 4
 sideways (+-1.5 cm on average on Tina's chest), 2 and 3 forward and back, 5 up (3.5 cm) and 6
 down (2.3 cm). The declaration binds three, so the game picks one of each pair: a spring along
-three axes. How DOAX2 drives them is not read. The viewer drives only up and down, with DOAX's
-vertical spring and weight on the chest bone: a positive value lowers the chest (DOAX's shape 1
-moves down 1.3 cm), a negative one raises it. Checked running: values from 0 to 0.91 in one of
-Tina's motions. The sideways and forward pairs stay at rest. Export writes the up and down
-shapes as shape keys on the same spring.
+three axes, read from the code below ("The springs, read from the code"). Before that the viewer
+drove only up and down with DOAX's vertical spring.
 
 How the game blends them, read live on 2026-11-10 (`tools/re/doax2_gpu_constants.py`). The Xbox
 360 D3D layer writes vertex shader constants as PM4 type-0 packets to registers 0x4000 + 4 c in
@@ -263,13 +260,55 @@ third lower. Linear fits of the raw value against +30, its previous step and its
 search of the code for 0.3, 0.2, -0.2, 1 and -1 loaded together found nothing; the constants
 may come from the block (+60) or a table.
 
-The next step is the update rule: log these blocks with the chest matrices at every change (they
-change about 38 times a second), or find the code that writes them from a pointer to them.
+### The springs, read from the code (2026-11-10)
 
-Not known yet: the code that computes the weights (searching for the constant numbers lands in
-a generic table of the D3D layer, `0x82836440`; the weights are not stored in the heap as sent),
-so the spring behind them. Fitting it needs one character on screen, so that the series and the
-chest bone (`doax2_live.py bones`) belong together.
+The blocks are a static array in the image's data (guest `0x833A10D0` + 0x180 per character
+slot, three points of 0x70 bytes, then a tail), which is why no pointer to them was found in the
+heap. Searching the code for loads of addresses in that range finds the functions; the VMX128
+instructions were decoded with `tools/re/xbox360_ppc.py` (capstone does not know them).
+`ChestSprings` in `src/formats/doax2.rs` follows them.
+
+- `0x8248A640`, per character each frame: unless the slot is off, runs the set-up below when
+  asked, adds the frame's tick (`0x833B84CC`: 0.5 a frame with the recomp at 60 fps, so the
+  springs step 30 times a second) to an accumulator (tail +0x174), runs `0x82489D68` once per
+  whole tick and keeps the fraction. Each point's output (+00) is then
+  `previous + (value - previous) * fraction`: the "30 percent" above was that fraction at the
+  time, not a smoothing constant. Then `0x8248A348` writes the weights.
+- `0x82489C40`, set-up: zeroes value, previous, velocity, output and offset, puts the point at
+  its place on the bone and the accumulator at 1, so the first frame steps once.
+- `0x82489D68`, one step. Point k hangs from bone `[8, 14, 0][k]` (table `0x82C37D8C`; the upper
+  arms and the chest) at rest offset `(-0.1, 0, 0)`, `(0.1, 0, 0)`, `(0, 0.3, 1)` (`0x83C0A7F0`).
+  With the bone's current matrix M and the point P where the bone held it at the last step:
+  - offset `d = M^-1 P - rest`, push `a = K (d - d_last) + C value`, with K = (-7, -8, -3)
+    and C = (-0.04, -0.08, -0.03) (parameter row picked by tail +0x15C, 0 for everyone seen;
+    rows 1 and 2 differ only in damping y 0.96 and K x -8).
+  - drift `(R^-1 g - g) * (-0.2, 0.01, 0.03)` with g = (0, -1, 0) and R M's rotation: how far
+    gravity seen from the bone is from straight down.
+  - quiet steps (+0x64): when |d| changes by more than 0.01 in a step, the counter goes to 10
+    (if below), and counts down one a step. While it is 0, point 0 also pulls towards point 1's
+    value by a coupling (+0x60) that moves halfway to 0.03 each step (from table `0x82D63A10`
+    by +0x68, 0 in all reads); otherwise the coupling is 0.
+  - `velocity = velocity_last + a`, `value = clamp(value + velocity + drift, -1, 1)`, then the
+    velocity is damped by D = (0.9, 0.97, 0.5), clamped to -0.2..0.2 and zeroed on axes where
+    the value hit the clamp. P becomes the rest point on the current bone, d_last = d.
+  - Fields: +00 output, +10 value, +20 previous value, +30 velocity, +40 P, +50 d_last, +60
+    coupling, +64 quiet steps. Tail: +0x150, +0x154 damping overrides for x and y, used when
+    flag bits at +0x160 are set; +0x158 set-up request; +0x15C parameter row.
+- `0x8248A348`, weights: sideways from point 2's x (shape 4 if below 0, else 1), forward from
+  its z (shape 2 if above 0, else 3), vertical from point 0's y (shape 5, up, if below 0, else
+  6); weights are the absolute values and the base takes 1 minus their sum. A second set uses
+  point 1's y instead, written as `PosWeight2`; the body's chest layout (four position streams)
+  does not use it, so which pieces do is not known.
+
+Checked by stepping 55 logged states (`springlog`, four characters on the beach): 44 match the
+next state exactly (value and velocity); the other 11 were read while the game was mid step or
+several steps apart. The ignored test `chest_springs_match_logged_steps` replays them from
+`target/captures/doax2_spring_steps.txt`.
+
+The viewer and the export now use these springs on the game-space bones (the solve's z flip
+undone): three shape pairs per chest piece, as shape keys in three sets in the export. Not
+checked: whether the viewer's bones 8 and 14 sit where the game's do in every motion, and the
+parameter rows and damping overrides other characters may use.
 
 ## Hands
 

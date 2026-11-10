@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::formats::doa2u;
 use crate::formats::doax;
+use crate::formats::doax2;
 use crate::formats::doa3::{self, ChestMorphGroup, ChestSpring, MotionTracks, RosterEntry, Xbe};
 use crate::formats::doa3_chains::{self, SoftChain};
 use crate::formats::doa3_cloth::{self, SoftCloth};
@@ -457,10 +458,10 @@ struct Doax2Pose {
     playing: Option<usize>,
     rows: [glam::Vec3; 24],
     pieces: Vec<(usize, glam::Mat4)>,
-    /// Pieces with chest shapes: the mesh piece, and each vertex's base, up and down positions.
-    chest: Vec<(usize, Vec<[glam::Vec3; 3]>)>,
-    chest_spring: Option<doa3::ChestSpring>,
-    chest_frame: u64,
+    /// Pieces with chest shapes: the mesh piece, and each vertex's base position followed by
+    /// its six shapes in `doax2::object_shapes` order.
+    chest: Vec<(usize, Vec<[glam::Vec3; 7]>)>,
+    chest_spring: Option<doax2::ChestSprings>,
     /// The nodes as first shown, before a motion: the export's bind pose.
     rest_nodes: Vec<glam::Mat4>,
     /// Per hand: the scripts' hand number, the mesh piece, its poses.
@@ -885,7 +886,13 @@ impl App {
                         .vertices
                         .iter()
                         .zip(shapes)
-                        .map(|(v, s)| [glam::Vec3::from(v.position), s[doax2::SHAPE_UP].into(), s[doax2::SHAPE_DOWN].into()])
+                        .map(|(v, s)| {
+                            let mut all = [glam::Vec3::from(v.position); 7];
+                            for (slot, shape) in all[1..].iter_mut().zip(s) {
+                                *slot = glam::Vec3::from(*shape);
+                            }
+                            all
+                        })
                         .collect();
                     chest.push((drawn.len(), positions));
                 }
@@ -988,7 +995,7 @@ impl App {
         self.doa3_pose = None;
         self.doax_pose = None;
         self.doax2_pose = Some(Doax2Pose {
-            files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None, chest_frame: 0,
+            files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None,
             rest_nodes: nodes.clone(),
             hands, events, shared_files, faces, blinks,
         });
@@ -1836,10 +1843,13 @@ impl App {
 
         if let Some(pose) = &self.doax2_pose {
             // A node per piece and per weight group, each driven by its DOAX bone. The chest's
-            // up and down shapes are shape keys that follow DOAX's vertical spring, as in the
-            // viewer; the sideways and forward pairs stay at rest, as there.
-            let chest_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)> =
-                pose.chest.iter().map(|(piece, positions)| (doax2_chest_set(positions), *piece)).collect();
+            // shapes are shape keys in three sets per piece (sideways, forward, vertical), each
+            // weighted per frame by the game's springs, as in the viewer.
+            let chest_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)> = pose
+                .chest
+                .iter()
+                .flat_map(|(piece, positions)| doax2_chest_sets(positions).into_iter().map(move |set| (set, *piece)))
+                .collect();
             let hands: Vec<ExportHand> = chest_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set }).collect();
             let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions {
@@ -1851,17 +1861,22 @@ impl App {
             for index in chosen {
                 let Some(&(file, motion)) = pose.motions.get(index) else { continue };
                 let (mut frames, mut set_frames) = (Vec::new(), Vec::new());
-                // The spring starts at rest on the motion's first frame and steps once a frame.
-                let mut spring: Option<doa3::ChestSpring> = None;
+                // The springs start at rest on the motion's first frame; frames are 60 a second.
+                let mut springs: Option<doax2::ChestSprings> = None;
                 for frame in 0..motion.frames {
                     let values = doax::eval_motion_endian(&pose.files[file], &motion, frame as f32, true)?;
                     let bones = doax::solve_pose(&values, &pose.rows);
                     let mut states = Vec::new();
                     if !chest_sets.is_empty() {
-                        let spring = spring.get_or_insert_with(|| doa3::ChestSpring::with_parameters(&bones[0], doax::CHEST_SPRING));
-                        spring.step(&bones[0]);
-                        let (shape, weight) = doax::chest_weight(spring.value * bounce);
-                        states.extend(chest_sets.iter().map(|_| (0, shape, weight)));
+                        let game_bones = doax2_game_bones(&bones);
+                        let springs = springs.get_or_insert_with(|| doax2::ChestSprings::new(&game_bones));
+                        let ticks = frame as f32 * doax2::ChestSprings::STEPS_PER_SECOND / 60.0;
+                        let weights = doax2::ChestSprings::weights(&springs.advance(&game_bones, ticks), bounce);
+                        for _ in &pose.chest {
+                            states.extend(weights.iter().zip(DOAX2_CHEST_AXES).map(|(&(shape, weight), (positive, _))| {
+                                (0, if shape == positive { 1 } else { 2 }, weight)
+                            }));
+                        }
                     }
                     frames.push(pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect());
                     set_frames.push(states);
@@ -2120,21 +2135,19 @@ impl App {
             match doax::eval_motion_endian(&pose.files[file], &motion, self.anim_time, true) {
                 Ok(values) => {
                     let bones = doax::solve_pose(&values, &pose.rows);
-                    // The chest: DOAX's vertical spring on the chest bone, as measured in
-                    // DOAX, on the up and down shapes. The sideways and forward pairs are not
-                    // driven; how DOAX2 drives them is not known.
+                    // The chest: the game's three springs, stepped 30 times a second on the
+                    // bones in the game's space, weighting the sideways, forward and vertical
+                    // shapes as the skin shader does.
                     if !pose.chest.is_empty() {
-                        let clock = self.game_clock as u64;
-                        let spring = pose.chest_spring.get_or_insert_with(|| doa3::ChestSpring::with_parameters(&bones[0], doax::CHEST_SPRING));
-                        while pose.chest_frame < clock {
-                            spring.step(&bones[0]);
-                            pose.chest_frame += 1;
-                        }
-                        // DOAX's shape 1, for positive values, lowers the chest; shape 2 raises it.
-                        let (shape, weight) = doax::chest_weight(spring.value * self.bg_panel.bounce_scale);
-                        let target = if shape == 1 { 2 } else { 1 };
+                        let game_bones = doax2_game_bones(&bones);
+                        let ticks = self.game_clock * doax2::ChestSprings::STEPS_PER_SECOND / 60.0;
+                        let springs = pose.chest_spring.get_or_insert_with(|| doax2::ChestSprings::new(&game_bones));
+                        let values = springs.advance(&game_bones, ticks);
+                        let weights = doax2::ChestSprings::weights(&values, self.bg_panel.bounce_scale);
                         for (piece, positions) in &pose.chest {
-                            self.mesh.set_rest_positions(*piece, positions.iter().enumerate().map(|(v, p)| (v, p[0].lerp(p[target], weight))));
+                            self.mesh.set_rest_positions(*piece, positions.iter().enumerate().map(|(v, p)| {
+                                (v, weights.iter().fold(p[0], |at, &(shape, weight)| at + (p[shape + 1] - p[0]) * weight))
+                            }));
                         }
                     }
                     // Hands: the scripts' poses, blended as in DOAX.
@@ -2483,10 +2496,28 @@ impl App {
 
 /// DOAX2's chest shapes on a piece as a set for exporting: base, down and up, so that
 /// `doax::chest_weight`'s shape 1 (a positive value) lowers the chest, as in the viewer.
-fn doax2_chest_set(positions: &[[glam::Vec3; 3]]) -> crate::formats::doa3_morphs::PoseHand {
-    let vertices = (0..positions.len()).map(|v| vec![v]).collect();
-    let shapes = [0, 2, 1].iter().map(|&k| positions.iter().map(|p| p[k].to_array()).collect()).collect();
-    crate::formats::doa3_morphs::PoseHand::new(0, vertices, shapes, Vec::new(), Vec::new())
+/// The chest's shape pairs as `doax2::object_shapes` numbers them: sideways (right, left),
+/// forward (forward, back) and vertical (down, up), positive member first.
+const DOAX2_CHEST_AXES: [(usize, usize); 3] = [(0, 3), (1, 2), (doax2::SHAPE_DOWN, doax2::SHAPE_UP)];
+
+/// A piece's chest shapes as three sets of base, positive and negative positions, one per axis.
+fn doax2_chest_sets(positions: &[[glam::Vec3; 7]]) -> Vec<crate::formats::doa3_morphs::PoseHand> {
+    DOAX2_CHEST_AXES
+        .iter()
+        .map(|&(positive, negative)| {
+            let vertices = (0..positions.len()).map(|v| vec![v]).collect();
+            let shapes = [None, Some(positive), Some(negative)]
+                .iter()
+                .map(|shape| positions.iter().map(|p| shape.map_or(p[0], |k| p[k + 1]).to_array()).collect())
+                .collect();
+            crate::formats::doa3_morphs::PoseHand::new(0, vertices, shapes, Vec::new(), Vec::new())
+        })
+        .collect()
+}
+
+/// The viewer's DOAX bones back in the game's space (`doax::solve_pose` flips z).
+fn doax2_game_bones(bones: &[glam::Mat4]) -> Vec<glam::Mat4> {
+    bones.iter().map(|bone| glam::Mat4::from_scale(glam::Vec3::new(1.0, 1.0, -1.0)) * *bone).collect()
 }
 
 /// DOA3's and DOA2U's chest groups as a set for exporting: base, base plus the positive
