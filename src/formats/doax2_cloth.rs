@@ -56,11 +56,14 @@ pub struct Thread {
 pub enum Shape {
     /// Type 4: centre and radii.
     Ellipsoid { centre: Vec3, radii: Vec3 },
-    /// Type 8: centre and half sizes. The two rows between them are not understood and the
-    /// box is taken as aligned with the bone.
-    Box { centre: Vec3, half: Vec3 },
-    /// Type 1: from `start` along the bone's x for `length`, with `radius`.
-    Capsule { start: Vec3, length: f32, radius: f32 },
+    /// Type 8, as read here (not from the game's code): from `base` along `axis` for its
+    /// length, `front` giving the depth direction, half sizes across and in depth (the record's
+    /// last row is (across, 1, depth)). The chest's box then spans 0.08 to 0.28 up the chest
+    /// bone, 0.4 wide and 0.3 deep.
+    Box { base: Vec3, axis: Vec3, front: Vec3, half_across: f32, half_depth: f32 },
+    /// Type 1: from `start` along `segment` (the upper arms' run along the bone's x, -x on the
+    /// right arm), with `radius`.
+    Capsule { start: Vec3, segment: Vec3, radius: f32 },
     /// Type 2: centre and radius.
     Sphere { centre: Vec3, radius: f32 },
     /// Other types, kept by number.
@@ -73,8 +76,13 @@ pub struct Collider {
     /// The CAT bone number.
     pub bone: usize,
     /// The word at +0x14: the game takes another path when it is set (a test of the move's
-    /// segment rather than the kept contact). What it means for the shape is not known.
+    /// segment rather than the kept contact). Set on four records of Lei Fang's chain (the
+    /// head's sphere of 15.5 cm, the chest's box, the upper arms' capsules), whose word at
+    /// +0x18 is always the offset in the chain of a later record (or 0, the end): they read as
+    /// bounding volumes guarding the records up to there.
     pub flag: u32,
+    /// For a flagged record, the index of the collider its +0x18 points to (the end for 0).
+    pub skip_to: Option<usize>,
     pub shape: Shape,
 }
 
@@ -90,6 +98,8 @@ pub struct Cloth {
     /// Each particle's row, 0 at the root.
     pub rows: Vec<u32>,
     pub edges: Vec<Edge>,
+    /// Per particle, its triangles' other two corners (`TRIANGLE`, 8 bytes each).
+    pub triangles: Vec<Vec<(usize, usize)>>,
     /// Particles held to the head (`FIX_GRID`).
     pub fixed: Vec<bool>,
     /// (particle, vertex layout, byte offset in that layout's vertex buffer).
@@ -159,9 +169,19 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
     let mut particles = Vec::with_capacity(count);
     let mut rows = Vec::with_capacity(count);
     let mut edges = Vec::new();
+    let mut triangles = Vec::with_capacity(count);
     for i in 0..count {
         let p = grid + 0x40 + 0x30 * i;
         particles.push(vec3(cat, p)?);
+        let (triangle_count, triangle_at) = (be32(cat, p + 0x18)? as usize, be32(cat, p + 0x1C)? as usize);
+        triangles.push(
+            (0..triangle_count.min(64))
+                .map(|t| {
+                    let t = grid + triangle_at + 8 * t;
+                    Ok((index(be32(cat, t)?)?, index(be32(cat, t + 4)?)?))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
         rows.push(be32(cat, p + 0x28)?);
         let (edge_count, edge_at) = (be32(cat, p + 0x10)? as usize, be32(cat, p + 0x14)? as usize);
         for e in 0..edge_count {
@@ -183,17 +203,25 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
 
     let mut fixed = vec![false; count];
     for k in 0..be32(cat, fix + 0x1C)? as usize {
-        let particle = be32(cat, fix + 0x20 + 0x20 * k + 0x14)? as usize;
-        *fixed.get_mut(particle).context("fixed particle out of range")? = true;
+        // (1, particle as an offset from GRID_DATA, 2, 0) after the position.
+        let particle = index(be32(cat, fix + 0x20 + 0x20 * k + 0x14)?)?;
+        fixed[particle] = true;
     }
 
+    // A stream from +0x60: 0x80000000 | particle, then the vertices it writes (layout << 24 |
+    // byte offset), one or more (two on some of Kasumi's `AB` particles). +0x20 counts the
+    // particles, +0x24 the vertices.
     let mut writes = Vec::new();
-    for k in 0..be32(cat, write + 0x20)? as usize {
-        let (particle, target) = (be32(cat, write + 0x60 + 8 * k)?, be32(cat, write + 0x64 + 8 * k)?);
-        if particle & 0x8000_0000 == 0 {
-            bail!("write {k}: {particle:#x}");
+    let words = be32(cat, write + 0x20)? as usize + be32(cat, write + 0x24)? as usize;
+    let mut particle = None;
+    for k in 0..words.min(0x10000) {
+        let word = be32(cat, write + 0x60 + 4 * k)?;
+        if word & 0x8000_0000 != 0 {
+            particle = Some((word & 0xFFFFFF) as usize);
+        } else {
+            let particle = particle.with_context(|| format!("write {k}: {word:#x} before a particle"))?;
+            writes.push((particle, word >> 24, (word & 0xFFFFFF) as usize));
         }
-        writes.push(((particle & 0xFFFFFF) as usize, target >> 24, (target & 0xFFFFFF) as usize));
     }
 
     // Two lists of threads, at +0x18 and +0x20 with their counts after.
@@ -219,25 +247,41 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
     if colliders_at != 0 {
         let chain = at + colliders_at;
         let mut record = chain;
+        let mut offsets = Vec::new();
+        let mut skips = Vec::new();
         loop {
+            offsets.push(record - chain);
+            skips.push(be32(cat, record + 0x18)? as usize);
             let (kind, bone, next) = (be32(cat, record)?, be32(cat, record + 4)? as usize, be32(cat, record + 8)? as usize);
             let s = record + 0x30;
             let shape = match kind {
                 4 => Shape::Ellipsoid { centre: vec3(cat, s)?, radii: vec3(cat, s + 0x10)? },
-                8 => Shape::Box { centre: vec3(cat, s)?, half: vec3(cat, s + 0x30)? },
-                1 => Shape::Capsule { start: vec3(cat, s)?, length: bef32(cat, s + 0x10)?, radius: bef32(cat, s + 0x1C)? },
+                8 => Shape::Box {
+                    base: vec3(cat, s)?,
+                    axis: vec3(cat, s + 0x10)?,
+                    front: vec3(cat, s + 0x20)?,
+                    half_across: bef32(cat, s + 0x30)?,
+                    half_depth: bef32(cat, s + 0x38)?,
+                },
+                1 => Shape::Capsule { start: vec3(cat, s)?, segment: vec3(cat, s + 0x10)?, radius: bef32(cat, s + 0x1C)? },
                 2 => Shape::Sphere { centre: vec3(cat, s)?, radius: bef32(cat, s + 0x0C)? },
                 other => Shape::Other(other),
             };
-            colliders.push(Collider { kind, bone, flag: be32(cat, record + 0x14)?, shape });
+            colliders.push(Collider { kind, bone, flag: be32(cat, record + 0x14)?, skip_to: None, shape });
             if next == 0 || colliders.len() >= 64 {
                 break;
             }
             record = chain + next;
         }
+        for (k, collider) in colliders.iter_mut().enumerate() {
+            if collider.flag != 0 {
+                let to = skips[k];
+                collider.skip_to = Some(if to == 0 { offsets.len() } else { offsets.iter().position(|&o| o == to).unwrap_or(offsets.len()) });
+            }
+        }
     }
 
-    Ok(Cloth { name, property, particles, rows, edges, fixed, writes, threads, colliders })
+    Ok(Cloth { name, property, particles, rows, edges, triangles, fixed, writes, threads, colliders })
 }
 
 /// The global factor the game applies to stiffness, gravity and the rest (`0x833B84CC`): 0.5
@@ -252,12 +296,71 @@ pub struct ClothSim {
     velocity: Vec<Vec3>,
     pub normal: Vec<Vec3>,
     started: bool,
+    /// For `advance`: the steps run and the head matrix of the last frame.
+    steps: u64,
+    last_head: Mat4,
 }
 
 impl ClothSim {
     pub fn new(cloth: Cloth) -> Self {
         let n = cloth.particles.len();
-        Self { position: cloth.particles.clone(), previous: cloth.particles.clone(), velocity: vec![Vec3::ZERO; n], normal: vec![Vec3::Y; n], cloth, started: false }
+        Self {
+            position: cloth.particles.clone(),
+            previous: cloth.particles.clone(),
+            velocity: vec![Vec3::ZERO; n],
+            normal: vec![Vec3::Y; n],
+            cloth,
+            started: false,
+            steps: 0,
+            last_head: Mat4::IDENTITY,
+        }
+    }
+
+    /// Steps a second at the file's values: the game steps once a frame at 30 frames a second
+    /// with factor 1, and DOAX2 Recomp's 60 fps mode halves the values (`RECOMP_60_FACTOR`).
+    pub const STEPS_PER_SECOND: f32 = 30.0;
+
+    /// Brings the cloth to `ticks` steps at factor 1. On frames without a step the particles
+    /// only go with the head (the new head matrix times the inverse of the last), as the game
+    /// does between steps; a long gap runs at most four steps.
+    pub fn advance(&mut self, head: Mat4, bone: &dyn Fn(usize) -> Option<Mat4>, ticks: f32) {
+        let target = ticks.max(0.0).floor() as u64;
+        // A jump of the head (the first pose of a motion, a cut) starts the cloth at rest there.
+        if self.started && (head.w_axis - self.last_head.w_axis).length() > 0.5 {
+            self.started = false;
+        }
+        if !self.started {
+            self.reset(head);
+            self.update_normals();
+            self.steps = target;
+            self.last_head = head;
+        } else if self.steps > target + 1 {
+            self.steps = target;
+        }
+        if self.steps >= target {
+            let carry = head * self.last_head.inverse();
+            for p in self.position.iter_mut().chain(self.previous.iter_mut()) {
+                *p = carry.transform_point3(*p);
+            }
+            for n in &mut self.normal {
+                *n = carry.transform_vector3(*n).normalize_or(Vec3::Y);
+            }
+        } else {
+            for _ in 0..(target - self.steps).min(4) {
+                self.step(head, bone, 1.0);
+            }
+            self.steps = target;
+        }
+        self.last_head = head;
+    }
+
+    /// Normals from the cloth's triangles around each particle, as the air term needs them.
+    pub fn update_normals(&mut self) {
+        for (i, corners) in self.cloth.triangles.iter().enumerate() {
+            let p = self.position[i];
+            let sum: Vec3 = corners.iter().map(|&(a, b)| (self.position[a] - p).cross(self.position[b] - p)).sum();
+            self.normal[i] = sum.normalize_or(self.normal[i]);
+        }
     }
 
     /// Puts every particle at its file place on the head, at rest.
@@ -360,24 +463,39 @@ impl ClothSim {
             }
         }
         Self::collide(&self.cloth, &mut self.position, bone);
+        self.update_normals();
     }
 
-    /// Pushes particles out of the colliders. An approximation of the game's collision.
+    /// Pushes particles out of the colliders' ellipsoids. An approximation of the game's
+    /// collision. A flagged record is taken as a bounding volume: a particle outside it skips the records up
+    /// to the one it points to; it is not collided with itself.
     fn collide(cloth: &Cloth, position: &mut [Vec3], bone: &dyn Fn(usize) -> Option<Mat4>) {
-        for collider in &cloth.colliders {
-            if collider.flag != 0 {
+        let frames: Vec<Option<(Mat4, Mat4)>> = cloth.colliders.iter().map(|c| bone(c.bone).map(|m| (m, m.inverse()))).collect();
+        for i in 0..position.len() {
+            if cloth.fixed[i] {
                 continue;
             }
-            let Some(matrix) = bone(collider.bone) else { continue };
-            let inverse = matrix.inverse();
-            for i in 0..position.len() {
-                if cloth.fixed[i] {
+            let mut k = 0;
+            while k < cloth.colliders.len() {
+                let collider = &cloth.colliders[k];
+                let Some((matrix, inverse)) = frames[k] else {
+                    k += 1;
+                    continue;
+                };
+                let local = inverse.transform_point3(position[i]);
+                if let Some(skip) = collider.skip_to {
+                    k = if push_out(&collider.shape, local).is_some() { k + 1 } else { skip.max(k + 1) };
                     continue;
                 }
-                let local = inverse.transform_point3(position[i]);
-                if let Some(out) = push_out(&collider.shape, local) {
-                    position[i] = matrix.transform_point3(out);
+                // Only ellipsoids push: pushed to their nearest surface point, boxes and capsules
+                // tore the locks by the shoulders apart (seen on Lei Fang's `AA`), so they wait
+                // for the game's own collision code.
+                if matches!(collider.shape, Shape::Ellipsoid { .. }) {
+                    if let Some(out) = push_out(&collider.shape, local) {
+                        position[i] = matrix.transform_point3(out);
+                    }
                 }
+                k += 1;
             }
         }
     }
@@ -406,29 +524,34 @@ fn push_out(shape: &Shape, p: Vec3) -> Option<Vec3> {
             let length = d.length();
             (length < radius && length > 0.0).then(|| centre + d / length * radius)
         }
-        Shape::Capsule { start, length, radius } => {
-            let along = (p.x - start.x).clamp(0.0, length);
-            let axis = start + Vec3::X * along;
+        Shape::Capsule { start, segment, radius } => {
+            let t = ((p - start).dot(segment) / segment.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            let axis = start + segment * t;
             let d = p - axis;
             let distance = d.length();
             (distance < radius && distance > 0.0).then(|| axis + d / distance * radius)
         }
-        Shape::Box { centre, half } => {
-            let d = p - centre;
-            let inside = half - d.abs();
-            if inside.min_element() <= 0.0 {
+        Shape::Box { base, axis, front, half_across, half_depth } => {
+            let length = axis.length();
+            let up = axis.normalize_or(Vec3::Y);
+            let depth = (front - up * front.dot(up)).normalize_or(Vec3::Z);
+            let across = up.cross(depth);
+            let d = p - base;
+            let (x, y, z) = (d.dot(across), d.dot(up), d.dot(depth));
+            if x.abs() >= half_across || z.abs() >= half_depth || y <= 0.0 || y >= length {
                 return None;
             }
             // Out through the nearest face.
-            let mut out = p;
-            if inside.x <= inside.y && inside.x <= inside.z {
-                out.x = centre.x + half.x * d.x.signum();
-            } else if inside.y <= inside.z {
-                out.y = centre.y + half.y * d.y.signum();
-            } else {
-                out.z = centre.z + half.z * d.z.signum();
-            }
-            Some(out)
+            let faces = [
+                (half_across - x, across * (half_across - x)),
+                (half_across + x, across * -(half_across + x)),
+                (half_depth - z, depth * (half_depth - z)),
+                (half_depth + z, depth * -(half_depth + z)),
+                (length - y, up * (length - y)),
+                (y, up * -y),
+            ];
+            let (_, push) = faces.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+            Some(p + push)
         }
         Shape::Other(_) => None,
     }
@@ -542,7 +665,7 @@ mod tests {
                 for (i, &fixed) in cloth.fixed.iter().enumerate() {
                     assert!(!fixed || cloth.rows[i] == 0, "{name} {}: fixed particle {i} on row {}", cloth.name, cloth.rows[i]);
                 }
-                assert_eq!(cloth.writes.len(), cloth.particles.len(), "{name} {}", cloth.name);
+                assert!(cloth.writes.len() >= cloth.particles.len(), "{name} {}", cloth.name);
                 println!(
                     "{name} {}: {} particles, {} edges, {} fixed, {} threads, {} colliders, damping {} cap {}",
                     cloth.name,

@@ -452,6 +452,15 @@ pub struct App {
 
 /// The loaded DOAX2 character's motions and, per drawn piece, its DOAX bone and its place
 /// from that bone at rest.
+struct Doax2Cloth {
+    sim: crate::formats::doax2_cloth::ClothSim,
+    node: usize,
+    targets: Vec<(usize, Vec<(usize, usize)>)>,
+    /// Per mesh piece, (vertex, particle, offset from it at rest) for hair vertices that are
+    /// not particles.
+    followers: Vec<(usize, Vec<(usize, usize, glam::Vec3)>)>,
+}
+
 struct Doax2Pose {
     files: Vec<Vec<u8>>,
     motions: Vec<(usize, doax::Motion)>,
@@ -468,6 +477,9 @@ struct Doax2Pose {
     hands: Vec<(u16, usize, crate::formats::doax2::HandPoses)>,
     /// Blinks by motion key, as hand events: (frame, eye shape).
     blinks: std::collections::HashMap<u16, Vec<(u16, u16)>>,
+    /// Hair cloths: the simulation, the node whose space its particles are in, and per mesh
+    /// piece the (vertex, particle) pairs it writes.
+    cloths: Vec<Doax2Cloth>,
     /// The head's face shape sets and the piece they shape.
     faces: Vec<(usize, crate::formats::doax2::HandPoses)>,
     /// Hand events by motion key: own motions by number, shared ones by number + 0x2000.
@@ -932,6 +944,105 @@ impl App {
         }
         let mut inputs: Vec<PieceInput> = drawn.iter().map(|d| input_of(d, false)).collect();
         inputs.extend(drawn.iter().filter(|d| d.piece.materials.iter().any(doax2::is_blended)).map(|d| input_of(d, true)));
+        // Hair: the head CAT's cloths. Each particle is a vertex of a head piece at the same
+        // place in the file (`GRID_WRITE`); found here by position, in the piece and in its
+        // blended copy. Pieces blended by weights are left out.
+        let blended_copy: Vec<Option<usize>> = {
+            let mut next = drawn.len();
+            drawn
+                .iter()
+                .map(|d| {
+                    d.piece.materials.iter().any(doax2::is_blended).then(|| {
+                        next += 1;
+                        next - 1
+                    })
+                })
+                .collect()
+        };
+        let cloths: Vec<Doax2Cloth> = chr
+            .read(&format!("{head}.cat"))
+            .ok()
+            .and_then(|cat| crate::formats::doax2_cloth::read(&cat).map_err(|e| log::warn!("DOAX2 hair: {e:#}")).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|cloth| {
+                let mut node = None;
+                let mut targets = Vec::new();
+                for &(_, drawn_index) in &head_objects {
+                    let d = &drawn[drawn_index];
+                    if d.multi.is_some() {
+                        continue;
+                    }
+                    let pairs: Vec<(usize, usize)> = d
+                        .piece
+                        .vertices
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(v, vertex)| {
+                            let at = glam::Vec3::from(vertex.position);
+                            cloth.particles.iter().position(|p| p.distance_squared(at) < 1e-10).map(|particle| (v, particle))
+                        })
+                        .collect();
+                    if pairs.is_empty() {
+                        continue;
+                    }
+                    node.get_or_insert(d.node);
+                    if let Some(copy) = blended_copy[drawn_index] {
+                        targets.push((copy, pairs.clone()));
+                    }
+                    targets.push((drawn_index, pairs));
+                }
+                let node = node?;
+                log::info!("DOAX2 hair {}: {} particles on {} pieces", cloth.name, cloth.particles.len(), targets.len());
+                Some(Doax2Cloth { sim: crate::formats::doax2_cloth::ClothSim::new(cloth), node, targets, followers: Vec::new() })
+            })
+            .collect();
+        // The rest of the hair layout (layout 2) moves in the game too but is not particles;
+        // what drives it is not read. Here each such vertex follows its nearest particle at
+        // rest, keeping its offset.
+        let mut cloths = cloths;
+        for &(object, drawn_index) in &head_objects {
+            let Some(object) = files[1].objects.get(object as usize) else { continue };
+            if object.decls.len() < 3 || drawn[drawn_index].multi.is_some() {
+                continue;
+            }
+            let first: usize = object.decls[..2].iter().map(|d| d.vertex_count).sum();
+            let range = first..first + object.decls[2].vertex_count;
+            let written: std::collections::HashSet<usize> =
+                cloths.iter().flat_map(|c| c.targets.iter().filter(|(p, _)| *p == drawn_index).flat_map(|(_, pairs)| pairs.iter().map(|&(v, _)| v))).collect();
+            if written.is_empty() {
+                continue;
+            }
+            let outside = written.iter().filter(|v| !range.contains(v)).count();
+            if outside > 0 {
+                log::warn!("DOAX2 hair: {outside} particle vertices outside layout 2 ({range:?})");
+            }
+            let mut followers: Vec<Vec<(usize, usize, glam::Vec3)>> = vec![Vec::new(); cloths.len()];
+            let mut farthest = 0.0f32;
+            for v in range.clone().filter(|v| !written.contains(v)) {
+                let Some(vertex) = drawn[drawn_index].piece.vertices.get(v) else { continue };
+                let at = glam::Vec3::from(vertex.position);
+                let nearest = cloths
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(c, cloth)| cloth.sim.cloth.particles.iter().enumerate().map(move |(k, p)| (c, k, p.distance_squared(at))))
+                    .min_by(|a, b| a.2.total_cmp(&b.2));
+                if let Some((c, k, d2)) = nearest {
+                    farthest = farthest.max(d2.sqrt());
+                    followers[c].push((v, k, at - cloths[c].sim.cloth.particles[k]));
+                }
+            }
+            log::info!("DOAX2 hair: {} layout 2 vertices follow a particle, at most {farthest:.3} m away", followers.iter().map(Vec::len).sum::<usize>());
+            for (c, list) in followers.into_iter().enumerate() {
+                if list.is_empty() {
+                    continue;
+                }
+                if let Some(copy) = blended_copy[drawn_index] {
+                    cloths[c].followers.push((copy, list.clone()));
+                }
+                cloths[c].followers.push((drawn_index, list));
+            }
+        }
         let pose_pieces = pose_nodes;
         // Hands: the pose file for holidays, the scripts' events. Hand k of the scripts is taken
         // to be the file's k-th block; not checked.
@@ -997,7 +1108,7 @@ impl App {
         self.doax2_pose = Some(Doax2Pose {
             files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None,
             rest_nodes: nodes.clone(),
-            hands, events, shared_files, faces, blinks,
+            hands, events, shared_files, faces, blinks, cloths,
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -2148,6 +2259,28 @@ impl App {
                             self.mesh.set_rest_positions(*piece, positions.iter().enumerate().map(|(v, p)| {
                                 (v, weights.iter().fold(p[0], |at, &(shape, weight)| at + (p[shape + 1] - p[0]) * weight))
                             }));
+                        }
+                    }
+                    // Hair: the game's cloth step 30 times a second in the game's space, the
+                    // colliders on the CAT bones.
+                    if !pose.cloths.is_empty() {
+                        let game_bones = doax2_game_bones(&bones);
+                        let bone = |cat: usize| doax2::SLOT_BONES.get(cat).and_then(|&b| game_bones.get(b)).copied();
+                        let ticks = self.game_clock * crate::formats::doax2_cloth::ClothSim::STEPS_PER_SECOND / 60.0;
+                        let flip = glam::Mat4::from_scale(glam::Vec3::new(1.0, 1.0, -1.0));
+                        for cloth in &mut pose.cloths {
+                            let (node_bone, place) = pose.pieces[cloth.node];
+                            let frame = flip * bones[node_bone] * place;
+                            cloth.sim.advance(frame, &bone, ticks);
+                            let to_piece = frame.inverse();
+                            for (piece, pairs) in &cloth.targets {
+                                let sim = &cloth.sim;
+                                self.mesh.set_rest_positions(*piece, pairs.iter().map(|&(v, particle)| (v, to_piece.transform_point3(sim.position[particle]))));
+                            }
+                            for (piece, list) in &cloth.followers {
+                                let sim = &cloth.sim;
+                                self.mesh.set_rest_positions(*piece, list.iter().map(|&(v, particle, offset)| (v, to_piece.transform_point3(sim.position[particle]) + offset)));
+                            }
                         }
                     }
                     // Hands: the scripts' poses, blended as in DOAX.

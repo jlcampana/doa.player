@@ -566,6 +566,39 @@ its position to position + velocity, by type: 4 `0x824A2490`, 8, 1 and 9 `0x8249
 `0x824A4690`. `0x8249B750` (3800 instructions) is a closest point and segment test used by them.
 None of these is decoded yet.
 
+### In the viewer (2026-11-10)
+
+`src/formats/doax2_cloth.rs` reads the cloths and steps them; the viewer runs them on the head
+for heads with cloth (Lei Fang's `AA` among the characters it shows), 30 steps a second at the
+file's values in the game's space, the particles carried with the head between steps. Read
+from the file this time:
+
+- `GRID_WRITE` is a stream from +0x60: 0x80000000 | particle, then the vertices it writes
+  (layout << 24 | byte offset), one or more; +0x20 counts the particles, +0x24 the vertices.
+  Kasumi's `AB` writes two vertices for some particles.
+- `FIX_GRID` names its particle by offset (as edges do), not by number.
+- `TRIANGLE`: per particle, entries of 8 bytes, the other two corners as offsets. The viewer
+  takes each particle's normal from them, for the air term.
+- `THREAD_DATA`: records of 0x18 from +0x30 (type, size, entries' offset, count, angle limits'
+  offset, 1); entries of 12 bytes, the particle first, root to tip (16 threads on Lei Fang's
+  `long_l`, one per fixed particle).
+- Colliders: the third word is the next record's offset from the chain's start. Records with
+  the flag at +0x14 have at +0x18 the offset of a later record in the chain (or 0): Lei Fang's
+  head sphere (15.5 cm) points past the head and neck colliders, the chest box past the chest
+  and collars, each upper arm's capsule past that arm's colliders. They read as bounding
+  volumes; the viewer skips the records they guard for particles outside them and does not
+  collide with them.
+- Type 1 is a capsule from its start along a vector (-x on the right arm); type 8 reads as a
+  box from a base along an axis, with a depth direction and half sizes across and in depth
+  (the last row (across, 1, depth)). Both are this reading, not the game's code.
+
+Collisions are the viewer's: a particle inside a collider goes to its nearest surface point.
+With boxes and capsules that tore the locks by the shoulders apart, so only the ellipsoids push
+for now. Angle limits are not applied. A small dark lock with jagged edges can still show by the
+shoulder in front. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
+from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
+rule. Not compared with the game in motion; the export does not carry the hair's motion.
+
 Other vertices of layout 2 (2844 to 3367 on `vksAA`) also move but are not particles. The head
 CAT has blocks tagged 0x06010001 from 0x1680 (two values 0.3 and 0.8, a point behind the head,
 offsets) that may drive them. Not decoded.
