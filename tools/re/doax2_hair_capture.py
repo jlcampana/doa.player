@@ -8,7 +8,10 @@ the first `CLOTH_DATA` name given with --name), follows each `CLOTH_DATA`'s poin
 particle states (0x80 bytes each: position at +0, a step at +0x10, the normal at +0x20, the
 previous position at +0x30) and saves every distinct quiet snapshot with its time, with the
 first cloth's colliders: the chain at `CLOTH_DATA`+0x38 (type, CAT bone, next, size, ...), each
-with a work area whose +0x100 holds the collider's world matrix (row-major, translation last).
+with a work area holding, at +0x00, the matrix from the collider's unit shape to the world (rows
+the shape's axes scaled by its sizes, translation its centre; row-major, translation last) and at
++0x40 its inverse, saved as `collider_matrices[snapshot, collider, 0 or 1]`. (+0x80 repeats them;
++0x100 is near the identity, not the world matrix as first thought.)
 
 Pointers into the 0xE0000000 range of guest memory are 0x1000 below where the data shows in
 the host's view of it, so `read` adds 0x1000 to them.
@@ -114,7 +117,7 @@ def main():
         if raw == again and raw != last:
             frames.append(np.frombuffer(raw, dtype='>f4').reshape(total, 32).astype(np.float32))
             times.append(time.time() - t0)
-            matrices.append([np.frombuffer(guest.at(area + 0x100, 64), dtype='>f4').reshape(4, 4) if area else np.zeros((4, 4)) for _, _, _, area in shapes])
+            matrices.append([np.frombuffer(guest.at(area, 0x80), dtype='>f4').reshape(2, 4, 4) if area else np.zeros((2, 4, 4)) for _, _, _, area in shapes])
             last = raw
         if len(frames) > 20000:
             break
@@ -122,7 +125,7 @@ def main():
                         names=np.array([n for n, _, _, _ in parts]),
                         counts=np.array([c for _, c, _, _ in parts]),
                         collider_kinds=np.array([(k, b) for k, b, _, _ in shapes]).reshape(-1, 2),
-                        collider_records=np.array([guest.at(r, 0x80) for _, _, r, _ in shapes]),
+                        collider_records=np.array([np.frombuffer(guest.at(r, 0x80), dtype=np.uint8) for _, _, r, _ in shapes]),
                         collider_matrices=np.array(matrices, dtype=np.float32))
     print(f'{len(frames)} snapshots in {a.seconds} s, {total} particles -> {a.out}')
 

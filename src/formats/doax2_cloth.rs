@@ -56,11 +56,11 @@ pub struct Thread {
 pub enum Shape {
     /// Type 4: centre and radii.
     Ellipsoid { centre: Vec3, radii: Vec3 },
-    /// Type 8, as read here (not from the game's code): from `base` along `axis` for its
-    /// length, `front` giving the depth direction, half sizes across and in depth (the record's
-    /// last row is (across, 1, depth)). The chest's box then spans 0.08 to 0.28 up the chest
-    /// bone, 0.4 wide and 0.3 deep.
-    Box { base: Vec3, axis: Vec3, front: Vec3, half_across: f32, half_depth: f32 },
+    /// Type 8: a box around `centre` whose half axes are `axes` (columns, in the bone's frame):
+    /// y is the record's axis (+0x40) times its half height (+0x64), z its front (+0x50) made
+    /// square to y and scaled by +0x68, x across by +0x60. Checked against the matrices the
+    /// running game builds for each collider (2026-11-10, Kasumi's `AA`).
+    Box { centre: Vec3, axes: glam::Mat3 },
     /// Type 1: from `start` along `segment` (the upper arms' run along the bone's x, -x on the
     /// right arm), with `radius`.
     Capsule { start: Vec3, segment: Vec3, radius: f32 },
@@ -256,13 +256,15 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
             let s = record + 0x30;
             let shape = match kind {
                 4 => Shape::Ellipsoid { centre: vec3(cat, s)?, radii: vec3(cat, s + 0x10)? },
-                8 => Shape::Box {
-                    base: vec3(cat, s)?,
-                    axis: vec3(cat, s + 0x10)?,
-                    front: vec3(cat, s + 0x20)?,
-                    half_across: bef32(cat, s + 0x30)?,
-                    half_depth: bef32(cat, s + 0x38)?,
-                },
+                8 => {
+                    let axis = vec3(cat, s + 0x10)?;
+                    let up = axis.normalize_or(Vec3::Y);
+                    let front = vec3(cat, s + 0x20)?;
+                    let depth = (front - up * front.dot(up)).normalize_or(Vec3::Z);
+                    let across = up.cross(depth);
+                    let half = vec3(cat, s + 0x30)?;
+                    Shape::Box { centre: vec3(cat, s)?, axes: glam::Mat3::from_cols(across * half.x, axis * half.y, depth * half.z) }
+                }
                 1 => Shape::Capsule { start: vec3(cat, s)?, segment: vec3(cat, s + 0x10)?, radius: bef32(cat, s + 0x1C)? },
                 2 => Shape::Sphere { centre: vec3(cat, s)?, radius: bef32(cat, s + 0x0C)? },
                 other => Shape::Other(other),
@@ -299,6 +301,9 @@ pub struct ClothSim {
     /// For `advance`: the steps run and the head matrix of the last frame.
     steps: u64,
     last_head: Mat4,
+    /// Per particle and collider, how deep the particle sat at rest (`level`), set when the
+    /// cloth starts on the bones.
+    rest_levels: Vec<f32>,
 }
 
 impl ClothSim {
@@ -313,6 +318,7 @@ impl ClothSim {
             started: false,
             steps: 0,
             last_head: Mat4::IDENTITY,
+            rest_levels: Vec::new(),
         }
     }
 
@@ -334,6 +340,15 @@ impl ClothSim {
             self.update_normals();
             self.steps = target;
             self.last_head = head;
+            let frames: Vec<Option<Mat4>> = self.cloth.colliders.iter().map(|c| bone(c.bone).map(|m| m.inverse())).collect();
+            self.rest_levels = self
+                .position
+                .iter()
+                .flat_map(|p| {
+                    let frames = &frames;
+                    self.cloth.colliders.iter().enumerate().map(move |(k, c)| frames[k].map_or(1.0, |inverse| level(&c.shape, inverse.transform_point3(*p))))
+                })
+                .collect();
         } else if self.steps > target + 1 {
             self.steps = target;
         }
@@ -452,7 +467,7 @@ impl ClothSim {
             self.velocity[i] = v;
             self.position[i] += v;
         }
-        Self::collide(&self.cloth, &mut self.position, bone);
+        Self::collide(&self.cloth, &mut self.position, &self.previous, &self.rest_levels, bone);
         // Threads: the two-sided cap in four interleaved sweeps, then for type 1 the root-first
         // cap moving the child only.
         let cap = c.p(0x48);
@@ -462,14 +477,17 @@ impl ClothSim {
                 one_sided(&mut self.position, &c.fixed, thread, cap);
             }
         }
-        Self::collide(&self.cloth, &mut self.position, bone);
+        Self::collide(&self.cloth, &mut self.position, &self.previous, &self.rest_levels, bone);
         self.update_normals();
     }
 
-    /// Pushes particles out of the colliders' ellipsoids. An approximation of the game's
-    /// collision. A flagged record is taken as a bounding volume: a particle outside it skips the records up
-    /// to the one it points to; it is not collided with itself.
-    fn collide(cloth: &Cloth, position: &mut [Vec3], bone: &dyn Fn(usize) -> Option<Mat4>) {
+    /// Stops particles where their move enters a collider: a particle outside a shape before
+    /// the step and inside after goes to where the move crosses its surface; one already inside
+    /// stays (the running game leaves particles near the roots inside the head's ellipsoid, up
+    /// to row 7). Where the game puts the particle after the hit (sliding, the move's rest) is
+    /// not read. A flagged record is a bounding volume: a particle outside it skips the records
+    /// up to the one it points to, and it is not collided with itself.
+    fn collide(cloth: &Cloth, position: &mut [Vec3], before: &[Vec3], rest_levels: &[f32], bone: &dyn Fn(usize) -> Option<Mat4>) {
         let frames: Vec<Option<(Mat4, Mat4)>> = cloth.colliders.iter().map(|c| bone(c.bone).map(|m| (m, m.inverse()))).collect();
         for i in 0..position.len() {
             if cloth.fixed[i] {
@@ -484,16 +502,28 @@ impl ClothSim {
                 };
                 let local = inverse.transform_point3(position[i]);
                 if let Some(skip) = collider.skip_to {
-                    k = if push_out(&collider.shape, local).is_some() { k + 1 } else { skip.max(k + 1) };
+                    k = if inside(&collider.shape, local) { k + 1 } else { skip.max(k + 1) };
                     continue;
                 }
-                // Only ellipsoids push: pushed to their nearest surface point, boxes and capsules
-                // tore the locks by the shoulders apart (seen on Lei Fang's `AA`), so they wait
-                // for the game's own collision code.
-                if matches!(collider.shape, Shape::Ellipsoid { .. }) {
-                    if let Some(out) = push_out(&collider.shape, local) {
-                        position[i] = matrix.transform_point3(out);
+                let start = inverse.transform_point3(before[i]);
+                let rest = rest_levels.get(i * cloth.colliders.len() + k).copied().unwrap_or(1.0).min(1.0);
+                if inside(&collider.shape, local) && inside(&collider.shape, start) {
+                    // Already inside: no deeper than at rest (the viewer's rule).
+                    if level(&collider.shape, local) < rest {
+                        position[i] = matrix.transform_point3(raise(&collider.shape, local, rest));
                     }
+                } else if inside(&collider.shape, local) {
+                    // Bisect the move for the surface.
+                    let (mut outside, mut inner) = (start, local);
+                    for _ in 0..12 {
+                        let middle = (outside + inner) * 0.5;
+                        if inside(&collider.shape, middle) {
+                            inner = middle;
+                        } else {
+                            outside = middle;
+                        }
+                    }
+                    position[i] = matrix.transform_point3(outside);
                 }
                 k += 1;
             }
@@ -511,49 +541,52 @@ impl ClothSim {
     }
 }
 
-/// Where a point inside a shape goes, in the shape's space; None when it is outside.
-fn push_out(shape: &Shape, p: Vec3) -> Option<Vec3> {
+/// How deep a point (in the collider's bone frame) is: below 1 inside, 0 at the centre or axis.
+fn level(shape: &Shape, p: Vec3) -> f32 {
     match *shape {
-        Shape::Ellipsoid { centre, radii } => {
-            let q = (p - centre) / radii;
-            let length = q.length();
-            (length < 1.0 && length > 0.0).then(|| centre + radii * (q / length))
-        }
-        Shape::Sphere { centre, radius } => {
-            let d = p - centre;
-            let length = d.length();
-            (length < radius && length > 0.0).then(|| centre + d / length * radius)
-        }
+        Shape::Ellipsoid { centre, radii } => ((p - centre) / radii).length(),
+        Shape::Sphere { centre, radius } => (p - centre).length() / radius,
         Shape::Capsule { start, segment, radius } => {
             let t = ((p - start).dot(segment) / segment.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            (p - (start + segment * t)).length() / radius
+        }
+        Shape::Box { centre, axes } => (axes.inverse() * (p - centre)).abs().max_element(),
+        Shape::Other(_) => f32::INFINITY,
+    }
+}
+
+/// The point moved out from the shape's centre (or axis) to depth `target`.
+fn raise(shape: &Shape, p: Vec3, target: f32) -> Vec3 {
+    let now = level(shape, p);
+    if now <= 0.0 || !now.is_finite() {
+        return p;
+    }
+    let scale = target / now;
+    match *shape {
+        Shape::Ellipsoid { centre, .. } | Shape::Sphere { centre, .. } | Shape::Box { centre, .. } => centre + (p - centre) * scale,
+        Shape::Capsule { start, segment, .. } => {
+            let t = ((p - start).dot(segment) / segment.length_squared().max(1e-12)).clamp(0.0, 1.0);
             let axis = start + segment * t;
-            let d = p - axis;
-            let distance = d.length();
-            (distance < radius && distance > 0.0).then(|| axis + d / distance * radius)
+            axis + (p - axis) * scale
         }
-        Shape::Box { base, axis, front, half_across, half_depth } => {
-            let length = axis.length();
-            let up = axis.normalize_or(Vec3::Y);
-            let depth = (front - up * front.dot(up)).normalize_or(Vec3::Z);
-            let across = up.cross(depth);
-            let d = p - base;
-            let (x, y, z) = (d.dot(across), d.dot(up), d.dot(depth));
-            if x.abs() >= half_across || z.abs() >= half_depth || y <= 0.0 || y >= length {
-                return None;
-            }
-            // Out through the nearest face.
-            let faces = [
-                (half_across - x, across * (half_across - x)),
-                (half_across + x, across * -(half_across + x)),
-                (half_depth - z, depth * (half_depth - z)),
-                (half_depth + z, depth * -(half_depth + z)),
-                (length - y, up * (length - y)),
-                (y, up * -y),
-            ];
-            let (_, push) = faces.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
-            Some(p + push)
+        Shape::Other(_) => p,
+    }
+}
+
+/// Whether a point (in the collider's bone frame) is inside its shape.
+fn inside(shape: &Shape, p: Vec3) -> bool {
+    match *shape {
+        Shape::Ellipsoid { centre, radii } => ((p - centre) / radii).length_squared() < 1.0,
+        Shape::Sphere { centre, radius } => (p - centre).length_squared() < radius * radius,
+        Shape::Capsule { start, segment, radius } => {
+            let t = ((p - start).dot(segment) / segment.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            (p - (start + segment * t)).length_squared() < radius * radius
         }
-        Shape::Other(_) => None,
+        Shape::Box { centre, axes } => {
+            let unit = axes.inverse() * (p - centre);
+            unit.abs().max_element() < 1.0
+        }
+        Shape::Other(_) => false,
     }
 }
 

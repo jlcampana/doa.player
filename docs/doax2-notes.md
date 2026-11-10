@@ -588,14 +588,27 @@ from the file this time:
   and collars, each upper arm's capsule past that arm's colliders. They read as bounding
   volumes; the viewer skips the records they guard for particles outside them and does not
   collide with them.
-- Type 1 is a capsule from its start along a vector (-x on the right arm); type 8 reads as a
-  box from a base along an axis, with a depth direction and half sizes across and in depth
-  (the last row (across, 1, depth)). Both are this reading, not the game's code.
+- Each collider's work area (the pointer in its record) holds at +0x00 the matrix from its unit
+  shape to the world (rows the shape's axes scaled by its sizes, translation its centre) and at
+  +0x40 its inverse, rebuilt each frame (read on Kasumi's `AA`, 2026-11-10; `+0x100`, which the
+  capture tool used to read, is near the identity and not the world matrix). From them:
+  - Type 1, a capsule: from its start along a vector (-x on the right arm), the radius in w.
+    The unit matrix is centred on the segment's middle with half its length.
+  - Type 8, a box centred at +0x30: y is the axis at +0x40 times the half height at +0x64 (Lei
+    Fang's chest box writes (0, 0.2, 0) and 1, Kasumi's (0, 1, 0) and 0.2), z the front at
+    +0x50 made square to y times +0x68, x across times +0x60. A tilted box (axis (0, 0.06,
+    -0.13), half 0.5) matched its matrix exactly.
+- In that read, no particle was inside any unflagged collider except the head's ellipsoid,
+  which held 65 free particles from rows 1 to 7, at 84 to 100 percent of its size; the
+  flagged ones held many (540 in the head's sphere, 80 in the chest's box), as bounding
+  volumes would. So the game does not push out particles that are already inside: it tests
+  the move (the "segment" path of `0x82495030`).
 
-Collisions are the viewer's: a particle inside a collider goes to its nearest surface point.
-With boxes and capsules that tore the locks by the shoulders apart, so only the ellipsoids push
-for now. Angle limits are not applied. A small dark lock with jagged edges can still show by the
-shoulder in front. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
+The viewer's collision: a particle whose move enters a collider stops where the move crosses
+its surface; one already inside may stay but no deeper than it sat at rest (the viewer's rule,
+to keep the roots from sinking into the head; what the game does after a hit, sliding or the
+move's rest, is not read). Pushing to the nearest surface point instead tore the locks by the
+shoulders apart. Angle limits are not applied. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
 from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
 rule. Not compared with the game in motion; the export does not carry the hair's motion.
 
