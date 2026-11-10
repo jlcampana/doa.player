@@ -306,9 +306,16 @@ several steps apart. The ignored test `chest_springs_match_logged_steps` replays
 `target/captures/doax2_spring_steps.txt`.
 
 The viewer and the export now use these springs on the game-space bones (the solve's z flip
-undone): three shape pairs per chest piece, as shape keys in three sets in the export. Not
-checked: whether the viewer's bones 8 and 14 sit where the game's do in every motion, and the
-parameter rows and damping overrides other characters may use.
+undone): three shape pairs per chest piece, as shape keys in three sets in the export.
+
+The bones' frames were compared without matching poses (ignored test `spring_bone_axes` against
+the volleyball log): in both, the elbow lies on the upper arm's x axis (+x on bone 8, -x on 14,
+so the points sit 10 cm inside the shoulders), the forearm stays in the upper arm's x-z plane
+and bends towards +z on both arms, so the roll matches too, and from the chest y points to the
+neck and x to bone 8. Not checked: the same frame of a motion side by side, which needs the game
+running with Tina, Lisa or Helena (`doax2_live.py array`, then `live_spring_bones_match`; the old
+`doax2_live.txt` matches no motion within 19 cm), and the parameter rows and damping overrides
+other characters may use.
 
 ## Hands
 

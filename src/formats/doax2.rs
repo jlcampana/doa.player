@@ -1763,6 +1763,104 @@ mod tests {
         }
     }
 
+    /// For the chest springs: at the motion frame that best matches each live sample (as in
+    /// `live_poses_match_motions`), how far bones 0, 8 and 14 turn from the game's (degrees, in
+    /// the root's frame) and how far the springs' rest points land from the game's (metres,
+    /// from the hips). Same inputs and `DOAX2_CODES` as that test.
+    #[test]
+    #[ignore]
+    fn live_spring_bones_match() {
+        use crate::formats::doax;
+        let text = std::fs::read_to_string("target/captures/doax2_live.txt").unwrap();
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let names: Vec<String> = mot.names().map(str::to_string).collect();
+        let codes: Vec<String> = std::env::var("DOAX2_CODES").map(|c| c.split(',').map(str::to_string).collect()).unwrap_or(vec!["tn".into(), "he".into(), "ls".into()]);
+        let flip = Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0));
+        // Bones from the hips in the root's frame, translation relative to the hips.
+        let local = |bones: &[Mat4]| -> Vec<Mat4> {
+            let inverse = bones[15].inverse();
+            let hips = bones[2].w_axis.truncate();
+            bones[..24].iter().map(|m| {
+                let mut r = inverse * *m;
+                r.w_axis = (inverse.transform_vector3(m.w_axis.truncate() - hips)).extend(1.0);
+                r
+            }).collect()
+        };
+        let mut candidates = Vec::new();
+        for code in &codes {
+            let body = load(&chr.read(&format!("v{code}1.tpr")).unwrap(), &chr.read(&format!("v{code}1.cat")).unwrap()).unwrap();
+            let rows = bone_rows(&body.rest).unwrap();
+            for file in motion_files(&names, code) {
+                let data = mot.read(&file).unwrap();
+                for motion in doax::list_motions_big(&data) {
+                    for frame in 0..motion.frames.max(1) {
+                        let Ok(values) = doax::eval_motion_endian(&data, &motion, frame as f32, true) else { continue };
+                        let bones = doax::solve_pose(&values, &rows).map(|b| flip * b);
+                        let by_slot: Vec<Mat4> = SLOT_BONES.iter().map(|&b| bones[b]).collect();
+                        candidates.push((format!("{code} {file} {} frame {frame}", motion.id), local(&by_slot)));
+                    }
+                }
+            }
+        }
+        let compared: Vec<usize> = (0..24).filter(|&b| b != 15).collect();
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let numbers: Vec<f32> = parts[2..].iter().map(|v| v.parse().unwrap()).collect();
+            let matrices: Vec<Mat4> = numbers.chunks_exact(16).map(|m| Mat4::from_cols_array(m.try_into().unwrap()).transpose()).collect();
+            let live = local(&matrices);
+            let (error, name, viewer) = candidates
+                .iter()
+                .map(|(name, v)| (compared.iter().map(|&b| v[b].w_axis.distance(live[b].w_axis)).fold(0f32, f32::max), name, v))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .unwrap();
+            let report: Vec<String> = ChestSprings::BONES
+                .iter()
+                .zip(ChestSprings::REST)
+                .map(|(&bone, rest)| {
+                    let turn = glam::Quat::from_mat4(&viewer[bone]).angle_between(glam::Quat::from_mat4(&live[bone])).to_degrees();
+                    let miss = viewer[bone].transform_point3(rest).distance(live[bone].transform_point3(rest));
+                    format!("bone {bone}: {turn:.1} deg, point {:.1} mm", miss * 1000.0)
+                })
+                .collect();
+            println!("{} {}: pose {:.1} mm at {name}; {}", parts[0], parts[1], error * 1000.0, report.join(", "));
+        }
+    }
+
+    /// Prints, for a few frames of a motion, where the elbows sit in the upper arms' frames
+    /// (bones 8 and 14) and the shoulders, neck and hips in the chest's (bone 0), in the game's
+    /// space: the springs hang from these frames, so their axes must be the game's.
+    #[test]
+    #[ignore]
+    fn spring_bone_axes() {
+        use crate::formats::doax;
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let mot = LazyArchive::open("assets/doax2/mot.afs").unwrap();
+        let names: Vec<String> = mot.names().map(str::to_string).collect();
+        let flip = Mat4::from_scale(Vec3::new(1.0, 1.0, -1.0));
+        for code in ["tn", "ls", "he"] {
+            let body = load(&chr.read(&format!("v{code}1.tpr")).unwrap(), &chr.read(&format!("v{code}1.cat")).unwrap()).unwrap();
+            let rows = bone_rows(&body.rest).unwrap();
+            let file = &motion_files(&names, code)[0];
+            let data = mot.read(file).unwrap();
+            for motion in doax::list_motions_big(&data).iter().take(3) {
+                let values = doax::eval_motion_endian(&data, motion, (motion.frames / 2) as f32, true).unwrap();
+                let bones = doax::solve_pose(&values, &rows).map(|b| flip * b);
+                let at = |frame: usize, bone: usize| bones[frame].inverse().transform_point3(bones[bone].w_axis.truncate());
+                let r = |v: Vec3| v.to_array().map(|x| (x * 1000.0).round() / 1000.0);
+                println!("{code} {file} {}: elbow 4 in 8 {:?}, elbow 10 in 14 {:?} | in chest: 8 {:?}, 14 {:?}, neck {:?}, hips {:?}",
+                    motion.id, r(at(8, 4)), r(at(14, 10)), r(at(0, 8)), r(at(0, 14)), r(at(0, 19)), r(at(0, 2)));
+                // The forearm's direction seen from the upper arm: the game keeps it in the
+                // upper arm's x-z plane (y 0), bending towards +z on both arms.
+                let forearm = |upper: usize, elbow: usize, hand: usize| {
+                    let direction = (bones[hand].w_axis - bones[elbow].w_axis).truncate().normalize();
+                    r(bones[upper].inverse().transform_vector3(direction))
+                };
+                println!("    forearm in 8 {:?}, in 14 {:?}", forearm(8, 4, 5), forearm(14, 10, 11));
+            }
+        }
+    }
+
     #[test]
     #[ignore]
     fn hair_coordinates() {

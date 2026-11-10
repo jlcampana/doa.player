@@ -7,6 +7,11 @@ translation in the last row) and prints each bone's position. Array index = CAT 
 22 left toe, 23 spine, 24-31 DOAX's arm roll bones. Found at guest 0x93AC4630, 0x93AD1E90 and
 0x93AFA7B0 in a jet ski race; they move with the heap, so this scans for them.
 
+`doax2_live.py array OUT [SAMPLES]` writes the game's own bone array (guest 0x833B5310, 32
+bones a character slot, the one the chest springs read) every 0.4 s, in the format of
+`target/captures/doax2_live.txt` (address, sample, 32 matrices by rows), for the ignored tests
+`live_poses_match_motions` and `live_spring_bones_match`.
+
 Guest address `a` is at host `0x200000000 + a` in the doax2.exe process.
 """
 import subprocess
@@ -87,8 +92,35 @@ def main():
             print(f'{start:#x}: upper arm {arm:.3f}, shin {shin:.3f}')
             for i, m in enumerate(bones):
                 print(f'  {i:2d}', np.round(m[:3, 3], 3))
+    elif len(sys.argv) > 2 and sys.argv[1] == 'array':
+        capture_array(guest, sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 12)
     else:
         print(__doc__)
+
+
+BONE_ARRAY = 0x833B5310
+
+
+def capture_array(guest, out, samples):
+    """The slots of the game's bone array that hold rotations, sampled `samples` times."""
+    import time
+    def slot(c):
+        return np.frombuffer(guest.read(BONE_ARRAY + c * 0x800, 0x800), dtype='>f4').astype(np.float64).reshape(32, 4, 4)
+    used = []
+    for c in range(8):
+        m = slot(c)
+        r = m[:, :3, :3]
+        if np.isfinite(m).all() and np.abs(np.einsum('nij,nkj->nik', r, r) - np.eye(3)).max() < 1e-3:
+            used.append(c)
+    print('slots', used)
+    lines = []
+    for sample in range(samples):
+        for c in used:
+            numbers = ' '.join(f'{v:.6f}' for m in slot(c) for v in m.T.reshape(-1))
+            lines.append(f'{BONE_ARRAY + c * 0x800:x} {sample} {numbers}')
+        time.sleep(0.4)
+    open(out, 'w').write('\n'.join(lines) + '\n')
+    print(len(lines), 'lines')
 
 
 if __name__ == '__main__':
