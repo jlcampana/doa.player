@@ -630,7 +630,16 @@ only tests the particle's own move, so a body moving into the hair leaves it ins
 viewer's "no deeper than at rest" is stricter than that. Consecutive states are never one step
 apart in this read (the carry between steps moves the previous position too), so the response
 to a hit could not be isolated. Pushing to the nearest surface point instead tore the locks by the
-shoulders apart. Angle limits are not applied. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
+shoulders apart.
+
+Angle limits (`0x82499B40`, read 2026-11-10; `AngleLimit` in `doax2_cloth.rs`): a thread record's
++0x10 is the offset of a list of limit records (0x40 bytes), +0x14 their number. A record: type
+(1 applies), +0x10 first angle, +0x14 links at it, +0x18 step per later link (cumulative), +0x1C
+max, +0x20 links, +0x24 first entry, +0x28 stride, +0x2C CAT bone, +0x30 factor. Lei Fang's
+first: 15, 15, 30, 45, 60, 75 degrees over six links, factor 0.9. A link bent from the one before
+(the first from its rest direction turned by the bone) beyond its limit is turned back to it,
+and the child and every later entry move by the factor times the change. Applied in the viewer
+after the thread caps; not yet looked at on screen or against the game. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
 from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
 rule. Not compared with the game in motion; the export does not carry the hair's motion.
 

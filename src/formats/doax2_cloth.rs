@@ -49,6 +49,29 @@ pub struct Thread {
     pub particles: Vec<usize>,
     pub next_rest: Vec<f32>,
     pub previous_rest: Vec<f32>,
+    /// The thread record's angle limits (+0x10 a list of their offsets, +0x14 its length).
+    pub limits: Vec<AngleLimit>,
+}
+
+/// An angle limit on a thread's links (records of 0x40, applied by `0x82499B40` when their
+/// type is 1). Link k runs from entry `start + stride * k` to the next by `stride`, for
+/// `count` links. Its limit is `first` for the first `first_links` links, then grows by `step`
+/// a link (cumulative) up to `max`. A link bent from the one before it (or, for the thread's
+/// first link, from its rest direction turned by `bone`) by more than its limit is turned back
+/// to the limit, and the child and every later entry move by `factor` times the change.
+#[derive(Debug, Clone, Copy)]
+pub struct AngleLimit {
+    pub kind: u32,
+    pub first: f32,
+    pub first_links: i32,
+    pub step: f32,
+    pub max: f32,
+    pub count: i32,
+    pub start: i32,
+    pub stride: i32,
+    /// +0x2C, the CAT bone whose frame turns the rest direction (1, the head, on Lei Fang).
+    pub bone: i32,
+    pub factor: f32,
 }
 
 /// A collider on a CAT bone, in that bone's space.
@@ -231,7 +254,26 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
         for k in 0..number {
             let entry = thread + first + 0x18 * k;
             let (kind, entries_at, entry_count) = (be32(cat, entry)?, be32(cat, entry + 8)? as usize, be32(cat, entry + 12)? as usize);
-            let mut thread_out = Thread { kind, particles: Vec::new(), next_rest: Vec::new(), previous_rest: Vec::new() };
+            let (limits_at, limit_count) = (be32(cat, entry + 0x10)? as usize, be32(cat, entry + 0x14)? as usize & 0xFFFF);
+            let limits = (0..limit_count.min(16))
+                .map(|q| {
+                    let r = thread + be32(cat, thread + limits_at + 4 * q)? as usize;
+                    let int = |o: usize| be32(cat, r + o).map(|v| v as i32);
+                    Ok(AngleLimit {
+                        kind: be32(cat, r)?,
+                        first: bef32(cat, r + 0x10)?,
+                        first_links: int(0x14)?,
+                        step: bef32(cat, r + 0x18)?,
+                        max: bef32(cat, r + 0x1C)?,
+                        count: int(0x20)?,
+                        start: int(0x24)?,
+                        stride: int(0x28)?,
+                        bone: int(0x2C)?,
+                        factor: bef32(cat, r + 0x30)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut thread_out = Thread { kind, particles: Vec::new(), next_rest: Vec::new(), previous_rest: Vec::new(), limits };
             for q in 0..entry_count {
                 let e = thread + entries_at + 12 * q;
                 let particle = index(be32(cat, e)?)?;
@@ -476,6 +518,11 @@ impl ClothSim {
             if thread.kind == 1 {
                 one_sided(&mut self.position, &c.fixed, thread, cap);
             }
+            if matches!(thread.kind, 1 | 2 | 5) {
+                for limit in thread.limits.iter().filter(|l| l.kind == 1) {
+                    bend_limit(&mut self.position, &c.fixed, &c.particles, thread, limit, head);
+                }
+            }
         }
         Self::collide(&self.cloth, &mut self.position, &self.previous, &self.rest_levels, bone);
         self.update_normals();
@@ -651,6 +698,62 @@ fn two_sided(x: &mut [Vec3], locked: &[bool], thread: &Thread, cap: f32) {
                 }
             }
             s += 4;
+        }
+    }
+}
+
+/// `0x82499B40`: turns each link of `limit` back to its largest angle from the link before.
+/// The first link's reference is its rest direction turned by `head` (the game turns it by the
+/// limit's bone, the head on the files read).
+fn bend_limit(x: &mut [Vec3], locked: &[bool], rest: &[Vec3], thread: &Thread, limit: &AngleLimit, head: Mat4) {
+    let p = &thread.particles;
+    let n = p.len() as i32;
+    let mut angle = limit.first;
+    for k in 0..limit.count {
+        let i = limit.start + limit.stride * k;
+        let child = i + limit.stride;
+        if i < 0 || i >= n || child < 0 || child >= n {
+            return;
+        }
+        if k >= limit.first_links {
+            angle += limit.step;
+        }
+        if limit.step > 0.0 && angle > limit.max {
+            angle = limit.max;
+        }
+        if limit.step < 0.0 && angle < limit.max {
+            angle = limit.max;
+        }
+        let (parent, child) = (p[i as usize], p[child as usize]);
+        let d = x[child] - x[parent];
+        let grand = i - limit.stride;
+        let reference = if k == 0 && !(0..n).contains(&grand) {
+            head.transform_vector3(rest[child] - rest[parent])
+        } else if (0..n).contains(&grand) {
+            x[parent] - x[p[grand as usize]]
+        } else {
+            continue;
+        };
+        if reference.length_squared() <= 0.0 || d.length_squared() <= 0.0 {
+            continue;
+        }
+        let bent = reference.angle_between(d);
+        if angle >= bent {
+            continue;
+        }
+        let axis = reference.cross(d);
+        if axis.length_squared() <= 0.0 {
+            continue;
+        }
+        let turned = glam::Quat::from_axis_angle(axis.normalize(), angle) * reference;
+        let delta = (turned.normalize() * d.length() - d) * limit.factor;
+        let mut j = i + limit.stride;
+        while (0..n).contains(&j) {
+            let q = p[j as usize];
+            if !locked[q] {
+                x[q] += delta;
+            }
+            j += limit.stride;
         }
     }
 }
