@@ -60,6 +60,12 @@ pub struct SceneLights {
     pub ambient: [f32; 3],
     /// Direction the light travels, in the game's space, diffuse and specular.
     pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
+    /// Added to the ambient times the normal's up component: DOAX2's hemisphere ambient
+    /// (`AmbientLightP2`). Zero elsewhere.
+    pub ambient_up: [f32; 3],
+    /// Specular towards the camera's position, as DOAX2's shaders take `CamPos`, rather than
+    /// the fixed function's infinite viewer.
+    pub local_viewer: bool,
 }
 
 impl SceneLights {
@@ -68,7 +74,7 @@ impl SceneLights {
     /// white. Specular is scaled like diffuse and the new light's is 0.3 of its diffuse, as on
     /// other lights. That part was not read during a flash.
     pub fn lightning_flash(&self) -> SceneLights {
-        let mut flash = SceneLights { ambient: [35.0 / 255.0, 49.0 / 255.0, 49.0 / 255.0], lights: self.lights };
+        let mut flash = SceneLights { ambient: [35.0 / 255.0, 49.0 / 255.0, 49.0 / 255.0], lights: self.lights, ..*self };
         for (_, diffuse, specular) in &mut flash.lights[..3] {
             *diffuse = diffuse.map(|c| c * 0.2);
             *specular = specular.map(|c| c * 0.2);
@@ -88,6 +94,8 @@ pub const FALLBACK_LIGHTS: SceneLights = SceneLights {
         ([-0.195, -0.049, 0.98], [0.19, 0.14, 0.28], [0.057, 0.042, 0.084]),
         ([-0.931, 0.337, 0.138], [0.26, 0.24, 0.12], [0.078, 0.072, 0.036]),
     ],
+    ambient_up: [0.0; 3],
+    local_viewer: false,
 };
 
 /// The cloudy stage's lights, read from the running game: its first light's direction differs
@@ -100,6 +108,8 @@ pub const CLOUDY_LIGHTS: SceneLights = SceneLights {
         ([-0.049, 0.049, -0.998], [0.18, 0.14, 0.24], [0.054, 0.042, 0.072]),
         ([0.894, 0.147, -0.423], [0.22, 0.24, 0.34], [0.066, 0.072, 0.102]),
     ],
+    ambient_up: [0.0; 3],
+    local_viewer: false,
 };
 
 /// The snowy night's lights, read from the running game, since that stage changes its table's
@@ -113,6 +123,8 @@ pub const SNOWY_NIGHT_LIGHTS: SceneLights = SceneLights {
         ([-0.938, -0.297, 0.184], [0.533, 0.4, 0.213], [0.16, 0.12, 0.064]),
         ([0.988, -0.147, -0.049], [0.12, 0.13, 0.15], [0.036, 0.039, 0.045]),
     ],
+    ambient_up: [0.0; 3],
+    local_viewer: false,
 };
 
 struct LoadedModel {
@@ -539,8 +551,12 @@ impl MeshRenderer {
         }
         buf[36..52].copy_from_slice(&view.to_cols_array());
         buf[107] = self.outline_width;
+        // The camera's position in the viewer's space, for a local viewer's specular.
+        buf[112..115].copy_from_slice(&view.inverse().w_axis.truncate().to_array());
         if let Some(lights) = &self.lights {
             buf[52..55].copy_from_slice(&lights.ambient);
+            buf[108..111].copy_from_slice(&lights.ambient_up);
+            buf[111] = if lights.local_viewer { 1.0 } else { 0.0 };
             for (i, (direction, diffuse, specular)) in lights.lights.iter().enumerate() {
                 // Toward the light, in the viewer's space, whose Z is the game's flipped.
                 let toward = if self.lights_follow_camera {
@@ -915,7 +931,7 @@ fn nearest_along_ray(
 }
 
 /// Floats in the uniform buffer. The material holds 6 vec4 in its own buffer.
-const UNIFORM_FLOATS: usize = 108;
+const UNIFORM_FLOATS: usize = 116;
 
 /// All mip levels, one after another, averaged in linear light with the viewer's sRGB
 /// textures. The viewer's own choice: this is not read from the game's files.
@@ -1080,6 +1096,9 @@ struct Uniforms {
     light_diffuse: array<vec4<f32>, 4>,
     light_specular: array<vec4<f32>, 4>,
     plain_color: vec4<f32>,
+    /// The hemisphere ambient's up colour; w: local viewer.
+    ambient_up: vec4<f32>,
+    eye: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -1144,7 +1163,7 @@ fn vs_main(v: VertIn) -> VertOut {
         if material.coords.y > 0.5 {
             out.layer_uv = reflected.xy;
         }
-        let lit = light_at(n);
+        let lit = light_at(n, world_pos.xyz);
         out.lit = lit[0];
         out.specular = lit[1];
     }
@@ -1152,10 +1171,14 @@ fn vs_main(v: VertIn) -> VertOut {
 }
 
 /// The diffuse and specular of the game's lighting, for a normal.
-fn light_at(n: vec3<f32>) -> array<vec3<f32>, 2> {
-    // The game's specular takes an infinite viewer: +Z in camera space.
-    let to_eye = (vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz;
-    var rgb = material.emissive.rgb + material.ambient.rgb * u.ambient.rgb;
+fn light_at(n: vec3<f32>, position: vec3<f32>) -> array<vec3<f32>, 2> {
+    // The fixed function's specular takes an infinite viewer: +Z in camera space. DOAX2's
+    // shaders take the way to the camera.
+    var to_eye = (vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz;
+    if u.ambient_up.w > 0.5 {
+        to_eye = normalize(u.eye.xyz - position);
+    }
+    var rgb = material.emissive.rgb + material.ambient.rgb * (u.ambient.rgb + u.ambient_up.rgb * n.y);
     var specular = vec3<f32>(0.0);
     for (var i = 0; i < 4; i += 1) {
         let l = u.light_to[i].xyz;
@@ -1310,7 +1333,7 @@ fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
             let det = dot(dx, r1);
             let gradient = sign(det) * (dhx * r1 + dhy * r2);
             let bumped = normalize(abs(det) * n - u.anime_shading.y * 0.012 * gradient);
-            let lit_here = light_at(bumped);
+            let lit_here = light_at(bumped, v.world);
             diffuse_light = lit_here[0];
             specular_light = lit_here[1];
         }

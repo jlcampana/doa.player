@@ -380,8 +380,42 @@ In a scene read on 2026-11-10 (the beach at sunset, on a deck chair in the shade
 (colours 0.35, 0.33, 0.25 or 0.7, 0.66, 0.5 or 0.322, 0.317, 0.265), perhaps a light placed for
 each character. `HemisphereMat` c4-c6 is the identity on most draws and a rotation on others.
 `SpeqObjCol` c67 is a specular colour with the power in w (0.14 and 2; 0.574, 0.51, 0.477 and
-17.7; and others). The viewer takes the ambient P1 and the four lights; how the shaders combine the two ambients,
-the hemisphere matrix and the fourth light is not read.
+17.7; and others).
+
+### What the shaders do with them (2026-11-10, decoded from the image)
+
+The shaders sit in the image as containers (`tools/re/doax2_shaders.py`: 456 of them, 79
+vertex and 158 pixel shaders named `vs_3_0`/`ps_3_0`, the rest unnamed). Decoded: the skinned
+vertex shader with specular (container `0x8206C5D0`, the body's chest layout) and a rigid one
+(`0x820661E8`). Lighting is per vertex:
+
+- Normal: the base normal and the three chest shape normals blended by `PosWeight`, like the
+  positions, then skinned with `BlendMtxNml1-3` into world space and normalised.
+- Ambient: `AmbientLightP1 + AmbientLightP2 * h`, h the normal's dot product with
+  `HemisphereMat`'s second column (its y when the matrix is the identity, as on most draws): a
+  hemisphere ambient, P2 added towards up and taken away towards down.
+- Directional lights, each under its `DirLightBool` (b5-b8): `max(0, n . -DirLightVec) *
+  DirLightCol`, in world space.
+- Point lights (b9-b12) and spots (b24-b27): towards `PointLightPos`, within its range (w),
+  times `1 / dot(PointLightAtt.xyz, (1, d, d^2))`, with a cone from `SpotLight` and `SpotRange`
+  (an arccosine by polynomial).
+- Specular: towards the camera (`CamPos` c16, a local viewer), per light
+  `max(0, n . normalize(v - L))^SpeqObjCol.w * DirLightCol` (point lights with their
+  attenuation), summed and times `SpeqObjCol.rgb`, added to the diffuse. No clamp.
+- The pixel shader (`0x820B3CC8`, the plainest with a shadow map) takes the texture times that
+  colour, darkened by the shadow map, then blends to the fog.
+
+No shader has a material colour constant, and the vertices carry none: the draw's colours
+(diffuse, ambient, specular, power at the draw's +0x20) must be folded into the light constants
+by the CPU. That fits the fourth light's colours, (0.7, 0.66, 0.5) and (0.35, 0.33, 0.25), one
+exactly half the other. How they are folded was not found: the register numbers 67 to 78 appear
+together only in a generic jump table of the D3D layer (`0x82836148`). It needs the per-draw
+constants read next to the draw's material, with the game running.
+
+The viewer now adds the hemisphere term (`SceneLights::ambient_up`, the sunset set's P2; the
+match sets were read without it), takes the specular colour as the light's own and the way to
+the camera instead of an infinite viewer. It still multiplies by the material's colours as for
+DOA2U, which may count them twice.
 
 `DirLightVec` is the way the light travels in Direct3D's camera space (z into the screen): the
 strongest light of each set comes down and away from the camera, lighting faces from the front
@@ -392,8 +426,8 @@ A draw's colours sit at the offset in its +0x20 (0x80 in all read): diffuse, amb
 (vec4 each), then the power (1, 0.5, (0.3, 0.2, 0.2), 15 on skin; heads vary, power 50 on some
 parts). Read at a fixed +0x70 at first, the heads' diffuse came out zero and the game lights
 looked far too dark, as the user saw. The viewer lights DOAX2 like DOA2U's materials with the
-three sets, ambient from `P1` (`P2` left out). "Game lights" in the Shading window switches to
-the viewer's plain shading. Not compared with the game.
+sets, plus the hemisphere ambient and the specular above. "Game lights" in the Shading window
+switches to the viewer's plain shading. Not compared with the game.
 
 ## Faces
 

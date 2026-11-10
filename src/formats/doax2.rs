@@ -1189,31 +1189,36 @@ pub fn hand_entry(pose: u16) -> usize {
     pose as usize + 1
 }
 
-/// DOAX2's light sets for the viewer, read from the running game while a match played: the
-/// three sets of the shaders' constants (`AmbientLightP1` c68, `DirLightVec` c71-74,
-/// `DirLightCol` c75-78), found together in the heap. Directions as stored, towards the light. The ambient is `AmbientLightP1`;
-/// `P2`, a second tone, is left out. Which set is which scene is not known.
+/// DOAX2's light sets for the viewer, read from the running game: the shaders' constants
+/// (`AmbientLightP1` c68, `AmbientLightP2` c69, `DirLightVec` c71-74, `DirLightCol` c75-78).
+/// The vertex shaders (decoded from the image, see the notes) light with
+/// `P1 + P2 * up + sum(max(0, n . -L) * colour)` plus a specular with the same colours, towards
+/// the camera's position. The match sets were read without `P2`, so theirs is zero. Which
+/// match set is which scene is not known.
 pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
-    let set = |ambient: [f32; 3], lights: [([f32; 3], [f32; 3]); 4]| crate::renderer::mesh::SceneLights {
+    let set = |ambient: [f32; 3], ambient_up: [f32; 3], lights: [([f32; 3], [f32; 3]); 4]| crate::renderer::mesh::SceneLights {
         ambient,
         // Directions as stored: the way the light travels in Direct3D's camera space (see
         // `set_lights_follow_camera`). The strongest comes down and away from the camera.
-        lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse.map(|c| c * 0.3))),
+        // The shaders' specular uses `DirLightCol` too.
+        lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse)),
+        ambient_up,
+        local_viewer: true,
     };
     vec![
-        ("Match, set 1".to_string(), set([0.33, 0.32, 0.3], [
+        ("Match, set 1".to_string(), set([0.33, 0.32, 0.3], [0.0; 3], [
             ([-0.031, -0.537, 0.843], [1.4, 1.15, 0.8]),
             ([0.532, 0.485, 0.694], [0.75, 0.7, 0.55]),
             ([-0.592, 0.407, -0.696], [0.71, 0.61, 0.65]),
             ([0.0, -1.0, 0.0], [0.0, 0.0, 0.0]),
         ])),
-        ("Match, set 2".to_string(), set([0.4, 0.36, 0.3], [
+        ("Match, set 2".to_string(), set([0.4, 0.36, 0.3], [0.0; 3], [
             ([0.02, -0.284, 0.959], [1.55, 1.15, 0.9]),
             ([0.001, -0.059, -0.998], [0.4, 0.5, 0.65]),
             ([-0.991, -0.079, -0.107], [0.8, 0.6, 0.4]),
             ([0.981, -0.179, 0.077], [0.7, 0.66, 0.5]),
         ])),
-        ("Match, set 3".to_string(), set([0.38, 0.38, 0.4], [
+        ("Match, set 3".to_string(), set([0.38, 0.38, 0.4], [0.0; 3], [
             ([-0.949, -0.296, 0.113], [1.45, 1.34, 1.3]),
             ([0.992, -0.038, -0.124], [0.7, 0.8, 0.95]),
             ([-0.025, -0.105, -0.994], [0.65, 0.6, 0.5]),
@@ -1222,7 +1227,7 @@ pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
         // Read from the GPU command buffers on 2026-11-10 (`tools/re/doax2_gpu_constants.py
         // lights`): the beach at sunset, on a deck chair in the shade. The fourth light changes
         // direction and colour per object; this is its most common value.
-        ("Beach at sunset, deck chair in the shade".to_string(), set([0.39, 0.32, 0.289], [
+        ("Beach at sunset, deck chair in the shade".to_string(), set([0.39, 0.32, 0.289], [-0.01, 0.0, 0.022], [
             ([0.549, -0.361, -0.753], [0.41, 0.3, 0.195]),
             ([-0.942, 0.334, 0.028], [0.05, 0.05, 0.1]),
             ([-0.079, -0.991, 0.104], [0.34, 0.33, 0.2]),

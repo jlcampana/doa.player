@@ -327,7 +327,7 @@ fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
                 let lights = match area.area {
                     15 => CLOUDY_LIGHTS,
                     19 => SNOWY_NIGHT_LIGHTS,
-                    _ => SceneLights { ambient: area.ambient, lights: area.lights },
+                    _ => SceneLights { ambient: area.ambient, lights: area.lights, ambient_up: [0.0; 3], local_viewer: false },
                 };
                 (area.name, lights)
             })
