@@ -639,7 +639,14 @@ max, +0x20 links, +0x24 first entry, +0x28 stride, +0x2C CAT bone, +0x30 factor.
 first: 15, 15, 30, 45, 60, 75 degrees over six links, factor 0.9. A link bent from the one before
 (the first from its rest direction turned by the bone) beyond its limit is turned back to it,
 and the child and every later entry move by the factor times the change. Applied in the viewer
-after the thread caps; not yet looked at on screen or against the game. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
+after the thread caps.
+
+Checked against the capture of Kasumi sitting up (`doax2_hair_kasumi_sit.npz`, all 66 threads of
+`vksAA`, type 1 with one limit each): on the second link, 70 percent of the states sit 0 to 2
+degrees over the limit and 18 percent below it, as a correction of 0.9 of the excess leaves
+them; over all links 3.8 percent of the states are more than 2 degrees over (up to 48), where
+collisions and the caps move the particles afterwards. By eye on Lei Fang and Kasumi the hair
+hangs as before; a small dark lock still shows in front of Lei Fang's shoulder. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
 from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
 rule. Not compared with the game in motion; the export does not carry the hair's motion.
 
