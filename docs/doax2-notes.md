@@ -191,7 +191,15 @@ down (2.3 cm). The declaration binds three, so the game picks one of each pair: 
 three axes. How DOAX2 drives them is not read. The viewer drives only up and down, with DOAX's
 vertical spring and weight on the chest bone: a positive value lowers the chest (DOAX's shape 1
 moves down 1.3 cm), a negative one raises it. Checked running: values from 0 to 0.91 in one of
-Tina's motions. The sideways and forward pairs stay at rest.
+Tina's motions. The sideways and forward pairs stay at rest. Export writes the up and down
+shapes as shape keys on the same spring.
+
+The skin shaders take the shapes' weights in `PosWeight` (c49) and, on the shaders with
+`BlendSup`, `PosWeight2` (c105), with how many shape streams are bound in the booleans
+`PosNumBool` (b13 to b15); from the shaders' constant tables in the image (for example at
+`0x820695E0` and `0x821F53F8`). The code that fills them was not found statically: searching for
+the register numbers lands in a generic table of the D3D layer (`0x82836440`). The next step is
+reading the constants or the character's spring state live, in a scene where Tina moves.
 
 ## Hands
 

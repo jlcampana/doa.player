@@ -1114,8 +1114,9 @@ mod tests {
         let names = ["mdTn00tn.xpr", "mdTn00tn.cat", "mdKs01tn.xpr", "mdTn00ht.xpr", "mdSun1tn.bin", "vtn00.xpr"];
         assert_eq!(costumes(names.into_iter(), "tn"), ["mdKs01tn", "mdTn00tn"]);
         assert_eq!(costumes(["mdTn00ls.xpr", "mdTn00he.xpr", "mdTn00tn.xpr"].into_iter(), "he"), ["mdTn00he", "mdTn00ls"]);
-        // A name that is not a character's own gives nothing.
-        assert!(costumes(names.into_iter(), "ht").is_empty());
+        // Hitomi (`ht`) wears her own suits; a code that is no character's gives nothing.
+        assert_eq!(costumes(names.into_iter(), "ht"), ["mdTn00ht"]);
+        assert!(costumes(names.into_iter(), "zz").is_empty());
     }
 
     #[test]

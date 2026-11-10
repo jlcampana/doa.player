@@ -484,6 +484,11 @@ fn load_from_arguments(app: &mut App) {
     let characters = if doax2 { &app.doax2_characters } else if doax { &app.doax_characters } else if doa2u { &app.doa2u_characters } else { &app.doa3_characters };
     let Some(index) = characters.iter().position(|c| c.display_name.eq_ignore_ascii_case(name)) else {
         log::warn!("Unknown character: {}", name);
+        // Without a costume an export has nothing to write, and its hidden window would wait.
+        if args.iter().any(|a| a == "--export") {
+            eprintln!("Export failed: unknown character {name}");
+            std::process::exit(1);
+        }
         return;
     };
     app.char_panel.selected_source = if doax2 { app::GameSource::Doax2 } else if doax { app::GameSource::Doax } else if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };

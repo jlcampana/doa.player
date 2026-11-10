@@ -5,8 +5,9 @@
 //! they are simulated at run time. DOA3 hand poses and faces are not exported either.
 //! Joint pieces bend by quaternion in the game and by weights here, so they differ slightly
 //! from the viewer away from the rest pose. Rigid pieces are exact.
-//! DOAX's chest spring is baked: its shape sets are shape keys, weighted per frame by the
-//! spring as the viewer steps it from rest at each motion's first frame.
+//! The chest spring is baked for every game: DOAX's shape sets, DOAX2's up and down shapes
+//! and DOA3's and DOA2U's chest groups are shape keys, weighted per frame by the spring as
+//! the viewer steps it from rest at each motion's first frame.
 
 use anyhow::{bail, Context, Result};
 use glam::{Mat3, Mat4, Quat, Vec3};
