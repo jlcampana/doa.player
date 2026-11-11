@@ -535,6 +535,59 @@ pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, usize, glam
     (nodes.len() == count).then_some(nodes)
 }
 
+// ─── Soft bodies ──────────────────────────────────────────────────────────────
+
+/// The CAT's soft body records: word 2 is the offset of a list of (kind in the top byte,
+/// offset from the list) ended by kind 0xFF. The kinds are DOA3's and DOA2U's: 1 chains (hair,
+/// ribbons), 2 cloth, 5 springs, 250 vertex copies and so on.
+pub fn soft_records(cat: &[u8]) -> Option<(usize, Vec<(u8, usize)>)> {
+    let base = be32(cat, 8)? as usize;
+    if base == 0 {
+        return Some((0, Vec::new()));
+    }
+    let mut records = Vec::new();
+    for k in 0..4096 {
+        let kind = *cat.get(base + 8 * k)?;
+        if kind == 0xFF {
+            return Some((base, records));
+        }
+        records.push((kind, be32(cat, base + 8 * k + 4)? as usize));
+    }
+    None
+}
+
+/// The chains of a model (kind 1), with each target's vertices numbered as its piece's: the
+/// file's words hold a vertex layout in the top byte and a byte offset in that layout below.
+/// Read by DOA3's parser, whose record this is field for field (on `kasAA`: 8 or 6 particles
+/// on bone 1, segment 0.017, gravity 0.007, pull 0.3, damping 0.8).
+pub fn chains(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_chains::SoftChain> {
+    let Some((base, records)) = soft_records(cat) else { return Vec::new() };
+    let offsets: Vec<usize> = records.iter().filter(|r| r.0 == 1).map(|r| r.1).collect();
+    let mut chains = super::doa3_chains::parse_chain_records_big_endian(cat, base, &offsets);
+    for chain in &mut chains {
+        for target in &mut chain.targets {
+            let layouts: Vec<(usize, usize)> = objects.get(target.object).map_or(Vec::new(), |o| {
+                let mut first = 0;
+                o.decls
+                    .iter()
+                    .map(|d| {
+                        let entry = (first, d.streams.first().map_or(32, |s| s.1.max(1)));
+                        first += d.vertex_count;
+                        entry
+                    })
+                    .collect()
+            });
+            for point in target.segments.iter_mut().flatten() {
+                for vertex in &mut point.vertices {
+                    let (layout, offset) = (*vertex >> 24, *vertex & 0xFF_FFFF);
+                    *vertex = layouts.get(layout).map_or(usize::MAX, |&(first, stride)| first + offset / stride);
+                }
+            }
+        }
+    }
+    chains
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +743,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Counts each model's soft body records by kind and how many of its chains DOA3's parser
+    /// reads, with the vertices they move.
+    #[test]
+    #[ignore]
+    fn chains_read() {
+        let (mut records, mut read, mut vertices, mut bad) = (0, 0, 0, 0);
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().map(str::to_string).collect();
+            for (index, name) in names.iter().enumerate() {
+                let Some(stem) = name.strip_suffix(".tpr") else { continue };
+                let (tpr, cat) = (afs.read_index(index).unwrap(), afs.read_index(index + 1).unwrap());
+                let xpr = doax2::Xpr2::parse(&tpr).unwrap();
+                let objects = doax2::objects(&xpr).unwrap();
+                let Some((_, list)) = soft_records(&cat) else { panic!("{stem}: soft list does not end") };
+                let wanted = list.iter().filter(|r| r.0 == 1).count();
+                let chains = chains(&cat, &objects);
+                let moved: Vec<usize> = chains.iter().flat_map(|c| c.targets.iter()).flat_map(|t| t.segments.iter().flatten().flat_map(|p| p.vertices.iter().copied())).collect();
+                let outside = chains
+                    .iter()
+                    .flat_map(|c| c.targets.iter())
+                    .map(|t| {
+                        let count = objects.get(t.object).map_or(0, doax2::Object::vertex_count);
+                        t.segments.iter().flatten().flat_map(|p| p.vertices.iter()).filter(|&&v| v >= count).count()
+                    })
+                    .sum::<usize>();
+                records += wanted;
+                read += chains.len();
+                vertices += moved.len();
+                bad += outside;
+                if wanted > 0 && (chains.len() < wanted || outside > 0) {
+                    println!("{stem}: {} of {wanted} chains read, {} vertices, {outside} outside their object", chains.len(), moved.len());
+                }
+            }
+        }
+        println!("{read} of {records} chains read, moving {vertices} vertices, {bad} outside their object");
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first

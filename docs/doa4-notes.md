@@ -162,9 +162,38 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   the other two light on both sides. Not understood: it stays rigid on the chest, logged when
   loaded.
 
-Missing: hair and cloth do not move; hands and faces have no shapes; pieces on bones the solve
+Missing: cloth, springs and the other soft body kinds do not move (hair chains do, see "Soft
+bodies"); hands and faces have no shapes; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
+
+## Soft bodies
+
+CAT word 2 is the offset of a list of (kind in the top byte, offset from the list), ended by
+kind 0xFF: DOA3's and DOA2U's section list, big-endian. Over the 160 models (139 have a list):
+kind 1 1478 records in 126 models, 2 177, 250 174, 5 168, 254 96, 0 43, 3 28, 15 12, 14 8, 7 4,
+251 4, 9 1.
+
+Kind 1 is DOA3's chain record field for field, with big-endian words: on `kasAA`, 8 or 6
+particles on bone 1, segment 0.017, gravity 0.007, pull 0.3, damping 0.8, the colliders at
++0x48, the target's head, points and vertex list at +0x4C, +0x50 and +0x54. One difference: a
+vertex word holds the layout in its top byte and a byte offset in that layout below (the low
+bit still says another follows), as the strides vary. DOA3's parser reads 1370 of the 1478 with
+its words swapped (`doa3_chains::parse_chain_records_big_endian`, `doa4::chains`), and every
+vertex it names is inside its object (ignored test `chains_read`). The 108 it refuses are not
+looked at (`bas00` to `bas03`, `hak10`, `hak11`, `cri04` lose all of theirs).
+
+In the viewer the chains run through DOA3's simulation on the solved bones, with no wind:
+ponytails and long hair hang and swing, and nothing tears (by eye on Kasumi, Kokoro, Helena and
+Ayane, 2026-11-11). Not compared with the game. Chains on bones the solve does not have, and
+those whose object is not drawn, are left out (8 of `kas00`'s 12 body chains). The colliders'
+bone numbers are taken as DOA3's nodes; DOA2U's limb slots are not applied.
+
+Kinds 2 (cloth), 5 (springs), 250 (vertex copies) and the rest are not read yet. DOA3's and
+DOA2U's readers are the place to start, by the same swap; nothing says their records match as
+kind 1's do.
+
+Word 3 is the offset of an `MPV` block, DOAX2's shape sets (faces and hands), not read here yet.
 
 ## In the viewer
 
