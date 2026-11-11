@@ -586,6 +586,19 @@ fn piece_vertex(objects: &[doax2::Object], object: usize, word: usize) -> usize 
     object.decls.get(layout).map_or(usize::MAX, |d| first + offset / d.streams.first().map_or(32, |s| s.1.max(1)))
 }
 
+/// The cloth sheets of a model (kind 2): skirts, flaps, sleeves and trouser legs. See
+/// `doa3_cloth::parse_cloth_records_doa4` for how the record differs from DOA2U's.
+pub fn cloth(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_cloth::SoftCloth> {
+    let Some((base, records)) = soft_records(cat) else { return Vec::new() };
+    let offsets: Vec<usize> = records.iter().filter(|r| r.0 == 2).map(|r| r.1).collect();
+    let mut sheets = super::doa3_cloth::parse_cloth_records_doa4(cat, base, &offsets);
+    for sheet in &mut sheets {
+        let object = sheet.object;
+        sheet.map_vertices(|word| piece_vertex(objects, object, word));
+    }
+    sheets
+}
+
 /// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
 /// record with big-endian words, 0x34 bytes.
 pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {
@@ -763,6 +776,7 @@ mod tests {
     fn chains_read() {
         let (mut records, mut read, mut vertices, mut bad) = (0, 0, 0, 0);
         let mut spring_totals = (0, 0, 0, 0);
+        let mut cloth_totals = (0, 0, 0, 0);
         for archive in COSTUME_ARCHIVES {
             let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
             let names: Vec<String> = afs.names().map(str::to_string).collect();
@@ -793,6 +807,16 @@ mod tests {
                 if springs.len() < wanted_springs || spring_outside > 0 {
                     println!("{stem}: {} of {wanted_springs} springs read, {spring_outside} vertices outside their object", springs.len());
                 }
+                let wanted_cloth = list.iter().filter(|r| r.0 == 2).count();
+                let sheets = cloth(&cat, &objects);
+                let cloth_outside = sheets.iter().map(|s| s.written_vertices().iter().filter(|&&v| v >= objects.get(s.object).map_or(0, doax2::Object::vertex_count)).count()).sum::<usize>();
+                cloth_totals.0 += wanted_cloth;
+                cloth_totals.1 += sheets.len();
+                cloth_totals.2 += sheets.iter().map(|s| s.written_vertices().len()).sum::<usize>();
+                cloth_totals.3 += cloth_outside;
+                if sheets.len() < wanted_cloth || cloth_outside > 0 {
+                    println!("{stem}: {} of {wanted_cloth} sheets read, {cloth_outside} vertices outside their object", sheets.len());
+                }
                 records += wanted;
                 read += chains.len();
                 vertices += moved.len();
@@ -804,6 +828,7 @@ mod tests {
         }
         println!("{read} of {records} chains read, moving {vertices} vertices, {bad} outside their object");
         println!("{} of {} springs read, moving {} vertices, {} outside their object", spring_totals.1, spring_totals.0, spring_totals.2, spring_totals.3);
+        println!("{} of {} sheets read, moving {} vertices, {} outside their object", cloth_totals.1, cloth_totals.0, cloth_totals.2, cloth_totals.3);
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first

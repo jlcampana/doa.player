@@ -162,8 +162,7 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   the other two light on both sides. Not understood: it stays rigid on the chest, logged when
   loaded.
 
-Missing: cloth and the other soft body kinds do not move (chains and springs do, see "Soft
-bodies"); hands and faces have no shapes; pieces on bones the solve
+Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); hands and faces have no shapes; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
 
@@ -199,13 +198,22 @@ bone, not in the solve's limb frames. So the simulations are given each solved b
 by its rest frame (`doa4::rest_frame`). With the solve's own frames the bodies on arms and legs
 flew apart (Zack's trouser legs, Eliot's sleeves); turned back they sit right, by eye.
 
-Kind 2 (cloth) is not DOA3's record unchanged, so it is not read yet. `kas00`'s two sheets
-start `01 01 02 00  00 01 05 06  FF 00 00 00`: mode 1, axis 1, bone 2 as in DOA3, then the
-object as a 16-bit number (1, the pelvis piece), 5 columns, 6 rows and 0xFF, where DOA3 has
-object, columns, rows and pivot a byte earlier (`aya01`: 21 columns of 6). Eleven floats follow
-from +0xC (0, 0.065, 0.02, 1.2, 0.45, 0, 0.01, 0.3, 0, 0.7, 0.05) where DOA3 has ten, and the
-pointers start at +0x38, four bytes later. Which float is the new one has to be settled against
-a DOA3 or DOA2U record before DOA3's cloth step can take these.
+Kind 2 (cloth) is DOA2U's record with big-endian words and two changes at its start:
+
+| DOA3, DOA2U | DOA4 |
+|---|---|
+| +4 object, +5 columns, +6 rows, +7 pivot | +4 object (16 bits), +6 columns, +7 rows, +8 pivot |
+| +8 flags, +0xC the floats, +0x34 the pointers | +0xC flags, +0x10 the floats, +0x38 the pointers |
+
+Kasumi's skirt flaps show it: DOA3's CAT entry 297 and DOA4's `kas00` hold the same ten floats
+(0.065, 0.02, 1.2, 0.45, 0, 0.01, 0.3, 0, 0.7, 0.05) for 5 columns of 6 rows on bone 2, with
+flags 0x14 there and 0x194 here, DOA2U's wider flags. Byte +3 is 1 in some records (0 in DOA3),
+not understood. `doa3_cloth::parse_cloth_records_doa4` lays each record out again in DOA2U's
+form and gives it to that parser: 167 of 177 sheets read, every vertex inside its object
+(`doa4::cloth`, same test). They run through DOA3's cloth step in the viewer: Kasumi's flaps
+and Gen Fu's robe hang and follow the legs without tearing (by eye, 2026-11-11). Not compared
+with the game. Not done: sheets rooted on vertices that another body writes (none in the
+costumes tried), and whether DOA2U's limb slots for colliders apply here.
 
 Kinds 250 (vertex copies) and the rest are not read yet. DOA3's and
 DOA2U's readers are the place to start, by the same swap; nothing says their records match as

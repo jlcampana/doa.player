@@ -473,6 +473,8 @@ struct Doa4Pose {
     chains: Vec<(SoftChain, Vec<Vec<(usize, usize)>>)>,
     /// Points on springs, each with the mesh pieces that draw its object and their nodes.
     springs: Vec<(SoftSprings, Vec<(usize, usize)>)>,
+    /// Cloth sheets, likewise.
+    cloth: Vec<(SoftCloth, Vec<(usize, usize)>)>,
     wind: Wind,
     /// Game frames already simulated.
     chain_frame: u64,
@@ -1187,7 +1189,7 @@ impl App {
         let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
         let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>)> {
+        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
             let (tpr, cat) = match &file.loose {
                 Some((tpr, cat)) => (std::fs::read(tpr)?, std::fs::read(cat)?),
@@ -1199,18 +1201,19 @@ impl App {
             let loaded = doa4::load(&tpr, &cat).with_context(|| stem.to_string())?;
             let chains = doa4::chains(&cat, &loaded.objects);
             let springs = doa4::springs(&cat, &loaded.objects);
-            Ok((loaded, doa4::has_head(&cat)?, chains, springs))
+            let cloth = doa4::cloth(&cat, &loaded.objects);
+            Ok((loaded, doa4::has_head(&cat)?, chains, springs, cloth))
         };
-        let (body, has_head, body_chains, body_springs) = read(&stem)?;
+        let (body, has_head, body_chains, body_springs, body_cloth) = read(&stem)?;
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
         let head_stem = (!has_head)
             .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
-        let (head, head_chains, head_springs) = match head_stem.as_deref().map(read).transpose()? {
-            Some((head, _, chains, springs)) => (Some(head), chains, springs),
-            None => (None, Vec::new(), Vec::new()),
+        let (head, head_chains, head_springs, head_cloth) = match head_stem.as_deref().map(read).transpose()? {
+            Some((head, _, chains, springs, cloth)) => (Some(head), chains, springs, cloth),
+            None => (None, Vec::new(), Vec::new(), Vec::new()),
         };
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
         // already at the body's place in others (Ayane's), so it is taken out.
@@ -1341,8 +1344,17 @@ impl App {
                         }
                     }
                 }
-                log::info!("DOA4 springs: {} in use", springs.len());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, wind: Wind::new(), chain_frame: 0 });
+                let mut cloth = Vec::new();
+                for (file, list) in [body_cloth, head_cloth].into_iter().enumerate() {
+                    for sheet in list {
+                        let drawn = drawn_objects.get(file).and_then(|d| d.get(&sheet.object)).cloned().unwrap_or_default();
+                        if doa4::solve_node(sheet.bone as u32) == Some(sheet.bone) && !drawn.is_empty() {
+                            cloth.push((sheet, drawn));
+                        }
+                    }
+                }
+                log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, wind: Wind::new(), chain_frame: 0 });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2517,6 +2529,9 @@ impl App {
                         for (spring, _) in &mut pose.springs {
                             spring.step(&bones, &pose.wind);
                         }
+                        for (sheet, _) in &mut pose.cloth {
+                            sheet.step(&bones, glam::Vec3::ZERO);
+                        }
                     }
                     pose.chain_frame = clock.max(1);
                     for (chain, targets) in &pose.chains {
@@ -2525,6 +2540,13 @@ impl App {
                                 let to_piece = (turn(chain.bone) * pose.pieces[node].1).inverse();
                                 self.mesh.set_rest_positions(piece, chain.vertex_positions(target, &bones).map(|(vertex, position)| (vertex, to_piece.transform_point3(position))));
                             }
+                        }
+                    }
+                    for (sheet, drawn) in &pose.cloth {
+                        let positions = sheet.vertex_positions(&bones);
+                        for &(piece, node) in drawn {
+                            let to_piece = (turn(sheet.bone) * pose.pieces[node].1).inverse();
+                            self.mesh.set_rest_positions(piece, positions.iter().map(|&(vertex, position)| (vertex, to_piece.transform_point3(position))));
                         }
                     }
                     for (spring, drawn) in &pose.springs {

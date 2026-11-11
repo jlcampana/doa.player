@@ -295,12 +295,42 @@ pub fn parse_cloth_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
             if cloth.flags & FLAG_VERTEX_ROOTS != 0 {
                 let list = at_pointer(cat, base, at, 0x50)?;
                 cloth.vertex_roots = (0..cloth.columns)
-                    .map(|c| read_u32(cat, list + c * 4).map(|v| (v != u32::MAX).then_some(v as usize / VERTEX_BYTES)))
+                    .map(|c| read_u32(cat, list + c * 4).map(|v| (v != u32::MAX).then_some(if super::doa3_chains::big_endian() { v as usize } else { v as usize / VERTEX_BYTES })))
                     .collect::<Option<_>>()?;
             }
             Some(cloth)
         })
         .collect()
+}
+
+/// DOA4's sheets. Its record is DOA2U's with big-endian words and two changes at the start:
+///
+/// | DOA3, DOA2U | DOA4 |
+/// |---|---|
+/// | +4 object, +5 columns, +6 rows, +7 pivot | +4 object (16 bits), +6 columns, +7 rows, +8 pivot |
+/// | +8 flags, +0xC the floats, +0x34 the pointers | +0xC flags, +0x10 the floats, +0x38 the pointers |
+///
+/// Kasumi's skirt flaps show it: DOA3's record 297 and DOA4's `kas00` hold the same ten floats
+/// (0.065, 0.02, 1.2, 0.45, 0, 0.01, 0.3, 0, 0.7, 0.05), 5 columns of 6 rows on bone 2, flags
+/// 0x14 there and 0x194 here. Each record is laid out again in DOA2U's form after the file's
+/// end and read by its parser; the lists it points to stay where they are. Vertices are left
+/// as the file's words, for `map_vertices`.
+pub fn parse_cloth_records_doa4(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftCloth> {
+    const TAIL: usize = 0x60;
+    let mut copy = cat.to_vec();
+    let mut moved = Vec::new();
+    for &offset in offsets {
+        let at = base + offset;
+        let Some(record) = cat.get(at..at + 0x10 + TAIL) else { continue };
+        // The object's high byte has nowhere to go; no model has 256 objects.
+        if record[4] != 0 {
+            continue;
+        }
+        moved.push(copy.len() - base);
+        copy.extend([record[0], record[1], record[2], record[3], record[5], record[6], record[7], record[8]]);
+        copy.extend(&record[0xC..0x10 + TAIL]);
+    }
+    super::doa3_chains::with_big_endian(|| parse_cloth_records(&copy, base, &moved))
 }
 
 fn at_pointer(cat: &[u8], base: usize, at: usize, offset: usize) -> Option<usize> {
@@ -315,8 +345,9 @@ fn floats(cat: &[u8], at: usize, count: usize) -> Option<Vec<f32>> {
 /// Whether a section found by scanning a DOA3 CAT looks like a real cloth record.
 fn plausible_record(cat: &[u8], at: usize) -> bool {
     let Some(header) = cat.get(at..at + 9) else { return false };
-    let (mode, axis, bone, object, columns, rows, flags) =
-        (header[0], header[1], header[2], header[4], header[5], header[6], header[8]);
+    let (mode, axis, bone, object, columns, rows) = (header[0], header[1], header[2], header[4], header[5], header[6]);
+    // The flags word's low byte, wherever the file's byte order puts it.
+    let Some(flags) = read_u32(cat, at + 8).map(|word| word as u8) else { return false };
     mode <= MAX_MODE
         && axis <= MAX_AXIS
         && bone <= MAX_BONE
@@ -328,8 +359,8 @@ fn plausible_record(cat: &[u8], at: usize) -> bool {
 
 fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftCloth> {
     let header = cat.get(at..at + 9)?;
-    let (mode, axis, bone, object, columns, rows, pivot, flags) =
-        (header[0], header[1], header[2], header[4], header[5], header[6], header[7], header[8]);
+    let (mode, axis, bone, object, columns, rows, pivot) = (header[0], header[1], header[2], header[4], header[5], header[6], header[7]);
+    let flags = read_u32(cat, at + 8)? as u8;
     if columns == 0 || rows == 0 {
         return None;
     }
@@ -491,6 +522,23 @@ impl SoftCloth {
             if let Some(position) = source.and_then(&vertex) {
                 *root = position;
             }
+        }
+    }
+
+    /// Renumbers the vertices the sheet writes and those its columns start on.
+    pub fn map_vertices(&mut self, map: impl Fn(usize) -> usize) {
+        match &mut self.vertices {
+            ClothVertices::Direct(lists) => lists.iter_mut().flatten().for_each(|v| *v = map(*v)),
+            ClothVertices::Offset(lists) => lists.iter_mut().flatten().flat_map(|p| p.vertices.iter_mut()).for_each(|v| *v = map(*v)),
+        }
+        self.vertex_roots.iter_mut().flatten().for_each(|v| *v = map(*v));
+    }
+
+    /// The vertices the sheet writes.
+    pub fn written_vertices(&self) -> Vec<usize> {
+        match &self.vertices {
+            ClothVertices::Direct(lists) => lists.iter().flatten().copied().collect(),
+            ClothVertices::Offset(lists) => lists.iter().flatten().flat_map(|p| p.vertices.iter().copied()).collect(),
         }
     }
 
