@@ -1155,7 +1155,10 @@ impl App {
         let head_node = body.slot_node(doa4::HEAD_BONE);
         let head_stem = (!has_head).then(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())).flatten();
         let head = head_stem.as_deref().map(read).transpose()?.map(|(head, _)| head);
-        let head_frame = head_node.map_or(glam::Mat4::IDENTITY, |node| glam::Mat4::from_translation(body.rest[node].w_axis.truncate()));
+        // The head file's own node for that bone is at the origin in some files (Kasumi's) and
+        // already at the body's place in others (Ayane's), so it is taken out.
+        let head_root = head.as_ref().and_then(|h| Some(h.rest[h.slot_node(doa4::HEAD_BONE)?])).unwrap_or(glam::Mat4::IDENTITY);
+        let head_frame = head_node.map_or(glam::Mat4::IDENTITY, |node| glam::Mat4::from_translation(body.rest[node].w_axis.truncate()) * head_root.inverse());
         let files: Vec<(&doax2::Loaded, glam::Mat4)> = std::iter::once((&body, glam::Mat4::IDENTITY)).chain(head.as_ref().map(|h| (h, head_frame))).collect();
 
         let floor = files

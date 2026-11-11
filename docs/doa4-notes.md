@@ -68,7 +68,9 @@ A costume with a head has a `90` draw on bone 1 (Zack, Tina). One without (Kasum
 `91` neck there, and the head is a separate file with a hairstyle: `kasAA` to `kasDA`, `leiAA` to
 `leiGA`, `lisAA` to `lisFA`... The head file's root is at the origin and its eyes at (±0.03,
 0.111, 0.077); the body's eye nodes are at the same offsets from its bone 1 node, so the head's
-root goes on that node. Which hairstyle goes with which costume is not known: the viewer takes
+root goes on that node. Some head files have that root at the origin (`kasAA`), others already at
+the body's place, (0, 0.468, -0.025) in `ayaAA`: the viewer takes the head file's own root out
+first (Ayane's head floated above her trunk before, the user's report). Which hairstyle goes with which costume is not known: the viewer takes
 the first.
 
 ## Roster
