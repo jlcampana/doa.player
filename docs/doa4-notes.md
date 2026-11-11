@@ -35,6 +35,18 @@ Node tree of `kas00` (70 nodes): two roots, the pelvis at the origin and the che
 0.005), each with its limbs as children; the same skeleton again twice more under nodes 0 and 1
 for the lower levels. The arms are out to the sides at rest.
 
+### Materials
+
+A draw's stages are (stage, kind, texture) as in DOAX2. Seen in DOA4: `(0, 0, t), (1, 1, none)` on
+simple draws; `(0, 1, a), (1, 1, b), (2, 6, c)` on most of a costume, where c is a normal map
+(mean colour (128, 128, 255)) and the viewer draws a alone; `(0, 3, none)` on one object of a
+head. Hair strands use the three-stage form with a pair of textures in either order, one pure
+white with the strands' shape in its alpha and one with the hair's colour (`hakAA`: 8 and 9).
+`doa4::load` joins such a pair into one texture; before that Kokoro's hair drew white (the
+user's report, 2026-11-11). What stage 1 is on the other draws (often one texture shared by a
+whole costume) is not known. The ignored test `costume_textures` writes a model's textures as
+PNGs to `target/captures/`.
+
 ## CAT
 
 The directory is DOAX2's (8-byte entries from the offset in word 1: `0x0100`, the kind shifted

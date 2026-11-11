@@ -239,7 +239,58 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
         .filter(|d| !is_loose(d) && (d.group.is_none() || d.group == first_group) && (d.condition.is_none() || d.condition == first_condition))
         .map(|d| doax2::Placed { slot: d.bone as u32, object: d.object, mark: None })
         .collect();
-    doax2::load_list(tpr, placed)
+    let mut loaded = doax2::load_list(tpr, placed)?;
+    join_mask_textures(&mut loaded);
+    Ok(loaded)
+}
+
+/// Hair strands come as two textures on stages 0 and 1, both of kind 1: one pure white whose
+/// alpha is the strands' shape, the other the hair's colour, in either order (Kokoro's `hakAA`:
+/// textures 8 and 9 on one draw, 9 and 8 on another). DOAX2's reader draws stage 0 alone, which
+/// left her hair white (the user's report). Here such a pair becomes one texture, the colour of
+/// one with both alphas, sampled over the same coordinates: whether stage 1 has coordinates of
+/// its own is not read.
+fn join_mask_textures(loaded: &mut doax2::Loaded) {
+    // A texture that is white all over.
+    let white: Vec<bool> = loaded.textures.iter().map(|t| !t.rgba.is_empty() && t.rgba.chunks_exact(4).all(|p| p[0] >= 250 && p[1] >= 250 && p[2] >= 250)).collect();
+    let mut joined: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+    for index in 0..loaded.pieces.len() {
+        let object = loaded.pieces[index].2.object;
+        let Some(draws) = loaded.objects.get(object).map(|o| o.draws.clone()) else { continue };
+        if draws.len() != loaded.pieces[index].0.materials.len() {
+            continue;
+        }
+        for (k, draw) in draws.iter().enumerate() {
+            let stage = |n: u32| draw.stages.iter().find(|s| s.0 == n && s.1 == 1).map(|s| s.2).filter(|&t| t < white.len());
+            let (Some(first), Some(second)) = (stage(0), stage(1)) else { continue };
+            let (mask, colour) = match (white[first], white[second]) {
+                (true, false) => (first, second),
+                (false, true) => (second, first),
+                _ => continue,
+            };
+            let texture = *joined.entry((mask, colour)).or_insert_with(|| {
+                let (m, c) = (&loaded.textures[mask], &loaded.textures[colour]);
+                let (width, height) = (m.width.max(c.width), m.height.max(c.height));
+                let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+                for y in 0..height {
+                    for x in 0..width {
+                        let at = |t: &crate::formats::model::ModelTexture| ((y * t.height / height) * t.width + x * t.width / width) as usize * 4;
+                        let (mp, cp) = (&m.rgba[at(m)..at(m) + 4], &c.rgba[at(c)..at(c) + 4]);
+                        rgba.extend([cp[0], cp[1], cp[2], (mp[3] as u32 * cp[3] as u32 / 255) as u8]);
+                    }
+                }
+                loaded.textures.push(crate::formats::model::ModelTexture { width, height, rgba });
+                loaded.textures.len() - 1
+            });
+            let see_through = loaded.textures[texture].rgba.chunks_exact(4).any(|p| p[3] < 250);
+            let material = &mut loaded.pieces[index].0.materials[k];
+            // Listed twice, as `doax2::load_list` marks draws blended by their texture's alpha.
+            material.textures = if see_through { vec![texture, texture] } else { vec![texture] };
+            if let Some(look) = &mut material.look {
+                look.alpha_from_texture = see_through;
+            }
+        }
+    }
 }
 
 // ─── Motions ──────────────────────────────────────────────────────────────────
@@ -534,6 +585,35 @@ mod tests {
             println!("{} for {}: {} pieces, {} vertices, own head {own_head}, lists {:?}", suit.stem, suit.code, loaded.pieces.len(), loaded.pieces.iter().map(|p| p.0.vertices.len()).sum::<usize>(), draw_lists(&cat).unwrap().iter().map(Vec::len).collect::<Vec<_>>());
         }
         println!("{} swimsuits", suits.len());
+    }
+
+    /// Writes a model's textures as `target/captures/doa4_<stem>_<n>.png` and prints their
+    /// sizes and how see-through they are. `DOA4_COSTUME` as in `costume_objects`.
+    #[test]
+    #[ignore]
+    fn costume_textures() {
+        let which = std::env::var("DOA4_COSTUME").unwrap_or("chrthree.afs hakAA".to_string());
+        let (archive, stem) = which.split_once(' ').unwrap();
+        let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+        let tpr = afs.read(&format!("{stem}.tpr")).unwrap();
+        let xpr = doax2::Xpr2::parse(&tpr).unwrap();
+        std::fs::create_dir_all("target/captures").unwrap();
+        for (k, texture) in doax2::textures(&xpr).iter().enumerate() {
+            let pixels = texture.rgba.chunks_exact(4);
+            let count = pixels.len().max(1) as f32;
+            let mean = pixels.clone().fold([0f32; 4], |mut sum, p| {
+                for c in 0..4 {
+                    sum[c] += p[c] as f32 / count;
+                }
+                sum
+            });
+            println!("texture {k}: {}x{}, mean colour {:.0?}", texture.width, texture.height, mean);
+            let file = std::fs::File::create(format!("target/captures/doa4_{stem}_{k}.png")).unwrap();
+            let mut encoder = png::Encoder::new(file, texture.width, texture.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.write_header().unwrap().write_image_data(&texture.rgba).unwrap();
+        }
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first
