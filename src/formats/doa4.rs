@@ -566,26 +566,37 @@ pub fn chains(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_chains::
     let mut chains = super::doa3_chains::parse_chain_records_big_endian(cat, base, &offsets);
     for chain in &mut chains {
         for target in &mut chain.targets {
-            let layouts: Vec<(usize, usize)> = objects.get(target.object).map_or(Vec::new(), |o| {
-                let mut first = 0;
-                o.decls
-                    .iter()
-                    .map(|d| {
-                        let entry = (first, d.streams.first().map_or(32, |s| s.1.max(1)));
-                        first += d.vertex_count;
-                        entry
-                    })
-                    .collect()
-            });
+            let object = target.object;
             for point in target.segments.iter_mut().flatten() {
                 for vertex in &mut point.vertices {
-                    let (layout, offset) = (*vertex >> 24, *vertex & 0xFF_FFFF);
-                    *vertex = layouts.get(layout).map_or(usize::MAX, |&(first, stride)| first + offset / stride);
+                    *vertex = piece_vertex(objects, object, *vertex);
                 }
             }
         }
     }
     chains
+}
+
+/// A soft body's vertex word as its piece's vertex: the layout in the top byte, a byte offset
+/// in that layout below. `usize::MAX` when the object has no such layout.
+fn piece_vertex(objects: &[doax2::Object], object: usize, word: usize) -> usize {
+    let (layout, offset) = (word >> 24, word & 0xFF_FFFF);
+    let Some(object) = objects.get(object) else { return usize::MAX };
+    let first: usize = object.decls.iter().take(layout).map(|d| d.vertex_count).sum();
+    object.decls.get(layout).map_or(usize::MAX, |d| first + offset / d.streams.first().map_or(32, |s| s.1.max(1)))
+}
+
+/// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
+/// record with big-endian words, 0x34 bytes.
+pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {
+    let Some((base, records)) = soft_records(cat) else { return Vec::new() };
+    let offsets: Vec<usize> = records.iter().filter(|r| r.0 == 5).map(|r| r.1).collect();
+    let mut springs = super::doa3_springs::parse_spring_records_big_endian(cat, base, &offsets);
+    for spring in &mut springs {
+        let object = spring.object;
+        spring.map_vertices(|word| piece_vertex(objects, object, word));
+    }
+    springs
 }
 
 #[cfg(test)]
@@ -751,6 +762,7 @@ mod tests {
     #[ignore]
     fn chains_read() {
         let (mut records, mut read, mut vertices, mut bad) = (0, 0, 0, 0);
+        let mut spring_totals = (0, 0, 0, 0);
         for archive in COSTUME_ARCHIVES {
             let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
             let names: Vec<String> = afs.names().map(str::to_string).collect();
@@ -771,6 +783,16 @@ mod tests {
                         t.segments.iter().flatten().flat_map(|p| p.vertices.iter()).filter(|&&v| v >= count).count()
                     })
                     .sum::<usize>();
+                let wanted_springs = list.iter().filter(|r| r.0 == 5).count();
+                let springs = springs(&cat, &objects);
+                let spring_outside = springs.iter().map(|s| s.vertices().filter(|&v| v >= objects.get(s.object).map_or(0, doax2::Object::vertex_count)).count()).sum::<usize>();
+                spring_totals.0 += wanted_springs;
+                spring_totals.1 += springs.len();
+                spring_totals.2 += springs.iter().map(|s| s.vertices().count()).sum::<usize>();
+                spring_totals.3 += spring_outside;
+                if springs.len() < wanted_springs || spring_outside > 0 {
+                    println!("{stem}: {} of {wanted_springs} springs read, {spring_outside} vertices outside their object", springs.len());
+                }
                 records += wanted;
                 read += chains.len();
                 vertices += moved.len();
@@ -781,6 +803,7 @@ mod tests {
             }
         }
         println!("{read} of {records} chains read, moving {vertices} vertices, {bad} outside their object");
+        println!("{} of {} springs read, moving {} vertices, {} outside their object", spring_totals.1, spring_totals.0, spring_totals.2, spring_totals.3);
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first

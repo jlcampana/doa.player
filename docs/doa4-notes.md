@@ -162,7 +162,7 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   the other two light on both sides. Not understood: it stays rigid on the chest, logged when
   loaded.
 
-Missing: cloth, springs and the other soft body kinds do not move (hair chains do, see "Soft
+Missing: cloth and the other soft body kinds do not move (chains and springs do, see "Soft
 bodies"); hands and faces have no shapes; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
@@ -189,7 +189,17 @@ Ayane, 2026-11-11). Not compared with the game. Chains on bones the solve does n
 those whose object is not drawn, are left out (8 of `kas00`'s 12 body chains). The colliders'
 bone numbers are taken as DOA3's nodes; DOA2U's limb slots are not applied.
 
-Kinds 2 (cloth), 5 (springs), 250 (vertex copies) and the rest are not read yet. DOA3's and
+Kind 5 is DOA3's spring record (0x34 bytes: bone, object, gravity, pull, damping, wind factor,
+stiffness, max distance, then the rest points, vertex lists and per-point distances), read the
+same way: 164 of 168, every vertex inside its object (`doa4::springs`, same test). They run
+through DOA3's spring step in the viewer.
+
+The soft bodies' points are in DOA4's bone frames, which keep the rest stance's axes on every
+bone, not in the solve's limb frames. So the simulations are given each solved bone turned back
+by its rest frame (`doa4::rest_frame`). With the solve's own frames the bodies on arms and legs
+flew apart (Zack's trouser legs, Eliot's sleeves); turned back they sit right, by eye.
+
+Kinds 2 (cloth), 250 (vertex copies) and the rest are not read yet. DOA3's and
 DOA2U's readers are the place to start, by the same swap; nothing says their records match as
 kind 1's do.
 

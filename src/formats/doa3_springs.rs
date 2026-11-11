@@ -51,12 +51,19 @@ pub fn parse_springs(cat: &[u8]) -> Vec<SoftSprings> {
         .collect()
 }
 
+/// DOA4's springs: the same records with big-endian words, at offsets from `base`. Vertices
+/// are left as the file's words, for `map_vertices`.
+pub fn parse_spring_records_big_endian(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftSprings> {
+    super::doa3_chains::with_big_endian(|| offsets.iter().filter_map(|&offset| parse_record(cat, base, base + offset)).collect())
+}
+
 fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftSprings> {
     let bone = *cat.get(at)?;
     if bone > MAX_BONE {
         return None;
     }
-    let object = u16::from_le_bytes([*cat.get(at + 2)?, *cat.get(at + 3)?]) as usize;
+    let object = [*cat.get(at + 2)?, *cat.get(at + 3)?];
+    let object = if super::doa3_chains::big_endian() { u16::from_be_bytes(object) } else { u16::from_le_bytes(object) } as usize;
     let pointer = |offset: usize| -> Option<Option<usize>> {
         let value = read_u32(cat, at + offset)? as usize;
         Some((value != 0).then_some(base + value))
@@ -146,6 +153,16 @@ impl SoftSprings {
             point.velocity = (position - old) * self.damping;
             point.stretch = position - place;
         }
+    }
+
+    /// Renumbers the vertices the points move.
+    pub fn map_vertices(&mut self, map: impl Fn(usize) -> usize) {
+        self.vertices.iter_mut().flatten().for_each(|vertex| *vertex = map(*vertex));
+    }
+
+    /// The vertices the points move.
+    pub fn vertices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.vertices.iter().flatten().copied()
     }
 
     /// Vertex positions in the bone's space.

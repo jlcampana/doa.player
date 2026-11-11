@@ -24,8 +24,22 @@ thread_local! {
     static BIG_ENDIAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-fn big_endian() -> bool {
+pub(super) fn big_endian() -> bool {
     BIG_ENDIAN.with(std::cell::Cell::get)
+}
+
+/// Runs a reader with big-endian words, for DOA4's CATs.
+pub(super) fn with_big_endian<T>(read: impl FnOnce() -> T) -> T {
+    BIG_ENDIAN.with(|flag| flag.set(true));
+    let out = read();
+    BIG_ENDIAN.with(|flag| flag.set(false));
+    out
+}
+
+/// A vertex from a list's word. DOA4's words also name a vertex layout and its strides vary,
+/// so they are kept whole there (without the low bit), for the caller to turn.
+pub(super) fn vertex_of(value: u32) -> usize {
+    if big_endian() { (value & !1) as usize } else { (value / VERTEX_STRIDE) as usize }
 }
 
 pub(super) fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
@@ -443,15 +457,13 @@ fn parse_target(cat: &[u8], base: usize, count: usize, head: u32, points: u32, o
             let mut vertices = Vec::new();
             if value != NO_VERTEX {
                 // The low bit marks that another vertex follows.
-                // DOA4's words also name a vertex layout and its strides vary, so they are
-                // kept whole there, for `parse_chain_records_big_endian`'s caller to turn.
-                let vertex = |value: u32| if big_endian() { (value & !1) as usize } else { (value / VERTEX_STRIDE) as usize };
                 while value & 1 != 0 {
+                    let vertex = vertex_of;
                     vertices.push(vertex(value & !1));
                     value = read_u32(cat, offset_at)?;
                     offset_at += 4;
                 }
-                vertices.push(vertex(value));
+                vertices.push(vertex_of(value));
             }
             points.push(ChainPoint { position, vertices });
         }
@@ -598,17 +610,16 @@ pub fn parse_chain_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
 /// of a target is left as the file's word, the layout in its top byte and a byte offset below.
 /// The colliders' bones are DOA3's nodes, as the draw lists' are.
 pub fn parse_chain_records_big_endian(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftChain> {
-    BIG_ENDIAN.with(|flag| flag.set(true));
-    let chains = offsets
-        .iter()
-        .filter_map(|&offset| {
-            let mut chain = parse_chain(cat, base, base + offset)?;
-            chain.wind_factor = Some(read_f32(cat, base + offset + 0x3C)?);
-            Some(chain)
-        })
-        .collect();
-    BIG_ENDIAN.with(|flag| flag.set(false));
-    chains
+    with_big_endian(|| {
+        offsets
+            .iter()
+            .filter_map(|&offset| {
+                let mut chain = parse_chain(cat, base, base + offset)?;
+                chain.wind_factor = Some(read_f32(cat, base + offset + 0x3C)?);
+                Some(chain)
+            })
+            .collect()
+    })
 }
 
 pub fn parse_chains(cat: &[u8]) -> Vec<SoftChain> {

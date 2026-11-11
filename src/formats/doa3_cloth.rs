@@ -448,11 +448,11 @@ fn next_vertices(cat: &[u8], at: &mut usize) -> Option<Option<Vec<usize>>> {
     let mut vertices = Vec::new();
     *at += 4;
     while value & 1 != 0 {
-        vertices.push(((value & !1) / VERTEX_STRIDE) as usize);
+        vertices.push(super::doa3_chains::vertex_of(value & !1));
         value = read_u32(cat, *at)?;
         *at += 4;
     }
-    vertices.push((value / VERTEX_STRIDE) as usize);
+    vertices.push(super::doa3_chains::vertex_of(value));
     Some(Some(vertices))
 }
 

@@ -471,6 +471,9 @@ struct Doa4Pose {
     /// Hair, ribbons and hanging pieces: each chain with, per target, the mesh pieces that
     /// draw its object and their nodes.
     chains: Vec<(SoftChain, Vec<Vec<(usize, usize)>>)>,
+    /// Points on springs, each with the mesh pieces that draw its object and their nodes.
+    springs: Vec<(SoftSprings, Vec<(usize, usize)>)>,
+    wind: Wind,
     /// Game frames already simulated.
     chain_frame: u64,
 }
@@ -1184,7 +1187,7 @@ impl App {
         let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
         let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>)> {
+        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
             let (tpr, cat) = match &file.loose {
                 Some((tpr, cat)) => (std::fs::read(tpr)?, std::fs::read(cat)?),
@@ -1195,18 +1198,19 @@ impl App {
             };
             let loaded = doa4::load(&tpr, &cat).with_context(|| stem.to_string())?;
             let chains = doa4::chains(&cat, &loaded.objects);
-            Ok((loaded, doa4::has_head(&cat)?, chains))
+            let springs = doa4::springs(&cat, &loaded.objects);
+            Ok((loaded, doa4::has_head(&cat)?, chains, springs))
         };
-        let (body, has_head, body_chains) = read(&stem)?;
+        let (body, has_head, body_chains, body_springs) = read(&stem)?;
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
         let head_stem = (!has_head)
             .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
-        let (head, head_chains) = match head_stem.as_deref().map(read).transpose()? {
-            Some((head, _, chains)) => (Some(head), chains),
-            None => (None, Vec::new()),
+        let (head, head_chains, head_springs) = match head_stem.as_deref().map(read).transpose()? {
+            Some((head, _, chains, springs)) => (Some(head), chains, springs),
+            None => (None, Vec::new(), Vec::new()),
         };
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
         // already at the body's place in others (Ayane's), so it is taken out.
@@ -1328,7 +1332,17 @@ impl App {
                         log::info!("DOA4 chains: {} of {total} in use in file {file}", chains.len() - before);
                     }
                 }
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, chain_frame: 0 });
+                let mut springs = Vec::new();
+                for (file, list) in [body_springs, head_springs].into_iter().enumerate() {
+                    for spring in list {
+                        let drawn = drawn_objects.get(file).and_then(|d| d.get(&spring.object)).cloned().unwrap_or_default();
+                        if doa4::solve_node(spring.bone as u32) == Some(spring.bone) && !drawn.is_empty() {
+                            springs.push((spring, drawn));
+                        }
+                    }
+                }
+                log::info!("DOA4 springs: {} in use", springs.len());
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, wind: Wind::new(), chain_frame: 0 });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2486,20 +2500,38 @@ impl App {
                     // Chains step at 60 Hz, holding the pose between frames, as for DOA3. A
                     // chain gives its vertices in its bone's space; each piece has its own place
                     // from that bone.
+                    //
+                    // The soft bodies' data is in DOA4's bone frames, which keep the rest
+                    // stance's axes, not in the solve's limb frames: each solved bone is turned
+                    // back by its rest frame for them. (Given the solve's own frames, Zack's
+                    // trouser legs and Eliot's sleeves flew apart.)
+                    let turn = |bone: usize| glam::Mat4::from_mat3(crate::formats::doa4::rest_frame(bone));
+                    let bones: Vec<glam::Mat4> = solved.iter().enumerate().map(|(bone, m)| *m * turn(bone).inverse()).collect();
                     let clock = self.game_clock as u64;
                     let steps = clock.saturating_sub(pose.chain_frame).clamp(u64::from(pose.chain_frame == 0), MAX_CHAIN_CATCH_UP);
                     for _ in 0..steps {
+                        pose.wind.step(0.0);
                         for (chain, _) in &mut pose.chains {
-                            chain.step(&solved, glam::Vec3::ZERO);
+                            chain.step(&bones, glam::Vec3::ZERO);
+                        }
+                        for (spring, _) in &mut pose.springs {
+                            spring.step(&bones, &pose.wind);
                         }
                     }
                     pose.chain_frame = clock.max(1);
                     for (chain, targets) in &pose.chains {
                         for (target, drawn) in chain.targets.iter().zip(targets) {
                             for &(piece, node) in drawn {
-                                let to_piece = pose.pieces[node].1.inverse();
-                                self.mesh.set_rest_positions(piece, chain.vertex_positions(target, &solved).map(|(vertex, position)| (vertex, to_piece.transform_point3(position))));
+                                let to_piece = (turn(chain.bone) * pose.pieces[node].1).inverse();
+                                self.mesh.set_rest_positions(piece, chain.vertex_positions(target, &bones).map(|(vertex, position)| (vertex, to_piece.transform_point3(position))));
                             }
+                        }
+                    }
+                    for (spring, drawn) in &pose.springs {
+                        let positions = spring.vertex_positions(&bones);
+                        for &(piece, node) in drawn {
+                            let to_piece = (turn(spring.bone) * pose.pieces[node].1).inverse();
+                            self.mesh.set_rest_positions(piece, positions.iter().map(|&(vertex, position)| (vertex, to_piece.transform_point3(position))));
                         }
                     }
                     let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|&(node, place)| solved[node] * place).collect();
