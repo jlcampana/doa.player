@@ -454,6 +454,22 @@ the position alone. Each head has two sets on object 0:
 No working buffer holds them in the running game (only the file's copies were found): the
 blend is done on the GPU, so the weights in use cannot be read from memory.
 
+A CPU blend of seven shapes exists in the code, though (read 2026-11-10, not run against the
+game): the second half of `0x824969F0`, called on a `CLOTH_DATA` whose +0x58 is set (0 in the
+files, so filled at run time). `[+0x58]+0x24` points to a record with seven arrays of 12-byte
+positions at +0x1C to +0x34 (the mouth set has seven shapes: base, A, I, U, E, O, smile), the
+vertex list at +0x18 (ended by -1, a set top bit starting each group, as in the `MPV` lists)
+and the layouts at +0xC. Per group, with x the first array's x:
+
+    left  = clamp((x + 0.03) / 0.06, 0, 1)      right = clamp((0.03 - x) / 0.06, 0, 1)
+    vertex = left * sum(wl[i] * shape[i]) + right * sum(wr[i] * shape[i])
+
+`wl` and `wr` are two arrays of seven floats, pointed to by the owner's +0xD0 and +0xD4 (the
+owner is the cloth's +0x4C). So each half of the face has its own weights, with a soft seam 6 cm
+wide. Whoever fills those two arrays is the mouth's (or the eyes') trigger: the next thing to
+read for facial animation. It also means the "no working buffer" above may only be true of the
+scenes looked at.
+
 Blinks: the scripts' op 22 comes every 20 to 30 frames, mostly with 2 or 3, which the viewer
 takes as a blink to that eye entry: shut over 3 frames, held 2, open over 4 (`blink_weight`,
 timing chosen, not read). Checked by eye on Tina's motion 77, shut at frame 10 and open at 30.
@@ -541,7 +557,10 @@ owner). `P[x]` below is the working `PROPERTY` at offset x from its tag.
    length times P[0x48] (1.125), root first, moving the child only (masked by +0x40). That is
    the 12 to 15 percent stretch seen near the root. Types 2 and 5 call `0x82498EE0`, 3 and 4
    `0x824988D0`, and every thread first calls `0x824988D0`.
-7. `0x824970D8` and `0x82497450` then write the vertices.
+7. `0x824970D8` places the `FIX_GRID` particles (each entry's position through its bone's matrix,
+   into the particle's state) and `0x82497450` runs `0x8249A100` over every particle; neither
+   writes vertices, as first noted here. The vertices are written by `0x824974F8` (see "Who
+   writes the hair's vertices").
 
 ### Checked against the live states
 
@@ -646,10 +665,39 @@ Checked against the capture of Kasumi sitting up (`doax2_hair_kasumi_sit.npz`, a
 degrees over the limit and 18 percent below it, as a correction of 0.9 of the excess leaves
 them; over all links 3.8 percent of the states are more than 2 degrees over (up to 48), where
 collisions and the caps move the particles afterwards. By eye on Lei Fang and Kasumi the hair
-hangs as before; a small dark lock still shows in front of Lei Fang's shoulder. The hair's other layout 2 vertices (1795 on Lei Fang's `AA`, up to 11 cm
-from a particle) follow their nearest particle at rest with a fixed offset, the viewer's own
-rule. Not compared with the game in motion; the export does not carry the hair's motion.
+hangs as before; a small dark lock still shows in front of Lei Fang's shoulder. The hair's
+other vertices stay with the head (see below). Not compared with the game in motion; the
+export does not carry the hair's motion.
 
-Other vertices of layout 2 (2844 to 3367 on `vksAA`) also move but are not particles. The head
-CAT has blocks tagged 0x06010001 from 0x1680 (two values 0.3 and 0.8, a point behind the head,
-offsets) that may drive them. Not decoded.
+### Who writes the hair's vertices (2026-11-10)
+
+`0x824974F8` (r3 the `CLOTH_DATA`, a matrix in r6 to r10) is the only writer of the particles'
+vertices: it walks the `GRID_WRITE` stream (a chain through +0x28, 0 in every file looked at),
+and for each vertex after a `0x80000000 | particle` word stores a matrix times the state's
+position (+0x00) and normal (+0x20) into the locked vertex buffer of its layout (the normal
+packed or as floats, by layout). So the buffers hold head-space positions; a search of guest
+memory for the particles' world positions finds only the states and their mirror at
+`0xD8...`.
+
+The rest of the hair is not written by anything. The ignored test `layout_two_writers` lists,
+per head, who writes each vertex and how the triangles mix. Layout 2 is a vertex format
+(stride 24), not "the hair": Tina's head, with no cloth, has 2126 vertices in it, 1008 of them
+in face shape lists. On the hair materials of `vksAA`, `vksAB` and `vleAA`:
+
+- Triangles are all particles (1048 on `vksAA`'s main material), none (1364), or mixed (56).
+- In every mixed triangle the particle corners are fixed particles (row 0): no free particle
+  shares a triangle with a vertex that is not a particle.
+- The particles reach 30 to 38 cm below the head's origin; the other vertices stay above
+  y 0.02 (scalp and fringe).
+
+So the hair's other vertices are rigid with the head, joined to the locks only at their fixed
+roots. The viewer had them follow their nearest particle (up to 11 cm away), which is now
+removed. `vksAA` also has 14 small layout 2 materials with no particles (vertices 2650 to 3367,
+56 to 84 triangles each); an early note said vertices 2844 to 3367 move in the game, which is
+not explained: no list found so far names them. The head CAT's blocks tagged 0x06010001 from
+0x1680 (two values 0.3 and 0.8, a point behind the head, offsets) are still not decoded and may
+be theirs.
+
+`0x82496F88` and the start of `0x824969F0` use `FIX_GRID`'s own list (+0x28, a word per entry,
+-1 for none; only when +0x10 is 2 or more, +0x14 is 0x30 and +0x20 has bit 0): entries without
+bit 0 at +0x18 copy their position to a vertex, or read it back from one.

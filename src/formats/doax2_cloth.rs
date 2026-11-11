@@ -777,6 +777,7 @@ fn one_sided(x: &mut [Vec3], locked: &[bool], thread: &Thread, cap: f32) {
 mod tests {
     use super::*;
     use crate::formats::doax::LazyArchive;
+    use crate::formats::doax2;
 
     /// Every head with cloth reads, particles match their written vertices' layout, edges
     /// match the particles' distances, and fixed particles are row 0.
@@ -816,6 +817,130 @@ mod tests {
             }
         }
         assert!(with_cloth >= 14);
+    }
+
+    /// Who writes each vertex of a head's layout 2: the cloths' `GRID_WRITE`, the face shape
+    /// sets, both or nothing. `DOAX2_HEAD` names the head (default `vksAA`).
+    #[test]
+    #[ignore]
+    fn layout_two_writers() {
+        let head = std::env::var("DOAX2_HEAD").unwrap_or("vksAA".to_string());
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let cat = chr.read(&format!("{head}.cat")).unwrap();
+        let tpr = chr.read(&format!("{head}.tpr")).unwrap();
+        let xpr = doax2::Xpr2::parse(&tpr).unwrap();
+        let objects = doax2::objects(&xpr).unwrap();
+        let decls = &objects[0].decls;
+        let firsts: Vec<usize> = decls.iter().scan(0, |first, d| { let at = *first; *first += d.vertex_count; Some(at) }).collect();
+        let total: usize = decls.iter().map(|d| d.vertex_count).sum();
+        let mut particle = vec![false; total];
+        // The row of the particle that writes each vertex, and whether it is fixed.
+        let mut rows: Vec<Option<(u32, bool)>> = vec![None; total];
+        for cloth in read(&cat).unwrap() {
+            for &(k, layout, offset) in &cloth.writes {
+                let v = firsts[layout as usize] + offset / decls[layout as usize].streams[0].1;
+                particle[v] = true;
+                rows[v] = Some((cloth.rows[k], cloth.fixed[k]));
+            }
+        }
+        let start = u32::from_be_bytes(cat[12..16].try_into().unwrap()) as usize;
+        let mut face = vec![false; total];
+        for set in doax2::hand_poses(&cat[start..], &objects).unwrap() {
+            if set.object == 0 {
+                set.groups.iter().flatten().for_each(|&v| face[v] = true);
+            }
+        }
+        for (k, d) in decls.iter().enumerate() {
+            let range = firsts[k]..firsts[k] + d.vertex_count;
+            let count = |f: &dyn Fn(usize) -> bool| range.clone().filter(|&v| f(v)).count();
+            let neither: Vec<usize> = range.clone().filter(|&v| !particle[v] && !face[v]).map(|v| v - firsts[k]).collect();
+            println!(
+                "{head} layout {k}: {} vertices, {} particles, {} face, {} both, {} neither ({:?} to {:?})",
+                d.vertex_count,
+                count(&|v| particle[v]),
+                count(&|v| face[v]),
+                count(&|v| particle[v] && face[v]),
+                neither.len(),
+                neither.first(),
+                neither.last()
+            );
+        }
+        // Per material: triangles whose corners are all particles, some or none, and the
+        // connected groups of non-particle vertices by whether they touch a particle.
+        let piece = doax2::object_piece(&xpr, &objects[0]).unwrap();
+        let mut parent: Vec<usize> = (0..total).collect();
+        fn root(parent: &mut [usize], mut v: usize) -> usize {
+            while parent[v] != v {
+                parent[v] = parent[parent[v]];
+                v = parent[v];
+            }
+            v
+        }
+        // Vertices at the same place count as one, as seams duplicate them.
+        let mut seen: std::collections::HashMap<[u32; 3], usize> = std::collections::HashMap::new();
+        for (v, vertex) in piece.vertices.iter().enumerate() {
+            let other = *seen.entry(vertex.position.map(f32::to_bits)).or_insert(v);
+            let (a, b) = (root(&mut parent, v), root(&mut parent, other));
+            parent[a] = b;
+        }
+        for (m, material) in piece.materials.iter().enumerate() {
+            let (mut all, mut mixed, mut none) = (0, 0, 0);
+            // In mixed triangles: particle corners that are fixed, and the deepest row of the rest.
+            let (mut fixed_corners, mut free_corners, mut deepest) = (0, 0, 0);
+            for t in material.indices.chunks(3) {
+                match t.iter().filter(|&&v| particle[v as usize]).count() {
+                    3 => all += 1,
+                    0 => none += 1,
+                    _ => {
+                        mixed += 1;
+                        for &v in t {
+                            match rows[v as usize] {
+                                Some((_, true)) => fixed_corners += 1,
+                                Some((row, false)) => {
+                                    free_corners += 1;
+                                    deepest = deepest.max(row);
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                }
+                let a = root(&mut parent, t[0] as usize);
+                for &v in &t[1..] {
+                    let b = root(&mut parent, v as usize);
+                    parent[b] = a;
+                }
+            }
+            let layout = firsts.iter().rposition(|&f| f <= material.indices[0] as usize).unwrap();
+            if layout == 2 {
+                let (low, high) = material.indices.iter().fold((u32::MAX, 0), |(l, h), &v| (l.min(v), h.max(v)));
+                println!(
+                    "  material {m} (vertices {} to {}): {all} triangles of particles, {mixed} mixed ({fixed_corners} fixed corners, {free_corners} free down to row {deepest}), {none} without",
+                    low as usize - firsts[2],
+                    high as usize - firsts[2]
+                );
+                // How far down each kind reaches, in the head's space.
+                let lowest = |want: bool| material.indices.iter().filter(|&&v| particle[v as usize] == want).map(|&v| piece.vertices[v as usize].position[1]).fold(f32::MAX, f32::min);
+                if all + mixed > 0 {
+                    println!("    lowest particle y {:.3}, lowest other vertex y {:.3}", lowest(true), lowest(false));
+                }
+            }
+        }
+        let mut groups: std::collections::HashMap<usize, (usize, usize, usize)> = std::collections::HashMap::new();
+        for v in firsts[2]..total {
+            let entry = groups.entry(root(&mut parent, v)).or_default();
+            if particle[v] { entry.0 += 1 } else if face[v] { entry.1 += 1 } else { entry.2 += 1 }
+        }
+        let with = groups.values().filter(|g| g.0 > 0);
+        let without = groups.values().filter(|g| g.0 == 0);
+        println!(
+            "  layout 2 groups with particles: {}, holding {} other vertices; without: {}, holding {} ({} face)",
+            with.clone().count(),
+            with.map(|g| g.1 + g.2).sum::<usize>(),
+            without.clone().count(),
+            without.clone().map(|g| g.1 + g.2).sum::<usize>(),
+            without.map(|g| g.1).sum::<usize>()
+        );
     }
 
     /// A hanging cloth stays near its rest length and does not fall through: stepping Lei

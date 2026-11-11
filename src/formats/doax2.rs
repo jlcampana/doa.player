@@ -1631,6 +1631,32 @@ mod tests {
         assert!(exact * 4 >= total * 3, "{exact} of {total}");
     }
 
+    /// Writes a head's vertex layouts for finding them in the running game: per layout of
+    /// object 0, a line `head layout stride count size` and the file's whole buffer as
+    /// `target/captures/doax2_<head>_layout<k>.bin`. `DOAX2_HEAD` names the head (default
+    /// `vksAA`).
+    #[test]
+    #[ignore]
+    fn head_layout_buffers() {
+        let head = std::env::var("DOAX2_HEAD").unwrap_or("vksAA".to_string());
+        let chr = LazyArchive::open("assets/doax2/chr.afs").unwrap();
+        let tpr = chr.read(&format!("{head}.tpr")).unwrap();
+        let xpr = Xpr2::parse(&tpr).unwrap();
+        let objects = objects(&xpr).unwrap();
+        let vbufs: Vec<usize> = xpr.of_kind(b"VBUF").collect();
+        std::fs::create_dir_all("target/captures").unwrap();
+        for (o, object) in objects.iter().enumerate() {
+            for (k, decl) in object.decls.iter().enumerate() {
+                let (buffer, stride) = decl.streams[0];
+                let (at, size) = xpr.buffer(vbufs[buffer], true).unwrap();
+                println!("{head} object {o} layout {k} stride {stride} count {} size {size} draws {}", decl.vertex_count, object.draws.iter().filter(|d| d.decl == k).count());
+                if o == 0 {
+                    std::fs::write(format!("target/captures/doax2_{head}_layout{k}.bin"), &tpr[at..at + size]).unwrap();
+                }
+            }
+        }
+    }
+
     /// Prints the chest shapes' declaration elements and how the six shapes sit around the
     /// base on Tina's body, to read the skin shaders' `PosWeight` against.
     #[test]

@@ -456,9 +456,6 @@ struct Doax2Cloth {
     sim: crate::formats::doax2_cloth::ClothSim,
     node: usize,
     targets: Vec<(usize, Vec<(usize, usize)>)>,
-    /// Per mesh piece, (vertex, particle, offset from it at rest) for hair vertices that are
-    /// not particles.
-    followers: Vec<(usize, Vec<(usize, usize, glam::Vec3)>)>,
 }
 
 struct Doax2Pose {
@@ -994,55 +991,12 @@ impl App {
                 }
                 let node = node?;
                 log::info!("DOAX2 hair {}: {} particles on {} pieces", cloth.name, cloth.particles.len(), targets.len());
-                Some(Doax2Cloth { sim: crate::formats::doax2_cloth::ClothSim::new(cloth), node, targets, followers: Vec::new() })
+                Some(Doax2Cloth { sim: crate::formats::doax2_cloth::ClothSim::new(cloth), node, targets })
             })
             .collect();
-        // The rest of the hair layout (layout 2) moves in the game too but is not particles;
-        // what drives it is not read. Here each such vertex follows its nearest particle at
-        // rest, keeping its offset.
-        let mut cloths = cloths;
-        for &(object, drawn_index) in &head_objects {
-            let Some(object) = files[1].objects.get(object as usize) else { continue };
-            if object.decls.len() < 3 || drawn[drawn_index].multi.is_some() {
-                continue;
-            }
-            let first: usize = object.decls[..2].iter().map(|d| d.vertex_count).sum();
-            let range = first..first + object.decls[2].vertex_count;
-            let written: std::collections::HashSet<usize> =
-                cloths.iter().flat_map(|c| c.targets.iter().filter(|(p, _)| *p == drawn_index).flat_map(|(_, pairs)| pairs.iter().map(|&(v, _)| v))).collect();
-            if written.is_empty() {
-                continue;
-            }
-            let outside = written.iter().filter(|v| !range.contains(v)).count();
-            if outside > 0 {
-                log::warn!("DOAX2 hair: {outside} particle vertices outside layout 2 ({range:?})");
-            }
-            let mut followers: Vec<Vec<(usize, usize, glam::Vec3)>> = vec![Vec::new(); cloths.len()];
-            let mut farthest = 0.0f32;
-            for v in range.clone().filter(|v| !written.contains(v)) {
-                let Some(vertex) = drawn[drawn_index].piece.vertices.get(v) else { continue };
-                let at = glam::Vec3::from(vertex.position);
-                let nearest = cloths
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(c, cloth)| cloth.sim.cloth.particles.iter().enumerate().map(move |(k, p)| (c, k, p.distance_squared(at))))
-                    .min_by(|a, b| a.2.total_cmp(&b.2));
-                if let Some((c, k, d2)) = nearest {
-                    farthest = farthest.max(d2.sqrt());
-                    followers[c].push((v, k, at - cloths[c].sim.cloth.particles[k]));
-                }
-            }
-            log::info!("DOAX2 hair: {} layout 2 vertices follow a particle, at most {farthest:.3} m away", followers.iter().map(Vec::len).sum::<usize>());
-            for (c, list) in followers.into_iter().enumerate() {
-                if list.is_empty() {
-                    continue;
-                }
-                if let Some(copy) = blended_copy[drawn_index] {
-                    cloths[c].followers.push((copy, list.clone()));
-                }
-                cloths[c].followers.push((drawn_index, list));
-            }
-        }
+        // The rest of the hair is not particles and nothing in the game writes it: `GRID_WRITE`
+        // is the only writer (`0x824974F8`), and every particle that shares a triangle with
+        // another vertex is a fixed one (test `layout_two_writers`). It stays with the head.
         let pose_pieces = pose_nodes;
         // Hands: the pose file for holidays, the scripts' events. Hand k of the scripts is taken
         // to be the file's k-th block; not checked.
@@ -2276,10 +2230,6 @@ impl App {
                             for (piece, pairs) in &cloth.targets {
                                 let sim = &cloth.sim;
                                 self.mesh.set_rest_positions(*piece, pairs.iter().map(|&(v, particle)| (v, to_piece.transform_point3(sim.position[particle]))));
-                            }
-                            for (piece, list) in &cloth.followers {
-                                let sim = &cloth.sim;
-                                self.mesh.set_rest_positions(*piece, list.iter().map(|&(v, particle, offset)| (v, to_piece.transform_point3(sim.position[particle]) + offset)));
                             }
                         }
                     }
