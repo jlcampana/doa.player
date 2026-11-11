@@ -180,8 +180,11 @@ particles on bone 1, segment 0.017, gravity 0.007, pull 0.3, damping 0.8, the co
 vertex word holds the layout in its top byte and a byte offset in that layout below (the low
 bit still says another follows), as the strides vary. DOA3's parser reads 1370 of the 1478 with
 its words swapped (`doa3_chains::parse_chain_records_big_endian`, `doa4::chains`), and every
-vertex it names is inside its object (ignored test `chains_read`). The 108 it refuses are not
-looked at (`bas00` to `bas03`, `hak10`, `hak11`, `cri04` lose all of theirs).
+vertex it names is inside its object (ignored test `chains_read`). The 108 it refuses are all
+of one sort: their target's head is an object number (`00 22`, `10 24`...) instead of 0xFFFE or
+0xFFFF, the chains that place whole objects on their particles rather than write vertices
+(`sub_0003AA20` in DOA3, which the viewer does not do for DOA3 either): Bass's chains, Brad
+Wong's `bra01`, La Mariposa's `lis01` and others hang rigid until that is written.
 
 In the viewer the chains run through DOA3's simulation on the solved bones, with no wind:
 ponytails and long hair hang and swing, and nothing tears (by eye on Kasumi, Kokoro, Helena and
