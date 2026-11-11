@@ -31,7 +31,7 @@ Bone offsets are 24 rows of 16 bytes per table, tables 0x180 apart from `0x2CFD5
 | 12, 13, 9, 22 | 2, 12, 13, 9 | 8, 9, 5, 18 |
 | 17, 21 | 1, 1 | 13, 17 |
 
-Tables by character, live (2026-11-11, a volleyball demo of four girls, 3500 samples, `doax_pose_matches_capture` with `doax_tracks_match_capture` naming each one's motion file): Kasumi 1, Helena 2, Tina 0, Lisa 6. Each fits her table in over 98 percent of the samples. The viewer had Kasumi on 4 and Ayane on 1; Ayane is now on 4 by elimination, not measured, and Hitomi 5, Lei Fang 3 and Christie 7 are still inferred from piece sizes.
+Tables by character, live (2026-11-11, a volleyball demo of four girls, 3500 samples, `doax_pose_matches_capture` with `doax_tracks_match_capture` naming each one's motion file): Kasumi 1, Helena 2, Tina 0, Lisa 6. Each fits her table in over 98 percent of the samples. The viewer had Kasumi on 4 and Ayane on 1. A second demo the same day (480 samples) gave Ayane 4 and Hitomi 5, each named by her own motion file, Lisa 6 again, and table 3 for the fourth girl, who played only shared motions: the user saw Lei Fang on screen (and named Kasumi where the motion file says Hitomi). Christie's 7 is what is left, not measured.
 
 Where two rows hold the same value, the row is taken by symmetry, not measured. Bones 24 to 31 sit on 4, 10, 8, 14, 5, 11, 8, 14 and turn with them, so they look like twists. Bone 15 sits on the ground under the hips.
 
@@ -59,7 +59,7 @@ Kasumi's DOAX character code is `ks` (confirmed by successful compilation).
 
 Not done:
 - Add support for the 3 remaining DOAX characters.
-- Bone-offset tables: measured for Kasumi, Helena, Tina and Lisa (see "Skeleton"); Ayane, Hitomi, Lei Fang and Christie still need a scene with them on screen.
+- Bone-offset tables: measured for all but Christie (see "Skeleton"), who needs a scene with her on screen.
 - Morphs, soft bodies, `.itm` items, suits' objects not in their list, the second body file (`vtn01`), export. Nothing has been compared with the game's picture.
 
 ## Chest spring
