@@ -14,6 +14,70 @@ pub fn game_dir() -> std::path::PathBuf {
 
 use anyhow::{bail, Context, Result};
 
+/// The characters by the three letters of their files, with the names they are taken to be.
+/// Inferred from the series' file names and the costume counts, not from the game's tables:
+/// `hak` (`hakyo` in `anm.afs`) as Kokoro, whose style is bajiquan, and `kor` as Hitomi, as
+/// `koryu` is in DOA2U. `rtm` is not identified.
+pub const ROSTER: [(&str, &str); 24] = [
+    ("kas", "Kasumi"),
+    ("aya", "Ayane"),
+    ("ryu", "Ryu Hayabusa"),
+    ("hyt", "Hayate"),
+    ("ein", "Ein"),
+    ("hel", "Helena Douglas"),
+    ("hak", "Kokoro"),
+    ("kor", "Hitomi"),
+    ("lei", "Lei Fang"),
+    ("tin", "Tina Armstrong"),
+    ("lis", "La Mariposa"),
+    ("cri", "Christie"),
+    ("boy", "Eliot"),
+    ("jan", "Jann Lee"),
+    ("zac", "Zack"),
+    ("bas", "Bass Armstrong"),
+    ("bay", "Bayman"),
+    ("leo", "Leon"),
+    ("bra", "Brad Wong"),
+    ("gen", "Gen Fu"),
+    ("tng", "Tengu"),
+    ("alp", "Alpha-152"),
+    ("spa", "Spartan-458"),
+    ("rtm", "rtm"),
+];
+
+/// A model in the costume archives: its name without `.tpr`, the archive and the entry of its
+/// `.tpr` (its `.cat` is the next entry).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelFile {
+    pub stem: String,
+    pub archive: usize,
+    pub entry: usize,
+}
+
+/// Every model of the costume archives, from their entry names (`names[archive][entry]`).
+/// Names repeat (`leiCA` seven times); each is listed once, its first entry.
+pub fn model_files(names: &[Vec<String>]) -> Vec<ModelFile> {
+    let mut files: Vec<ModelFile> = Vec::new();
+    for (archive, names) in names.iter().enumerate() {
+        for (entry, name) in names.iter().enumerate() {
+            let Some(stem) = name.strip_suffix(".tpr") else { continue };
+            if names.get(entry + 1).is_some_and(|next| next.ends_with(".cat")) && !files.iter().any(|f| f.stem == stem) {
+                files.push(ModelFile { stem: stem.to_string(), archive, entry });
+            }
+        }
+    }
+    files
+}
+
+/// Whether a model is a costume (`kas00`) or a head with a hairstyle (`kasAA`), which the
+/// costumes of some characters lack: Kasumi's `kas00` draws nothing on bone 1.
+pub fn is_costume(stem: &str) -> bool {
+    stem.len() == 5 && stem[3..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The bone of the head in the draw lists.
+pub const HEAD_BONE: u32 = 1;
+
 use super::doax2;
 
 /// One draw of a costume's list.
@@ -101,8 +165,21 @@ pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Draw>>> {
     Ok(lists)
 }
 
+/// Whether a draw is one of the 0xA0 to 0xA2 kind: Zack's `zac00` has a coil of rope and a
+/// long line among them, which hang far below the floor on their nodes at rest, so something
+/// else places them. `load` leaves them out.
+pub fn is_loose(draw: &Draw) -> bool {
+    matches!(draw.op, 0xA0..=0xA2)
+}
+
+/// Whether a costume has its own head: a 0x90 draw on the head's bone. Costumes without one
+/// (Kasumi's) only have a 0x91 draw there, the neck.
+pub fn has_head(cat: &[u8]) -> Result<bool> {
+    Ok(draw_lists(cat)?.first().is_some_and(|list| list.iter().any(|d| d.op == 0x90 && d.bone as u32 == HEAD_BONE)))
+}
+
 /// A costume in its files' rest pose: the most detailed list, with the first of its groups
-/// and the first of its conditions.
+/// and the first of its conditions, without the loose draws.
 pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
     let lists = draw_lists(cat)?;
     let list = lists.first().context("no draw list")?;
@@ -110,7 +187,7 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
     let first_condition = list.iter().filter_map(|d| d.condition).min();
     let placed = list
         .iter()
-        .filter(|d| (d.group.is_none() || d.group == first_group) && (d.condition.is_none() || d.condition == first_condition))
+        .filter(|d| !is_loose(d) && (d.group.is_none() || d.group == first_group) && (d.condition.is_none() || d.condition == first_condition))
         .map(|d| doax2::Placed { slot: d.bone as u32, object: d.object, mark: None })
         .collect();
     doax2::load_list(tpr, placed)
@@ -142,6 +219,26 @@ mod tests {
             for d in &object.draws {
                 println!("  draw: layout {}, indices {} + {}, stages {:x?}", d.decl, d.first_index, d.index_count, d.stages);
             }
+        }
+    }
+
+    /// Prints a costume's node tree with each node's place at rest and the bone its object is
+    /// drawn with. `DOA4_COSTUME` as in `costume_objects`.
+    #[test]
+    #[ignore]
+    fn costume_nodes() {
+        let which = std::env::var("DOA4_COSTUME").unwrap_or("chrone.afs zac00".to_string());
+        let (archive, stem) = which.split_once(' ').unwrap();
+        let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+        let (tpr, cat) = (afs.read(&format!("{stem}.tpr")).unwrap(), afs.read(&format!("{stem}.cat")).unwrap());
+        let xpr = doax2::Xpr2::parse(&tpr).unwrap();
+        let nodes = doax2::hierarchy(&xpr).unwrap();
+        let rest = doax2::rest_pose(&nodes);
+        let lists = draw_lists(&cat).unwrap();
+        for (k, node) in nodes.iter().enumerate() {
+            let draws: Vec<String> = lists[0].iter().filter(|d| d.object == node.object).map(|d| format!("{:x} bone {}", d.op, d.bone)).collect();
+            let p = rest[k].w_axis;
+            println!("node {k}: parent {:?}, object {}, at ({:.3}, {:.3}, {:.3}), local ({:.3}, {:.3}, {:.3}) {draws:?}", node.parent, node.object, p.x, p.y, p.z, node.local.w_axis.x, node.local.w_axis.y, node.local.w_axis.z);
         }
     }
 

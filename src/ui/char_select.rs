@@ -87,6 +87,13 @@ impl CharSelectPanel {
                         self.selected_char_idx = None;
                         self.selected_costume_idx = 0;
                     }
+                    if ui.selectable_label(
+                        self.selected_source == GameSource::Doa4, "DOA4"
+                    ).clicked() {
+                        self.selected_source = GameSource::Doa4;
+                        self.selected_char_idx = None;
+                        self.selected_costume_idx = 0;
+                    }
                 });
 
                 ui.separator();

@@ -37,6 +37,7 @@ pub enum GameSource {
     Doa3,
     Doax,
     Doax2,
+    Doa4,
 }
 
 #[derive(Debug, Clone)]
@@ -407,6 +408,9 @@ pub struct App {
     pub doax2_characters: Vec<CharacterEntry>,
     doax2_chr: Option<doax::LazyArchive>,
     doax2_wear: Vec<doax::LazyArchive>,
+    pub doa4_characters: Vec<CharacterEntry>,
+    doa4_archives: Vec<doax::LazyArchive>,
+    doa4_files: Vec<crate::formats::doa4::ModelFile>,
     doax2_wear_names: Vec<Vec<String>>,
     doax2_mot: Option<doax::LazyArchive>,
     pub anim_panel: AnimPanel,
@@ -645,6 +649,30 @@ impl App {
                 })
             })
             .collect();
+        // DOA4 is read from its install: the three costume archives, when all are there.
+        let doa4_archives: Vec<doax::LazyArchive> = crate::formats::doa4::COSTUME_ARCHIVES
+            .iter()
+            .filter_map(|name| doax::LazyArchive::open(crate::formats::doa4::game_dir().join(name)).map_err(|e| log::info!("No DOA4 {name}: {e:#}")).ok())
+            .collect();
+        let doa4_archives = if doa4_archives.len() == crate::formats::doa4::COSTUME_ARCHIVES.len() { doa4_archives } else { Vec::new() };
+        let doa4_names: Vec<Vec<String>> = doa4_archives.iter().map(|a| a.names().map(str::to_string).collect()).collect();
+        let doa4_files = crate::formats::doa4::model_files(&doa4_names);
+        let doa4_characters: Vec<CharacterEntry> = crate::formats::doa4::ROSTER
+            .iter()
+            .filter_map(|(code, name)| {
+                let costumes: Vec<String> = doa4_files.iter().filter(|f| f.stem.starts_with(code) && crate::formats::doa4::is_costume(&f.stem)).map(|f| f.stem.clone()).collect();
+                (!costumes.is_empty()).then(|| CharacterEntry {
+                    id: code.to_string(),
+                    bin_id: String::new(),
+                    display_name: name.to_string(),
+                    costumes,
+                    afs_indices: vec![],
+                    doa3: None,
+                    doa2u_id: None,
+                    intro: false,
+                })
+            })
+            .collect();
         let doax_stage_lights = std::fs::read(asset_path(DOAX_XBE_PATH)).map(|xbe| doax::stage_lights(&xbe)).unwrap_or_default();
         let app_icon = read_app_icon(hdd_archive.as_ref());
         let mut char_panel = CharSelectPanel::new();
@@ -703,6 +731,9 @@ impl App {
             doax2_stage_lights: crate::formats::doax2::stage_lights(),
             doax2_chr,
             doax2_wear,
+            doa4_characters,
+            doa4_archives,
+            doa4_files,
             doax2_wear_names,
             doax2_mot: doax::LazyArchive::open(asset_path(DOAX2_MOT_PATH)).map_err(|e| log::info!("No DOAX2 motions: {e:#}")).ok(),
             anim_panel: AnimPanel::new(),
@@ -780,6 +811,16 @@ impl App {
         match self.char_panel.selected_source {
             GameSource::Doa2U => self.load_doa2u_character(char_idx, costume_idx),
             GameSource::Doa3  => self.load_doa3_character(char_idx, costume_idx),
+            GameSource::Doa4 => {
+                self.status_msg = match self.try_load_doa4_character(char_idx, costume_idx) {
+                    Ok(status) => status,
+                    Err(e) => {
+                        log::warn!("Could not load DOA4 character: {e:#}");
+                        self.mesh.clear_model();
+                        format!("DOA4: could not load character: {e:#}")
+                    }
+                };
+            }
             GameSource::Doax2 => {
                 self.status_msg = match self.try_load_doax2_character(char_idx, costume_idx) {
                     Ok(status) => status,
@@ -1089,6 +1130,78 @@ impl App {
             self.select_motion(0);
         }
         Ok(format!("DOAX2: {display_name} - {}, {pieces} pieces, {count} motions", suit.label))
+    }
+
+    /// A DOA4 costume in its files' rest pose, arms out, with the character's first head file
+    /// when the costume has no head of its own. No motions yet.
+    fn try_load_doa4_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
+        use crate::formats::{doa4, doax2};
+        use anyhow::Context;
+
+        let costume_idx = if costume_idx == DEFAULT_COSTUME { 0 } else { costume_idx };
+        self.char_panel.selected_costume_idx = costume_idx;
+        let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
+        let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
+        let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
+        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool)> {
+            let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
+            let archive = &self.doa4_archives[file.archive];
+            let cat = archive.read_index(file.entry + 1)?;
+            Ok((doa4::load(&archive.read_index(file.entry)?, &cat).with_context(|| stem.to_string())?, doa4::has_head(&cat)?))
+        };
+        let (body, has_head) = read(&stem)?;
+        // Where the head goes: the body's node for the head's bone. A costume that draws
+        // nothing there takes the character's first head file, put with its root on that node.
+        let head_node = body.slot_node(doa4::HEAD_BONE);
+        let head_stem = (!has_head).then(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())).flatten();
+        let head = head_stem.as_deref().map(read).transpose()?.map(|(head, _)| head);
+        let head_frame = head_node.map_or(glam::Mat4::IDENTITY, |node| glam::Mat4::from_translation(body.rest[node].w_axis.truncate()));
+        let files: Vec<(&doax2::Loaded, glam::Mat4)> = std::iter::once((&body, glam::Mat4::IDENTITY)).chain(head.as_ref().map(|h| (h, head_frame))).collect();
+
+        let floor = files
+            .iter()
+            .flat_map(|(file, frame)| file.pieces.iter().flat_map(move |(piece, node, _)| piece.vertices.iter().map(move |v| (*frame * file.rest[*node]).transform_point3(v.position.into()).y)))
+            .fold(f32::MAX, f32::min);
+        let flip = glam::Mat4::from_scale(glam::Vec3::new(1.0, 1.0, -1.0));
+        let lift = glam::Mat4::from_translation(glam::Vec3::Y * -floor.min(0.0));
+        let mut textures = Vec::new();
+        let mut nodes = Vec::new();
+        let mut inputs: Vec<PieceInput> = Vec::new();
+        for (file, frame) in &files {
+            let first_texture = textures.len();
+            textures.extend(file.textures.iter().cloned());
+            for (piece, node, _) in &file.pieces {
+                // Solid draws first, then those blended by their texture's alpha.
+                for blended in [false, true] {
+                    let draws: Vec<_> = piece
+                        .materials
+                        .iter()
+                        .filter(|m| doax2::is_blended(m) == blended)
+                        .map(|m| (m.indices.as_slice(), m.base_texture(file.textures.len()).map(|t| t + first_texture), m.cull_back, m.look))
+                        .collect();
+                    if draws.is_empty() {
+                        continue;
+                    }
+                    inputs.push(PieceInput { node: nodes.len(), vertices: &piece.vertices, draws, parent: nodes.len(), skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false });
+                    nodes.push(flip * lift * *frame * file.rest[*node]);
+                }
+            }
+        }
+        self.doa3_pose = None;
+        self.doax_pose = None;
+        self.doax2_pose = None;
+        self.current_animations = Vec::new();
+        self.anim_panel.selected_anim_idx = None;
+        self.anim_time = 0.0;
+        self.loaded_name = ("DOA4".to_string(), display_name.clone(), stem.clone());
+        self.mesh.set_lights(Some(self.current_stage_lights()));
+        self.mesh.set_lights_follow_camera(false);
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
+        self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
+        let pieces = inputs.len();
+        drop(inputs);
+        self.mesh.apply_pose(&self.ctx.queue, &nodes);
+        Ok(format!("DOA4: {display_name} - {stem}{}, {pieces} pieces, rest pose", head_stem.map_or(String::new(), |h| format!(" with {h}"))))
     }
 
     /// A DOAX costume: the character's body with a suit, standing in the rest pose.
@@ -2089,6 +2202,7 @@ impl App {
             GameSource::Doa3 => self.doa3_characters.get(char_idx),
             GameSource::Doax => self.doax_characters.get(char_idx),
             GameSource::Doax2 => self.doax2_characters.get(char_idx),
+            GameSource::Doa4 => self.doa4_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
@@ -2143,6 +2257,7 @@ impl App {
             GameSource::Doa3 => self.doa3_characters.get(char_idx),
             GameSource::Doax => self.doax_characters.get(char_idx),
             GameSource::Doax2 => self.doax2_characters.get(char_idx),
+            GameSource::Doa4 => self.doa4_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         let mut written = 0;
