@@ -215,7 +215,9 @@ and Gen Fu's robe hang and follow the legs without tearing (by eye, 2026-11-11).
 with the game. Not done: sheets rooted on vertices that another body writes (none in the
 costumes tried), and whether DOA2U's limb slots for colliders apply here.
 
-Kinds 250 (vertex copies) and the rest are not read yet. DOA3's and
+Kind 250 is DOA2U's vertex copy record (a condition, source and target objects, a list of source and target vertices), read by `doa4::vertex_copies`: all 174, every link inside its objects. None targets an object of the first, most detailed list: they carry the soft bodies' result to the lower levels of detail, which the viewer does not draw, so it does not apply them.
+
+Kinds 0, 3, 7, 9, 14, 15, 251 and 254 are not read yet. DOA3's and
 DOA2U's readers are the place to start, by the same swap; nothing says their records match as
 kind 1's do.
 

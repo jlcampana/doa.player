@@ -599,6 +599,52 @@ pub fn cloth(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_cloth::So
     sheets
 }
 
+/// Kind 250: after the soft bodies run, positions of one object are copied to another, as in
+/// DOA2U (`doa2u::VertexCopy`): +0 a condition, +2 the source object, +4 the target, +8 the
+/// offset of a list of a source vertex, then target vertices whose low bit says another
+/// follows, until -1. Vertices come out numbered as their pieces'.
+pub fn vertex_copies(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa2u::VertexCopy> {
+    let Some((base, records)) = soft_records(cat) else { return Vec::new() };
+    let mut copies = Vec::new();
+    for &(_, offset) in records.iter().filter(|r| r.0 == 250) {
+        let read = || -> Option<super::doa2u::VertexCopy> {
+            let at = base + offset;
+            let condition = be16(cat, at)?;
+            // DOA2U skips 0 and odd values other than 0xFFFF.
+            if condition == 0 || (condition != 0xFFFF && condition & 1 != 0) {
+                return None;
+            }
+            let (from, to) = (be16(cat, at + 2)? as usize, be16(cat, at + 4)? as usize);
+            if from >= objects.len() || to >= objects.len() {
+                return None;
+            }
+            let mut at = base + be32(cat, at + 8)? as usize;
+            let mut links = Vec::new();
+            loop {
+                let source = be32(cat, at)?;
+                if source == u32::MAX {
+                    break;
+                }
+                at += 4;
+                loop {
+                    let target = be32(cat, at)?;
+                    if target == u32::MAX {
+                        break;
+                    }
+                    at += 4;
+                    links.push((piece_vertex(objects, from, source as usize), piece_vertex(objects, to, (target & !1) as usize)));
+                    if target & 1 == 0 {
+                        break;
+                    }
+                }
+            }
+            Some(super::doa2u::VertexCopy { from, to, links })
+        };
+        copies.extend(read());
+    }
+    copies
+}
+
 /// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
 /// record with big-endian words, 0x34 bytes.
 pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {
@@ -777,6 +823,7 @@ mod tests {
         let (mut records, mut read, mut vertices, mut bad) = (0, 0, 0, 0);
         let mut spring_totals = (0, 0, 0, 0);
         let mut cloth_totals = (0, 0, 0, 0);
+        let mut copy_totals = (0, 0, 0, 0);
         for archive in COSTUME_ARCHIVES {
             let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
             let names: Vec<String> = afs.names().map(str::to_string).collect();
@@ -817,6 +864,12 @@ mod tests {
                 if sheets.len() < wanted_cloth || cloth_outside > 0 {
                     println!("{stem}: {} of {wanted_cloth} sheets read, {cloth_outside} vertices outside their object", sheets.len());
                 }
+                let copies = vertex_copies(&cat, &objects);
+                let first_list: std::collections::HashSet<usize> = draw_lists(&cat).unwrap().first().map(|l| l.iter().map(|d| d.object).collect()).unwrap_or_default();
+                copy_totals.0 += list.iter().filter(|r| r.0 == 250).count();
+                copy_totals.1 += copies.len();
+                copy_totals.2 += copies.iter().filter(|c| first_list.contains(&c.to)).count();
+                copy_totals.3 += copies.iter().flat_map(|c| c.links.iter().map(move |l| (c, l))).filter(|(c, l)| l.0 >= objects[c.from].vertex_count() || l.1 >= objects[c.to].vertex_count()).count();
                 records += wanted;
                 read += chains.len();
                 vertices += moved.len();
@@ -828,6 +881,7 @@ mod tests {
         }
         println!("{read} of {records} chains read, moving {vertices} vertices, {bad} outside their object");
         println!("{} of {} springs read, moving {} vertices, {} outside their object", spring_totals.1, spring_totals.0, spring_totals.2, spring_totals.3);
+        println!("{} of {} copies read, {} onto an object of the first list, {} links outside their objects", copy_totals.1, copy_totals.0, copy_totals.2, copy_totals.3);
         println!("{} of {} sheets read, moving {} vertices, {} outside their object", cloth_totals.1, cloth_totals.0, cloth_totals.2, cloth_totals.3);
     }
 
