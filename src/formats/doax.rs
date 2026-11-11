@@ -34,10 +34,13 @@ pub const BONES_ON_BONES: [(usize, usize); 8] = [(24, 4), (25, 10), (26, 8), (27
 const FOOT_HEIGHT: f32 = 0.1;
 
 /// A character the viewer offers, with the file code in her models' names and her table of
-/// bone offsets. The table numbers are inferred from her piece sizes, and not confirmed.
+/// bone offsets. Measured on the running game (a volleyball demo, 2026-11-11: each character's
+/// matrices fit one table far better than the rest, and her tracks name her motion file):
+/// Kasumi 1, Helena 2, Tina 0, Lisa 6. Ayane's 4 is what Kasumi had before, taken by
+/// elimination; Hitomi's, Lei Fang's and Christie's are inferred from piece sizes.
 pub const ROSTER: [(&str, &str, u32); 8] = [
-    ("Kasumi", "ks", 4),
-    ("Ayane", "ay", 1),
+    ("Kasumi", "ks", 1),
+    ("Ayane", "ay", 4),
     ("Hitomi", "ht", 5),
     ("Tina Armstrong", "tn", 0),
     ("Helena Douglas", "he", 2),
@@ -851,9 +854,13 @@ fn solve_game_space(tracks: &[f32; TRACK_COUNT], rows: &[Vec3; 24]) -> [Mat4; BO
         bones[halfway] = halfway_frame(bones[upper], bones[aligned]);
     }
     for (mid, hand, twist, aligned) in [(4, 5, 24, 28), (10, 11, 25, 29)] {
-        bones[aligned] = aligned_frame(bones[hand], bones[mid]);
-        bones[mid] = halfway_frame(bones[mid], bones[aligned]);
+        let turned = aligned_frame(bones[hand], bones[mid]);
+        bones[mid] = halfway_frame(bones[mid], turned);
         bones[twist] = bones[mid];
+        // What the game keeps in 28 and 29 is the forearm's final frame at the hand's place
+        // (live, 2026-11-11, a volleyball demo: rotation equal to the forearm's in every sample,
+        // origin the hand's), not the hand's frame turned onto the forearm that the roll uses.
+        bones[aligned] = Mat4::from_translation(bones[hand].w_axis.truncate()) * Mat4::from_mat3(Mat3::from_mat4(bones[mid]));
     }
     bones
 }
@@ -890,6 +897,7 @@ mod tests {
         let tables: Vec<[Vec3; 24]> = (0..8).map(|t| bone_rows(&xbe, t).unwrap()).collect();
         let mut skipped = 0;
         let mut worst = [0f32; BONE_COUNT];
+        let mut all: Vec<Vec<f32>> = vec![Vec::new(); BONE_COUNT];
         let mut chosen = std::collections::BTreeMap::<(String, usize), usize>::new();
         for line in text.lines() {
             let mut words = line.split_whitespace();
@@ -911,13 +919,21 @@ mod tests {
                 continue;
             }
             *chosen.entry((character, best)).or_default() += 1;
-            for (slot, error) in worst.iter_mut().zip(errors(&tables[best])) {
+            let found = errors(&tables[best]);
+            for (slot, error) in worst.iter_mut().zip(found) {
                 *slot = slot.max(error);
+            }
+            for (list, error) in all.iter_mut().zip(found) {
+                list.push(error);
             }
         }
         println!("tables chosen: {chosen:?}, {skipped} samples skipped");
-        for (bone, error) in worst.iter().enumerate() {
-            println!("bone {bone}: worst {error:.4}");
+        // The median and the 90th percentile tell a steady error from a few samples where the
+        // game was blending or adjusting the pose.
+        for (bone, (error, list)) in worst.iter().zip(&mut all).enumerate() {
+            list.sort_by(f32::total_cmp);
+            let at = |q: f32| list.get(((list.len() as f32 - 1.0) * q) as usize).copied().unwrap_or(0.0);
+            println!("bone {bone}: median {:.4}, 90% {:.4}, worst {error:.4}", at(0.5), at(0.9));
         }
     }
 
@@ -939,7 +955,11 @@ mod tests {
             let wrapped = d % std::f32::consts::TAU;
             d.min(wrapped).min(std::f32::consts::TAU - wrapped)
         };
-        for line in text.lines().take(8) {
+        // `DOAX_SAMPLES` lines spread over the file (default 8): each takes a search of every motion.
+        let samples: usize = std::env::var("DOAX_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+        let lines: Vec<&str> = text.lines().collect();
+        let step = (lines.len() / samples.max(1)).max(1);
+        for line in lines.iter().step_by(step) {
             let words: Vec<&str> = line.split_whitespace().collect();
             let live: Vec<f32> = words[3..3 + TRACK_COUNT].iter().map(|w| w.parse().unwrap()).collect();
             let mut best = (f32::MAX, String::new(), 0, 0, [0f32; TRACK_COUNT]);
@@ -960,7 +980,7 @@ mod tests {
                 all.sort_by(|a, b| b.1.total_cmp(&a.1));
                 all.into_iter().take(6).map(|(t, e)| (t, (e * 1000.0).round() / 1000.0)).collect()
             };
-            println!("char {} tracks off {} of 57: {} id {} frame {} worst {:?}", words[1], best.0, best.1, best.2, best.3, worst);
+            println!("char {} table {} tracks off {} of 57: {} id {} frame {} worst {:?}", words[1], words[2], best.0, best.1, best.2, best.3, worst);
         }
     }
 
