@@ -1226,7 +1226,7 @@ impl App {
             let first_texture = textures.len();
             textures.extend(file.textures.iter().cloned());
             let node_bone = |node: usize| file.pieces.iter().find(|(_, n, placed)| *n == node && doa4::solve_node(placed.slot).is_some()).map(|(_, _, placed)| placed.slot);
-            for (piece, node, placed) in &file.pieces {
+            for ((piece, node, placed), weights) in file.pieces.iter().zip(&file.weights) {
                 let mut bone = doa4::solve_node(placed.slot).map(|_| placed.slot);
                 let mut above = file.nodes[*node].parent;
                 while let (None, Some(up)) = (bone, above) {
@@ -1244,9 +1244,31 @@ impl App {
                     if draws.is_empty() {
                         continue;
                     }
-                    inputs.push(PieceInput { node: nodes.len(), vertices: &piece.vertices, draws, parent: nodes.len(), skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false });
-                    nodes.push(flip * lift * *frame * file.rest[*node]);
-                    followed.push((bone.unwrap_or(if frame == &glam::Mat4::IDENTITY { 2 } else { doa4::HEAD_BONE }), *frame * file.rest[*node]));
+                    let own = bone.unwrap_or(if frame == &glam::Mat4::IDENTITY { 2 } else { doa4::HEAD_BONE });
+                    let rest = *frame * file.rest[*node];
+                    let at = |bone: usize| bone_rest.get(&(bone as u32)).copied().unwrap_or_default();
+                    let piece_node = nodes.len();
+                    nodes.push(flip * lift * rest);
+                    followed.push((doa4::solve_node(own).unwrap_or(2), at(own as usize), doa4::rest_frame(own as usize), rest));
+                    // A piece with blend weights gets a node per weight, on that weight's bone.
+                    let groups = weights.first().map_or(0, Vec::len);
+                    let multi = doa4::weight_nodes(placed.slot as usize, groups).filter(|_| groups > 0 && weights.len() == piece.vertices.len()).map(|bones| {
+                        let groups = bones
+                            .iter()
+                            .map(|&(solve_node, rest_frame)| {
+                                // The twist nodes sit on the forearm's joint.
+                                let place = if solve_node >= 19 { at(placed.slot as usize) } else { at(solve_node) };
+                                nodes.push(flip * lift * rest);
+                                followed.push((solve_node, place, rest_frame, rest));
+                                (nodes.len() - 1, glam::Vec3::ZERO)
+                            })
+                            .collect();
+                        crate::renderer::mesh::MultiBend { groups, weights: weights.clone() }
+                    });
+                    if groups > 0 && multi.is_none() {
+                        log::info!("DOA4: piece on bone {} has {groups} weights and is drawn rigid", placed.slot);
+                    }
+                    inputs.push(PieceInput { node: piece_node, vertices: &piece.vertices, draws, parent: piece_node, skin: None, bend: None, multi, welds: Vec::new(), translucent: false });
                 }
             }
         }
@@ -1257,10 +1279,9 @@ impl App {
             Ok(skeleton) => {
                 let pieces = followed
                     .iter()
-                    .map(|&(bone, rest)| {
-                        let at = bone_rest.get(&bone).copied().unwrap_or_default();
-                        let solved_rest = glam::Mat4::from_translation(at) * glam::Mat4::from_mat3(doa4::rest_frame(bone as usize));
-                        (doa4::solve_node(bone).unwrap_or(2), solved_rest.inverse() * rest)
+                    .map(|&(solve_node, at, rest_frame, rest)| {
+                        let solved_rest = glam::Mat4::from_translation(at) * glam::Mat4::from_mat3(rest_frame);
+                        (solve_node, solved_rest.inverse() * rest)
                     })
                     .collect();
                 let mut files = Vec::new();

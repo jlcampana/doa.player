@@ -494,6 +494,30 @@ pub fn rest_frame(bone: usize) -> glam::Mat3 {
     }
 }
 
+/// The solve's node and rest frame for each blend weight of a piece drawn with 0x91 on `bone`:
+/// the vertices carry two or three weights, the first for the bone itself and the second for
+/// its parent (in `kas00` the vertices heavy on the first sit down the limb from the joint,
+/// those heavy on the second towards the body). A third weight, on the elbow pieces only, is
+/// taken to be the forearm's twist node; no vertex of `kas00` is heavy on it.
+pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, glam::Mat3)>> {
+    let parent = BONE_PARENTS.iter().find(|p| p.0 == bone)?.1;
+    let mut nodes = vec![(bone, rest_frame(bone)), (parent, rest_frame(parent))];
+    if count == 3 {
+        let twist = match bone {
+            4 => super::doa3::NODE_TWIST[0],
+            10 => super::doa3::NODE_TWIST[1],
+            _ => return None,
+        };
+        // The solve turns the forearm about its z until the hand's z lies along x; at rest
+        // the hand is unturned.
+        let sign = if bone == 4 { 1.0 } else { -1.0 };
+        let hand_z = rest_frame(bone).transpose() * glam::Vec3::Z;
+        let angle = (sign * hand_z.y).atan2(sign * hand_z.x);
+        nodes.push((twist, rest_frame(bone) * glam::Mat3::from_rotation_z(angle)));
+    }
+    (nodes.len() == count).then_some(nodes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +637,34 @@ mod tests {
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             encoder.write_header().unwrap().write_image_data(&texture.rgba).unwrap();
+        }
+    }
+
+    /// Prints, per piece of a costume's first list, its draw, vertex count, the extra vertex
+    /// elements beyond position, normal and texture coordinates, and its blend weights if any.
+    #[test]
+    #[ignore]
+    fn costume_weights() {
+        let which = std::env::var("DOA4_COSTUME").unwrap_or("chrone.afs kas00".to_string());
+        let (archive, stem) = which.split_once(' ').unwrap();
+        let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+        let (tpr, cat) = (afs.read(&format!("{stem}.tpr")).unwrap(), afs.read(&format!("{stem}.cat")).unwrap());
+        let loaded = load(&tpr, &cat).unwrap();
+        let lists = draw_lists(&cat).unwrap();
+        for ((piece, node, placed), weights) in loaded.pieces.iter().zip(&loaded.weights) {
+            let op = lists[0].iter().find(|d| d.object == placed.object).map_or(0, |d| d.op);
+            let usages: Vec<(u8, u8, u32)> = loaded.objects[placed.object].decls.iter().flat_map(|d| d.elements.iter().filter(|e| !matches!(e.usage, 0 | 3 | 5)).map(|e| (e.usage, e.usage_index, e.kind))).collect();
+            let groups = weights.first().map_or(0, Vec::len);
+            let mut distinct: Vec<String> = weights.iter().map(|w| format!("{w:.2?}")).collect();
+            distinct.sort();
+            distinct.dedup();
+            println!("{op:x} bone {} object {} node {node}: {} vertices, other elements {usages:x?}, {groups} weights, {} distinct: {:?}", placed.slot, placed.object, piece.vertices.len(), distinct.len(), &distinct[..distinct.len().min(6)]);
+            // Where the vertices mostly on each weight sit, from the piece's node.
+            for k in 0..groups {
+                let heavy: Vec<glam::Vec3> = piece.vertices.iter().zip(weights).filter(|(_, w)| w[k] > 0.8).map(|(v, _)| glam::Vec3::from(v.position)).collect();
+                let centre = heavy.iter().copied().sum::<glam::Vec3>() / heavy.len().max(1) as f32;
+                println!("    weight {k}: {} vertices over 0.8, centred at ({:.3}, {:.3}, {:.3})", heavy.len(), centre.x, centre.y, centre.z);
+            }
         }
     }
 

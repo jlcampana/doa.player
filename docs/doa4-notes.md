@@ -145,11 +145,19 @@ elbows to bend back and the knees forward. With that, the first motions of Kasum
 Tina are their fighting stances and strikes, with limbs meeting at the joints (by eye,
 2026-11-11). Nothing is compared with the game.
 
-Missing: the `91` pieces at the joints follow their bone rigidly, so knees and elbows show as
-lumps (DOA3 bends them by weights from the CAT; DOA4's CAT sections are not read); hair and
-cloth do not move; hands and faces have no shapes; the forearm twist nodes are not used; pieces
-on bones the solve does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them;
-the tag motions and `comon.mot` are not listed; `rtm` has no motion file of its own.
+Joint pieces: the `91` draws carry blend weights in their vertices (usage 1, two or three
+floats, as DOAX2's blended pieces). The first weight is the bone itself and the second its
+parent: in `kas00` the vertices heavy on the first sit down the limb from the joint, those
+heavy on the second towards the body (ignored test `costume_weights`). The viewer blends them
+linearly between the two solved bones, and knees, elbows, shoulders, hips and neck bend without
+lumps (by eye). A third weight on the elbow pieces is taken to be the forearm's twist node; no
+vertex of `kas00` is heavy on it. Drawn rigid still, each logged when loaded: knee pieces with
+three weights (Zack's and Kokoro's trousers), pieces on bones 32 and 33, and the chest's `91`
+piece, whose weights are of another type (`0x1A2360`) that the reader does not take.
+
+Missing: hair and cloth do not move; hands and faces have no shapes; pieces on bones the solve
+does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
+`comon.mot` are not listed; `rtm` has no motion file of its own.
 
 ## In the viewer
 
