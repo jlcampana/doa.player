@@ -371,6 +371,8 @@ pub struct SoftChain {
     /// DOA2U's factor for the wind. It goes in the pull, not the force.
     wind_factor: Option<f32>,
     root_vertex: Option<(usize, usize)>,
+    /// Set when the chain draws whole objects instead of moving vertices.
+    placed: Option<PlacedObjects>,
 }
 
 /// Finds the CAT's list of physics sections and returns its base and entries.
@@ -594,6 +596,10 @@ pub fn parse_chain_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
         .filter_map(|&offset| {
             let at = base + offset;
             let mut chain = parse_chain(cat, base, at)?;
+            // How DOA2U draws chains that place whole objects is not read.
+            if chain.placed.is_some() {
+                return None;
+            }
             resolve_limb_slots(&mut chain.shapes);
             chain.wind_factor = Some(read_f32(cat, at + 0x3C)?);
             // A root on a vertex of the object at +2, by byte offset (`sub_000591A0`).
@@ -642,8 +648,15 @@ fn parse_chain(cat: &[u8], base: usize, at: usize) -> Option<SoftChain> {
     let shapes_at = field(0x48)?;
     let shapes = if shapes_at != 0 { parse_shapes(cat, base + shapes_at as usize)? } else { Vec::new() };
 
-    let mut targets = vec![parse_target(cat, base, count, field(0x4C)?, field(0x50)?, field(0x54)?)?];
-    let second = field(0x60)?;
+    // A head that is not 0xFFFE or 0xFFFF is an object list: the chain draws whole objects.
+    let head_at = base + field(0x4C)? as usize;
+    let head = read_u16(cat, head_at)?;
+    let placed = (head != 0xFFFE && head != 0xFFFF).then(|| parse_placed(cat, head_at, count, *cat.get(at + 2)?)).flatten();
+    let mut targets = match placed {
+        Some(_) => Vec::new(),
+        None => vec![parse_target(cat, base, count, field(0x4C)?, field(0x50)?, field(0x54)?)?],
+    };
+    let second = if placed.is_some() { 0 } else { field(0x60)? };
     if second != 0 {
         let second_at = base + second as usize;
         let (head, points, offsets) =
@@ -671,7 +684,116 @@ fn parse_chain(cat: &[u8], base: usize, at: usize) -> Option<SoftChain> {
         ready: false,
         wind_factor: None,
         root_vertex: None,
+        placed,
     })
+}
+
+const OBJECT_NUMBER_MASK: u16 = 0x0FFF;
+const ANOTHER_OBJECT: u16 = 0x8000;
+const RESET_MARK: u16 = 0xFFFD;
+/// Degrees to the game's angles (`0x1ED788`).
+const DEGREE_UNITS: f32 = 182.044_45;
+const QUARTER_TURN: i32 = 0x4000;
+
+/// Whole objects a chain draws (`sub_0003AA20`), in place of writing vertices. The mode is
+/// the record's third byte; the game draws nothing for modes past 4.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedObjects {
+    pub mode: u8,
+    /// The objects drawn on each particle: one each in modes 0, 2, 3 and 4, a list in mode 1.
+    pub segments: Vec<Vec<usize>>,
+    /// Mode 1: segments whose list starts with 0xFFFD, which changes the game's draw state
+    /// (`sub_00154610`, `sub_00154F70` and others, flag `0x454434`). Not done here.
+    pub resets: Vec<bool>,
+}
+
+/// Reads the object list at `head`. Modes 0 and 4 read `count` words; mode 1 a list per
+/// particle, where the top bit says another follows; modes 2 and 3 one word per particle.
+/// The game masks the number with 0x0FFF except for the last of a mode 1 list and in modes
+/// 2 and 3; here it is always masked, as DOA4's numbers carry 0x1000.
+fn parse_placed(cat: &[u8], head: usize, count: usize, mode: u8) -> Option<PlacedObjects> {
+    let object = |word: u16| (word & OBJECT_NUMBER_MASK) as usize;
+    let mut at = head;
+    let mut word = || {
+        let value = read_u16(cat, at);
+        at += 2;
+        value
+    };
+    let (mut segments, mut resets) = (Vec::with_capacity(count), Vec::with_capacity(count));
+    for _ in 0..count {
+        let mut first = word()?;
+        let reset = mode == 1 && first == RESET_MARK;
+        if reset {
+            first = word()?;
+        }
+        let mut list = vec![object(first)];
+        if mode == 1 {
+            let mut last = first;
+            while last & ANOTHER_OBJECT != 0 {
+                last = word()?;
+                list.push(object(last));
+            }
+        }
+        segments.push(list);
+        resets.push(reset);
+    }
+    Some(PlacedObjects { mode, segments, resets })
+}
+
+impl SoftChain {
+    pub fn placed(&self) -> Option<&PlacedObjects> {
+        self.placed.as_ref()
+    }
+
+    /// `sub_0003AA20`: each object this chain draws, with its place in the space of the
+    /// chain's bone. All start from the chain's offset:
+    ///
+    /// - Modes 0 and 4: turned by the record's direction read as degrees, z then y then x,
+    ///   and one segment length further down y per object. The particles are not used.
+    /// - Mode 1: turned as `sub_0003F5F0` turns a segment, by its own particle's segment.
+    /// - Mode 2: not turned. The game works out a frame from the segment and does not use it.
+    /// - Mode 3: turned about y by the segment's heading less a quarter turn, then about z
+    ///   by its pitch plus a quarter turn.
+    pub fn placed_objects(&self, nodes: &[Mat4]) -> Vec<(usize, Mat4)> {
+        let Some(placed) = &self.placed else { return Vec::new() };
+        let to_radians = |angle: i32| angle as f32 / ANGLE_UNITS;
+        let to_game_angle = |radians: f32| (radians * ANGLE_UNITS) as i32;
+        let root = Mat4::from_translation(self.offset);
+        let inverse = nodes.get(self.bone).map_or(Mat4::IDENTITY, Mat4::inverse);
+        let segment = |i: usize| self.particles.get(i).map_or(Vec3::ZERO, |p| inverse.transform_vector3(p.segment));
+        let mut out = Vec::new();
+        match placed.mode {
+            0 | 4 => {
+                let degrees = |value: f32| to_radians((value * DEGREE_UNITS) as i32);
+                let turned = root
+                    * Mat4::from_rotation_z(degrees(self.direction.z))
+                    * Mat4::from_rotation_y(degrees(self.direction.y))
+                    * Mat4::from_rotation_x(degrees(self.direction.x));
+                for (i, objects) in placed.segments.iter().enumerate() {
+                    let place = turned * Mat4::from_translation(Vec3::new(0.0, -self.segment_length * i as f32, 0.0));
+                    out.extend(objects.iter().map(|&object| (object, place)));
+                }
+            }
+            1 => {
+                for (i, objects) in placed.segments.iter().enumerate() {
+                    let place = segment_frame(self.offset, segment(i));
+                    out.extend(objects.iter().map(|&object| (object, place)));
+                }
+            }
+            2 => out.extend(placed.segments.iter().flatten().map(|&object| (object, root))),
+            3 => {
+                for (i, objects) in placed.segments.iter().enumerate() {
+                    let s = segment(i);
+                    let heading = to_game_angle(s.x.atan2(s.z)) - QUARTER_TURN;
+                    let pitch = to_game_angle(s.y.atan2((s.x * s.x + s.z * s.z).sqrt())) + QUARTER_TURN;
+                    let place = root * Mat4::from_rotation_y(to_radians(heading)) * Mat4::from_rotation_z(to_radians(pitch));
+                    out.extend(objects.iter().map(|&object| (object, place)));
+                }
+            }
+            _ => {}
+        }
+        out
+    }
 }
 
 impl SoftChain {
@@ -883,6 +1005,79 @@ fn segment_frame(point: Vec3, along: Vec3) -> Mat4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placed_lists_follow_the_mode() {
+        let words = |list: &[u16]| list.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+        // Mode 0: one masked number per particle.
+        let placed = parse_placed(&words(&[0x1024, 0x0025, 0x0001]), 0, 3, 0).unwrap();
+        assert_eq!(placed.segments, [vec![0x24], vec![0x25], vec![1]]);
+        // Mode 1: a reset mark, then lists whose top bit says another follows.
+        let placed = parse_placed(&words(&[0xFFFD, 0x8003, 0x0004, 0x0005]), 0, 2, 1).unwrap();
+        assert_eq!(placed.segments, [vec![3, 4], vec![5]]);
+        assert_eq!(placed.resets, [true, false]);
+    }
+
+    #[test]
+    fn mode_zero_stacks_objects_down_the_bone() {
+        let mut chain = parse_chain(&chain_record(), 0, 0).unwrap();
+        chain.placed = Some(PlacedObjects { mode: 0, segments: vec![vec![7], vec![8]], resets: vec![false; 2] });
+        chain.direction = Vec3::ZERO;
+        let places = chain.placed_objects(&[]);
+        assert_eq!(places.iter().map(|p| p.0).collect::<Vec<_>>(), [7, 8]);
+        let second = places[1].1.transform_point3(Vec3::ZERO);
+        assert!((second - (chain.offset - Vec3::Y * chain.segment_length)).length() < 1e-6);
+        // A direction of 90 on z, read as degrees, turns the stack onto x.
+        chain.direction = Vec3::new(0.0, 0.0, 90.0);
+        let second = chain.placed_objects(&[])[1].1.transform_point3(Vec3::ZERO) - chain.offset;
+        assert!((second - Vec3::X * chain.segment_length).length() < 1e-3, "{second}");
+    }
+
+    /// A chain record of two particles on bone 1 whose head is an object list.
+    fn chain_record() -> Vec<u8> {
+        let mut cat = vec![0u8; 0x80];
+        cat[0] = 2;
+        cat[1] = 1;
+        cat[3] = 1;
+        cat[4..8].copy_from_slice(&0.05f32.to_le_bytes());
+        cat[0x14..0x18].copy_from_slice(&0.1f32.to_le_bytes());
+        cat[0x4C..0x50].copy_from_slice(&0x70u32.to_le_bytes());
+        cat[0x70..0x74].copy_from_slice(&[7, 0, 8, 0]);
+        cat
+    }
+
+    /// Lists DOA3's chains whose target head is an object number: mode, count, angles and
+    /// the head's words.
+    #[test]
+    #[ignore]
+    fn survey_placing_chains() {
+        let archive = crate::formats::AfsArchive::from_file("assets/doa3/loadfile.afs").unwrap();
+        for i in 0..archive.entries().len() {
+            let Some(data) = archive.get_by_index(i) else { continue };
+            if data.get(..4) != Some(b"XPR0") || data.get(0x14..0x18) != Some(b"MDL\0") {
+                continue;
+            }
+            let Some(cat) = archive.get_by_index(i + 1) else { continue };
+            let objects = crate::formats::model::parse_xpr_model(data).map_or(0, |p| p.len());
+            let drawn: Vec<usize> = crate::formats::doa3::parse_node_objects(cat).map_or_else(|_| Vec::new(), |n| n.rigid.iter().map(|r| r.1).chain(n.skins.iter().map(|s| s.object)).collect());
+            let Some((base, sections)) = find_sections(cat) else { continue };
+            for &(_, offset) in sections.iter().filter(|(kind, _)| *kind == CHAIN_SECTION) {
+                let at = base + offset;
+                let head = base + read_u32(cat, at + 0x4C).unwrap() as usize;
+                let first = read_u16(cat, head).unwrap_or(0);
+                if first == 0xFFFE || first == 0xFFFF {
+                    continue;
+                }
+                let words: Vec<String> = (0..cat[at] as usize * 2 + 2).filter_map(|k| read_u16(cat, head + k * 2)).map(|w| format!("{w:04x}")).collect();
+                println!(
+                    "{i} objects {objects} count {} bone {} mode {} on {} len {:.3} angles {:?} head {} drawn {:?}",
+                    cat[at], cat[at + 1], cat[at + 2], cat[at + 3], read_f32(cat, at + 4).unwrap(),
+                    read_vec3(cat, at + 0x24).unwrap(), words.join(" "),
+                    (0..cat[at] as usize).filter_map(|k| read_u16(cat, head + k * 2)).map(|w| drawn.contains(&((w & 0xFFF) as usize))).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
 
     /// One step of DOA2U chains against particles from the game. DOA2U_PAIRS comes
     /// from `tools/re/doa2u_chain_pairs.py`, and DOA2U_RECORDS lists "fighter costume".

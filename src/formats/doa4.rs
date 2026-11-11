@@ -221,6 +221,36 @@ pub fn is_loose(draw: &Draw) -> bool {
     matches!(draw.op, 0xA0..=0xA2)
 }
 
+/// Marks the pieces `load` adds for the objects that chains draw whole: the k-th of
+/// `chain_draws` has the mark `CHAIN_DRAW_MARK - k`.
+pub const CHAIN_DRAW_MARK: i32 = -1000;
+
+/// An object a chain draws whole: the chain's place in `chains`, the object's place in its
+/// `placed_objects`, the chain's bone and the object.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainDraw {
+    pub chain: usize,
+    pub index: usize,
+    pub bone: u32,
+    pub object: usize,
+}
+
+/// The objects that chains draw whole, as DOA3's `sub_0003AA20` does: none of them is in the
+/// draw lists (every costume checked, test `survey_placing_chains`). Only chains on bones the
+/// solve has. Modes past 4 (Zack's `zac00` 31, Christie's `cri04` 8, Kokoro's 5) draw nothing in
+/// DOA3; what DOA4 does with them is not read, so they are left out.
+pub fn chain_draws(cat: &[u8]) -> Vec<ChainDraw> {
+    chains(cat, &[])
+        .iter()
+        .enumerate()
+        .filter(|(_, chain)| solve_node(chain.bone as u32) == Some(chain.bone))
+        .flat_map(|(c, chain)| {
+            let bone = chain.bone as u32;
+            chain.placed_objects(&[]).into_iter().enumerate().map(move |(index, (object, _))| ChainDraw { chain: c, index, bone, object })
+        })
+        .collect()
+}
+
 /// Whether a costume has its own head: a 0x90 draw on the head's bone. Costumes without one
 /// (Kasumi's) only have a 0x91 draw there, the neck.
 pub fn has_head(cat: &[u8]) -> Result<bool> {
@@ -238,7 +268,8 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
         .iter()
         .filter(|d| !is_loose(d) && (d.group.is_none() || d.group == first_group) && (d.condition.is_none() || d.condition == first_condition))
         .map(|d| doax2::Placed { slot: d.bone as u32, object: d.object, mark: None })
-        .collect();
+        .chain(chain_draws(cat).into_iter().enumerate().map(|(k, draw)| doax2::Placed { slot: draw.bone, object: draw.object, mark: Some(CHAIN_DRAW_MARK - k as i32) }))
+        .collect::<Vec<_>>();
     let mut loaded = doax2::load_list(tpr, placed)?;
     join_mask_textures(&mut loaded);
     Ok(loaded)
@@ -859,6 +890,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Lists the chains whose target head is an object number: mode, count, direction and the
+    /// head's words.
+    #[test]
+    #[ignore]
+    fn survey_placing_chains() {
+        let be16 = |d: &[u8], at: usize| d.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+        let be32 = |d: &[u8], at: usize| d.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+        let f = |d: &[u8], at: usize| be32(d, at).map(f32::from_bits).unwrap_or(f32::NAN);
+        let mut modes = std::collections::BTreeMap::new();
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().map(str::to_string).collect();
+            for (index, name) in names.iter().enumerate() {
+                let Some(stem) = name.strip_suffix(".tpr") else { continue };
+                let cat = afs.read_index(index + 1).unwrap();
+                let objects = doax2::objects(&doax2::Xpr2::parse(&afs.read_index(index).unwrap()).unwrap()).unwrap().len();
+                let Some((base, list)) = soft_records(&cat) else { continue };
+                for &(_, offset) in list.iter().filter(|r| r.0 == 1) {
+                    let at = base + offset;
+                    let Some(head) = be32(&cat, at + 0x4C).map(|h| base + h as usize) else { continue };
+                    let first = be16(&cat, head).unwrap_or(0);
+                    if first == 0xFFFE || first == 0xFFFF {
+                        continue;
+                    }
+                    *modes.entry(cat[at + 2]).or_insert(0) += 1;
+                    let draws = draw_lists(&cat).ok().and_then(|l| l.into_iter().next()).unwrap_or_default();
+                    let ops: Vec<String> = (0..cat[at] as usize)
+                        .filter_map(|k| be16(&cat, head + k * 2))
+                        .map(|w| {
+                            let o = (w & 0xFFF) as usize;
+                            draws.iter().filter(|d| d.object == o).map(|d| format!("{o}:{:02x}/{}", d.op, d.bone)).collect::<Vec<_>>().join(",")
+                        })
+                        .collect();
+                    println!("   draws {ops:?}");
+                    let words: Vec<String> = (0..cat[at] as usize * 2 + 2).filter_map(|k| be16(&cat, head + k * 2)).map(|w| format!("{w:04x}")).collect();
+                    println!(
+                        "{stem} objects {objects} count {} bone {} mode {} on {} len {:.3} dir ({:.3} {:.3} {:.3}) head {}",
+                        cat[at], cat[at + 1], cat[at + 2], cat[at + 3], f(&cat, at + 4),
+                        f(&cat, at + 0x24), f(&cat, at + 0x28), f(&cat, at + 0x2C), words.join(" ")
+                    );
+                }
+            }
+        }
+        println!("modes {modes:?}");
     }
 
     /// Counts each model's soft body records by kind and how many of its chains DOA3's parser

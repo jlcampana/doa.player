@@ -75,11 +75,19 @@ Collision shapes are `0x1C` bytes: bone, type, then 6 floats, in the bone's spac
 
 Vertices (`sub_0003F5F0`): each segment's frame in row vectors is `Rz(b) * Rx(a) * T(p)` in the bone's space, with `a = atan2(z, y) + pi`, `b = atan2(x, hypot(y, z))` of this segment plus the next. Points end at x = 999, and each has a list of VB byte offsets where the low bit means another follows. Head `0xFFFE` writes into an object already drawn; `0xFFFF` is an object drawn only through its chain, with the chain's offset added to the bone. Verified: error 0.00000 on 90 vertices of Helena's object 34, her ponytail.
 
+Chains with any other head (46 of 702) draw whole objects instead (`sub_0003AA20`, called from `sub_000422B0` when the head's first word is neither 0xFFFE nor 0xFFFF). The game's chain is the file's record with the particle array put in at +0x48, so +0x48 onwards moves 4 bytes (+0x50 is the file's head at +0x4C). Each object is drawn with the chain bone's draw matrix moved by the offset at +0x14, then by the mode, the record's third byte, through the jump table at `0x3ADDC` (`0x3AAE3, 0x3AB72, 0x3AC81, 0x3AD3B, 0x3AAE3`; past 4 nothing is drawn):
+
+- 0 and 4: turned by the floats at +0x24, +0x28, +0x2C (the chain's direction) read as degrees (times 182.044, `0x1ED788`), about z, then y, then x, and one segment length further down y after each object. The head holds one word per particle, the object number masked with 0x0FFF. The particles are not used.
+- 1: each particle's segment, turned into the bone's space by `0x3C8400`, turns its objects as `sub_0003F5F0` turns a segment (x by `atan2(z, y)` plus a half turn, then z by `atan2(x, hypot(y, z))`), all at the chain's start. Each particle has a list: an optional 0xFFFD first (it changes draw state: `sub_00154610(0)`, `sub_00154690`, `sub_00154F70`, `sub_00154640(1)`, flag `0x454434`), then numbers whose top bit says another follows.
+- 2: one word per particle; the game builds a frame from the negated segment and a cross product and then draws with the bone's matrix unchanged, so the objects are not turned.
+- 3: one word per particle, turned about y by `atan2(x, z)` less a quarter turn, then about z by `atan2(y, hypot(x, z))` plus a quarter turn.
+
+Every such chain in DOA3's costumes is mode 0, with a direction under 0.02, so their objects hang straight down the bone, and none of the objects is in the draw list (ignored test `survey_placing_chains`): before this they were not drawn at all. Ein's wrist chains (costume 2), Gen Fu's braid, Brad Wong's belt beads and sash, Lei Fang's, Christie's and Zack's are among them. In the viewer (`SoftChain::placed_objects`) each copy is its own piece on the chain's bone; modes 1 and 3 are placed again each frame. By eye only. The viewer keeps them for characters whose torso-front chains it drops. DOA2U costumes in DOA3's format do not use them: DOA2U's drawing of these is not read.
+
 Not implemented in the viewer:
 
 - Wind. The game adds `0x90EF00`, a 32-frame buffer (`sub_001537E0`). It was about 1 cm per frame in the tested match, and the error doubled without it.
 - World movement of the fighter, as the viewer stays in place.
-- Chains with any other head (46 of 702), which place whole objects (`sub_0003AA20`).
 - Normals of the moved vertices (`sub_0003F220`), which keep their rest direction.
 
 ### Cloth

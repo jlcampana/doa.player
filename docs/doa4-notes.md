@@ -180,11 +180,21 @@ particles on bone 1, segment 0.017, gravity 0.007, pull 0.3, damping 0.8, the co
 vertex word holds the layout in its top byte and a byte offset in that layout below (the low
 bit still says another follows), as the strides vary. DOA3's parser reads 1370 of the 1478 with
 its words swapped (`doa3_chains::parse_chain_records_big_endian`, `doa4::chains`), and every
-vertex it names is inside its object (ignored test `chains_read`). The 108 it refuses are all
-of one sort: their target's head is an object number (`00 22`, `10 24`...) instead of 0xFFFE or
-0xFFFF, the chains that place whole objects on their particles rather than write vertices
-(`sub_0003AA20` in DOA3, which the viewer does not do for DOA3 either): Bass's chains, Brad
-Wong's `bra01`, La Mariposa's `lis01` and others hang rigid until that is written.
+vertex it names is inside its object (ignored test `chains_read`). The other 108 are all of one
+sort: their target's head is an object number (`00 22`, `10 24`...) instead of 0xFFFE or 0xFFFF,
+the chains that draw whole objects (`sub_0003AA20` in DOA3, see "Chains" in
+`docs/doa3-internals.md`). None of their objects is in the draw lists, so they were not drawn
+before (ignored test `survey_placing_chains`). 100 are mode 0, as all of DOA3's; the others are
+mode 5 (Kokoro's `kor02`, `kor05` to `kor07`), 8 (three of Christie's `cri04`) and 31 (Zack's
+`zac00`, object 69), which DOA3's code would not draw. What DOA4 does with those is not read,
+and they stay undrawn. Numbers carry 0x1000 on some objects (Bass's links, La Mariposa's `lis01`);
+DOA3 masks it off and so does the viewer, without knowing what it means here.
+
+In the viewer `doa4::chain_draws` lists them and `doa4::load` adds each as a draw, marked
+`CHAIN_DRAW_MARK - k`, on its own node of the XPR's tree with the chain's bone; each frame its
+vertices are put where DOA3's placement says, in the chain bone's space, as chain targets are.
+Seen by eye on Bass (`bas00`, the chain from his hand), Brad Wong (`bra02`, belt medallions and
+necklace), Ein (wrist chains), La Mariposa (`lis01`) and Tina (`tin00`): nothing flies off.
 
 In the viewer the chains run through DOA3's simulation on the solved bones, with no wind:
 ponytails and long hair hang and swing, and nothing tears (by eye on Kasumi, Kokoro, Helena and

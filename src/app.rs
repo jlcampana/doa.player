@@ -476,6 +476,8 @@ struct Doa4Pose {
     /// Hair, ribbons and hanging pieces: each chain with, per target, the mesh pieces that
     /// draw its object and their nodes.
     chains: Vec<(SoftChain, Vec<Vec<(usize, usize)>>)>,
+    /// Objects that chains draw whole, by their place in `chains`.
+    placed: Vec<PlacedPiece>,
     /// Points on springs, each with the mesh pieces that draw its object and their nodes.
     springs: Vec<(SoftSprings, Vec<(usize, usize)>)>,
     /// Cloth sheets, likewise.
@@ -582,6 +584,65 @@ pub struct Doa3Chains {
     pub normal_rebuilds: Vec<doa2u::NormalRebuild>,
     /// DOA2U: objects whose positions follow another object.
     pub copies: Vec<doa2u::VertexCopy>,
+    /// Objects that chains draw whole and that move with the particles.
+    pub placed: Vec<PlacedPiece>,
+}
+
+/// A copy of an object that a chain draws whole, as its own mesh piece on the chain's bone
+/// (`SoftChain::placed_objects`).
+pub struct PlacedPiece {
+    pub chain: usize,
+    /// Its place in the chain's `placed_objects`.
+    pub index: usize,
+    pub piece: usize,
+    /// The mesh node the piece is drawn on.
+    pub node: usize,
+    /// The object's own vertices, before placing.
+    pub rest: Vec<crate::formats::model::ModelVertex>,
+}
+
+/// Each object the chains draw whole, moved to its place as at load: (chain, index in its
+/// `placed_objects`, object, vertices). Modes that follow the particles are placed again
+/// each frame by `place_chain_objects`.
+fn placed_copies(
+    chains: &[SoftChain],
+    vertices_of: impl Fn(usize) -> Option<Vec<crate::formats::model::ModelVertex>>,
+) -> Vec<(usize, usize, usize, Vec<crate::formats::model::ModelVertex>)> {
+    let mut out = Vec::new();
+    for (c, chain) in chains.iter().enumerate() {
+        for (index, (object, place)) in chain.placed_objects(&[]).into_iter().enumerate() {
+            let Some(mut vertices) = vertices_of(object) else { continue };
+            for vertex in &mut vertices {
+                vertex.position = place.transform_point3(vertex.position.into()).into();
+                vertex.normal = place.transform_vector3(vertex.normal.into()).into();
+            }
+            out.push((c, index, object, vertices));
+        }
+    }
+    out
+}
+
+/// Whether a chain's placed objects follow its particles (modes 1 and 3).
+fn placement_moves(chain: &SoftChain) -> bool {
+    chain.placed().is_some_and(|placed| matches!(placed.mode, 1 | 3))
+}
+
+/// Places again the objects of `placed`. `to_piece` takes the chain and the piece's node to
+/// the matrix from the chain's bone space to the piece's.
+fn place_chain_objects<'a>(
+    mesh: &mut MeshRenderer,
+    chains: impl Fn(usize) -> Option<&'a SoftChain>,
+    placed: &[PlacedPiece],
+    nodes: &[glam::Mat4],
+    to_piece: impl Fn(&SoftChain, usize) -> glam::Mat4,
+) {
+    for piece in placed {
+        let Some(chain) = chains(piece.chain) else { continue };
+        let Some(&(_, place)) = chain.placed_objects(nodes).get(piece.index) else { continue };
+        let place = to_piece(chain, piece.node) * place;
+        mesh.set_rest_positions(piece.piece, piece.rest.iter().enumerate().map(|(v, x)| (v, place.transform_point3(x.position.into()))));
+        mesh.set_rest_normals(piece.piece, piece.rest.iter().enumerate().map(|(v, x)| (v, place.transform_vector3(x.normal.into()).normalize_or_zero().to_array())));
+    }
 }
 
 pub struct Doa3Chest {
@@ -1216,7 +1277,7 @@ impl App {
         let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
         let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>, Vec<doax2::HandPoses>)> {
+        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>, Vec<doax2::HandPoses>, Vec<doa4::ChainDraw>)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
             let (tpr, cat) = match &file.loose {
                 Some((tpr, cat)) => (std::fs::read(tpr)?, std::fs::read(cat)?),
@@ -1230,9 +1291,9 @@ impl App {
             let springs = doa4::springs(&cat, &loaded.objects);
             let cloth = doa4::cloth(&cat, &loaded.objects);
             let sets = doa4::shape_sets(&cat, &loaded.objects).map_err(|e| log::warn!("DOA4 shape sets of {stem}: {e:#}")).unwrap_or_default();
-            Ok((loaded, doa4::has_head(&cat)?, chains, springs, cloth, sets))
+            Ok((loaded, doa4::has_head(&cat)?, chains, springs, cloth, sets, doa4::chain_draws(&cat)))
         };
-        let (body, has_head, body_chains, body_springs, body_cloth, body_sets) = read(&stem)?;
+        let (body, has_head, body_chains, body_springs, body_cloth, body_sets, body_draws) = read(&stem)?;
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
@@ -1240,9 +1301,9 @@ impl App {
         let head_stem = (!has_head)
             .then(|| picked.or_else(|| self.doa4_suit_heads.get(&stem).cloned()).or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
-        let (head, head_chains, head_springs, head_cloth, head_sets) = match head_stem.as_deref().map(read).transpose()? {
-            Some((head, _, chains, springs, cloth, sets)) => (Some(head), chains, springs, cloth, sets),
-            None => (None, Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        let (head, head_chains, head_springs, head_cloth, head_sets, head_draws) = match head_stem.as_deref().map(read).transpose()? {
+            Some((head, _, chains, springs, cloth, sets, draws)) => (Some(head), chains, springs, cloth, sets, draws),
+            None => (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         };
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
         // already at the body's place in others (Ayane's), so it is taken out.
@@ -1270,8 +1331,12 @@ impl App {
         let mut followed = Vec::new();
         // The mesh pieces and nodes that draw each object, per file.
         let mut drawn_objects: Vec<std::collections::HashMap<usize, Vec<(usize, usize)>>> = Vec::new();
+        // Per file, the mesh pieces and nodes of each object a chain draws whole, by its place
+        // in `doa4::chain_draws`, with the object's vertices.
+        let mut drawn_whole: Vec<std::collections::HashMap<usize, (Vec<(usize, usize)>, Vec<crate::formats::model::ModelVertex>)>> = Vec::new();
         for (file, frame) in &files {
             drawn_objects.push(std::collections::HashMap::new());
+            drawn_whole.push(std::collections::HashMap::new());
             let first_texture = textures.len();
             textures.extend(file.textures.iter().cloned());
             let node_bone = |node: usize| file.pieces.iter().find(|(_, n, placed)| *n == node && doa4::solve_node(placed.slot).is_some()).map(|(_, _, placed)| placed.slot);
@@ -1315,7 +1380,13 @@ impl App {
                     if groups > 0 && multi.is_none() {
                         log::info!("DOA4: piece on bone {} has {groups} weights and is drawn rigid", placed.slot);
                     }
-                    drawn_objects.last_mut().unwrap().entry(placed.object).or_default().push((inputs.len(), piece_node));
+                    match placed.mark {
+                        Some(mark) if mark <= doa4::CHAIN_DRAW_MARK => {
+                            let entry = drawn_whole.last_mut().unwrap().entry((doa4::CHAIN_DRAW_MARK - mark) as usize).or_insert_with(|| (Vec::new(), piece.vertices.clone()));
+                            entry.0.push((inputs.len(), piece_node));
+                        }
+                        _ => drawn_objects.last_mut().unwrap().entry(placed.object).or_default().push((inputs.len(), piece_node)),
+                    }
                     inputs.push(PieceInput { node: piece_node, vertices: &piece.vertices, draws, parent: piece_node, skin: None, bend: None, multi, welds: Vec::new(), translucent: false });
                 }
             }
@@ -1350,20 +1421,31 @@ impl App {
                 }
                 // Chains on bones the solve has, with the pieces their targets are drawn by.
                 let mut chains = Vec::new();
-                for (file, list) in [body_chains, head_chains].into_iter().enumerate() {
+                let mut placed = Vec::new();
+                for (file, (list, draws)) in [(body_chains, &body_draws), (head_chains, &head_draws)].into_iter().enumerate() {
                     let total = list.len();
                     let before = chains.len();
-                    for chain in list {
+                    for (c, chain) in list.into_iter().enumerate() {
                         if doa4::solve_node(chain.bone as u32) != Some(chain.bone) {
                             continue;
                         }
+                        // Objects the chain draws whole, each a piece per draw on the chain's bone.
+                        for (k, _) in draws.iter().enumerate().filter(|(_, d)| d.chain == c) {
+                            let Some((drawn, rest)) = drawn_whole.get(file).and_then(|d| d.get(&k)) else { continue };
+                            for &(piece, node) in drawn {
+                                placed.push(PlacedPiece { chain: chains.len(), index: draws[k].index, piece, node, rest: rest.clone() });
+                            }
+                        }
                         let targets: Vec<Vec<(usize, usize)>> = chain.targets.iter().map(|t| drawn_objects.get(file).and_then(|d| d.get(&t.object)).cloned().unwrap_or_default()).collect();
-                        if targets.iter().any(|t| !t.is_empty()) {
+                        if targets.iter().any(|t| !t.is_empty()) || chain.placed().is_some() {
                             chains.push((chain, targets));
                         }
                     }
                     if total > 0 {
                         log::info!("DOA4 chains: {} of {total} in use in file {file}", chains.len() - before);
+                    }
+                    if !draws.is_empty() {
+                        log::info!("DOA4 {stem} file {file}: {} objects drawn whole by chains", draws.len());
                     }
                 }
                 let mut springs = Vec::new();
@@ -1404,7 +1486,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0 });
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -1827,6 +1909,7 @@ impl App {
             pose_hands: doa2u::hands(&cat)?,
             normal_rebuilds: doa2u::normal_rebuilds(&cat)?,
             copies: doa2u::vertex_copies(&cat, &xpr)?,
+            placed: Vec::new(),
         };
         let chest = chest_morph.and_then(|(object, groups)| {
             let piece = chain_piece_of_chest?;
@@ -2004,6 +2087,7 @@ impl App {
             pose_hands: Vec::new(),
             normal_rebuilds: Vec::new(),
             copies: Vec::new(),
+            placed: Vec::new(),
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains, motions_in_doa3: home.is_some() });
         self.game_clock = 0.0;
@@ -2110,7 +2194,9 @@ impl App {
         // Hair and cloth. A detached object is only drawn through its chain.
         let mut chains = doa3_chains::parse_chains(cat);
         if !doa3::torso_front_chain_allowed(roster.id) {
-            chains.retain(|chain| !chain.is_on_torso_front());
+            // Chains that draw whole objects are kept: without them the objects are not drawn
+            // at all (Brad Wong's on the torso). Whether the game skips them is not read.
+            chains.retain(|chain| chain.placed().is_some() || !chain.is_on_torso_front());
         }
         let mut cloth = doa3_cloth::parse_cloth(cat);
         if !doa3::torso_front_chain_allowed(roster.id) {
@@ -2152,6 +2238,20 @@ impl App {
                     bend: None, multi: None,
                 });
             }
+        }
+        // Objects that chains draw whole, a piece per copy on the chain's bone.
+        let copies = placed_copies(&chains, |object| pieces.get(object).map(|piece| piece.vertices.clone()));
+        let mut placed = Vec::new();
+        for (c, index, object, vertices) in &copies {
+            let Some((_, draws)) = draws_of(*object) else { continue };
+            let bone = chains[*c].bone;
+            if placement_moves(&chains[*c]) {
+                placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: pieces[*object].vertices.clone() });
+            }
+            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
+        }
+        if !copies.is_empty() {
+            log::info!("DOA3: {} objects drawn whole by chains", copies.len());
         }
         let extras = props.iter().map(|prop| (prop, false));
         let extras = extras.chain(overlays.iter().map(|overlay| (&overlay.prop, overlay.translucent)));
@@ -2225,6 +2325,7 @@ impl App {
             pose_hands: Vec::new(),
             normal_rebuilds: Vec::new(),
             copies: Vec::new(),
+            placed,
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains, motions_in_doa3: true });
         self.game_clock = 0.0;
@@ -2602,6 +2703,8 @@ impl App {
                             }
                         }
                     }
+                    let pieces = &pose.pieces;
+                    place_chain_objects(&mut self.mesh, |c| pose.chains.get(c).map(|(chain, _)| chain), &pose.placed, &bones, |chain, node| (turn(chain.bone) * pieces[node].1).inverse());
                     if let Some((face, drawn)) = &pose.face {
                         for &(piece, _) in drawn {
                             self.mesh.set_rest_positions(piece, face.positions(clock).flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))));
@@ -2918,6 +3021,7 @@ impl App {
                             );
                         }
                     }
+                    place_chain_objects(&mut self.mesh, |c| soft.chains.get(c), &soft.placed, &nodes, |_, _| glam::Mat4::IDENTITY);
                     for rebuild in &soft.normal_rebuilds {
                         let Some(&Some((piece, _))) = soft.pieces.get(rebuild.object) else { continue };
                         let normals = rebuild.normals(|vertex| self.mesh.rest_position(piece, vertex));
