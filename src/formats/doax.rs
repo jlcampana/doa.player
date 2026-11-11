@@ -36,9 +36,8 @@ const FOOT_HEIGHT: f32 = 0.1;
 /// A character the viewer offers, with the file code in her models' names and her table of
 /// bone offsets. Measured on the running game (a volleyball demo, 2026-11-11: each character's
 /// matrices fit one table far better than the rest, and her tracks name her motion file):
-/// Kasumi 1, Helena 2, Tina 0, Lisa 6; and in a second demo the same day Ayane 4 and Hitomi 5,
-/// each named by her motion file, and 3 for the fourth girl beside Lisa, whom the user saw as
-/// Lei Fang. Christie's 7 is what is left, not measured.
+/// Kasumi 1, Helena 2, Tina 0, Lisa 6; in two more demos the same day Ayane 4, Hitomi 5, Lei
+/// Fang 3 and Christie 7, each named by her own motion file. All eight are measured.
 pub const ROSTER: [(&str, &str, u32); 8] = [
     ("Kasumi", "ks", 1),
     ("Ayane", "ay", 4),
