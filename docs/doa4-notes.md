@@ -162,7 +162,7 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   the other two light on both sides. Not understood: it stays rigid on the chest, logged when
   loaded.
 
-Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); hands and faces have no shapes; pieces on bones the solve
+Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); the chest and face shapes are not used; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
 
@@ -221,7 +221,28 @@ Kinds 0, 3, 7, 9, 14, 15, 251 and 254 are not read yet. DOA3's and
 DOA2U's readers are the place to start, by the same swap; nothing says their records match as
 kind 1's do.
 
-Word 3 is the offset of an `MPV` block, DOAX2's shape sets (faces and hands), not read here yet.
+## Shapes: hands, chest, faces
+
+CAT word 3 is the offset of an `MPV` block, DOAX2's shape sets, read by its reader
+(`doa4::shape_sets`, ignored test `shape_sets_read`). A costume has two sets on its hand
+objects (15, 18, 21 or 24 entries: the vertex lists, then the shapes) and often one of 3 on the
+chest; a head has two on the face (5 and 9 entries most often, 4 and 8 in DOAX2: eyes and
+mouth). Entry 1 is the object's own vertices exactly in most sets; in some with 16 to 19 or 25
+entries it is up to 11 cm off, so those are not all laid out the same way.
+
+Scripts: `anm.afs` has a file per character (`kasumi.bin`, `leifang.bin` for `leifan.mot`), which
+is DOA3's character `.bin` with big-endian words: 34 section offsets, the move scripts in
+section 21 as 16-bit operations. Walked with DOA3's table of sizes, 553 of Kasumi's 628 scripts
+end on the end marker; the rest stop on operations DOA3 does not have (0x89 most, then 0x6903,
+0x74, 0x70, 0x7530, 0x6C, 0x9C). Operations 46 and 76 are DOA3's hand poses: their hand is 0, 1
+or 2 and their pose 0 to 16 in the three files looked at.
+
+In the viewer the hands follow those events as DOA3's do (the last event at or before the
+frame, DOA3's blend rates, the first set as the scripts' hand 1), taking pose p as the set's
+entry p + 1: both of those are assumptions, as is that the motion numbers are those of the
+character's main motion file. By eye the fingers take shapes and nothing tears. The chest's
+and the face's sets are read and not used yet: what drives them is not known.
+
 
 ## In the viewer
 

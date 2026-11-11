@@ -645,6 +645,34 @@ pub fn vertex_copies(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa2u:
     copies
 }
 
+/// The shape sets of a model: an `MPV` block at the offset in CAT word 3, DOAX2's (see
+/// `doax2::hand_poses`). A costume has two sets of 21 entries on its hands and, on some, one of
+/// 3 on the chest; a head has one of 5 and one of 9 on the face, which in DOAX2 are the eyes
+/// and the mouth with 4 and 8.
+pub fn shape_sets(cat: &[u8], objects: &[doax2::Object]) -> Result<Vec<doax2::HandPoses>> {
+    let start = be32(cat, 12).context("CAT too short")? as usize;
+    if start == 0 {
+        return Ok(Vec::new());
+    }
+    doax2::hand_poses(cat.get(start..).context("shape sets beyond the CAT")?, objects)
+}
+
+/// A character's script file in `anm.afs`: `motion_file`'s name with `.bin`, but for Lei Fang,
+/// whose motions are `leifan.mot` and scripts `leifang.bin`.
+pub fn script_file(code: &str) -> Option<String> {
+    let name = motion_file(code)?;
+    Some(format!("{}.bin", if name == "leifan" { "leifang" } else { name }))
+}
+
+/// A hand's shape set as poses to blend between: pose p of the scripts is taken to be the
+/// set's entry p + 1, entry 1 being the hand as modelled (as assumed for DOAX2; not checked).
+/// Entries a set lacks stay on the base.
+pub fn pose_hand(set: &doax2::HandPoses) -> Option<super::doa3_morphs::PoseHand> {
+    let base = set.poses.get(1)?.clone()?;
+    let shapes = set.poses[1..].iter().map(|pose| pose.clone().unwrap_or_else(|| base.clone())).collect();
+    Some(super::doa3_morphs::PoseHand::new(set.object, set.groups.clone(), shapes, Vec::new(), Vec::new()))
+}
+
 /// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
 /// record with big-endian words, 0x34 bytes.
 pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {
@@ -883,6 +911,47 @@ mod tests {
         println!("{} of {} springs read, moving {} vertices, {} outside their object", spring_totals.1, spring_totals.0, spring_totals.2, spring_totals.3);
         println!("{} of {} copies read, {} onto an object of the first list, {} links outside their objects", copy_totals.1, copy_totals.0, copy_totals.2, copy_totals.3);
         println!("{} of {} sheets read, moving {} vertices, {} outside their object", cloth_totals.1, cloth_totals.0, cloth_totals.2, cloth_totals.3);
+    }
+
+    /// Every model's shape sets read; prints how many sets there are of each size.
+    #[test]
+    #[ignore]
+    fn shape_sets_read() {
+        let mut sizes: std::collections::BTreeMap<(bool, usize), usize> = std::collections::BTreeMap::new();
+        let mut far = 0f32;
+        let mut worst_by_size: std::collections::BTreeMap<(bool, usize), (f32, String)> = std::collections::BTreeMap::new();
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().map(str::to_string).collect();
+            for (index, name) in names.iter().enumerate() {
+                let Some(stem) = name.strip_suffix(".tpr") else { continue };
+                let (tpr, cat) = (afs.read_index(index).unwrap(), afs.read_index(index + 1).unwrap());
+                let xpr = doax2::Xpr2::parse(&tpr).unwrap();
+                let objects = doax2::objects(&xpr).unwrap();
+                let sets = shape_sets(&cat, &objects).unwrap_or_else(|e| panic!("{stem}: {e:#}"));
+                for set in &sets {
+                    *sizes.entry((is_costume(stem), set.poses.len())).or_default() += 1;
+                    let before = far;
+                    far = 0.0;
+                    // The base shape (entry 1) should be the object's own vertices.
+                    let piece = doax2::object_piece(&xpr, &objects[set.object]).unwrap();
+                    if let Some(Some(base)) = set.poses.get(1) {
+                        for (group, position) in set.groups.iter().zip(base) {
+                            for &v in group {
+                                far = far.max((glam::Vec3::from(piece.vertices[v].position) - glam::Vec3::from(*position)).length());
+                            }
+                        }
+                    }
+                    let worst = worst_by_size.entry((is_costume(stem), set.poses.len())).or_insert((0f32, String::new()));
+                    if far > worst.0 {
+                        *worst = (far, format!("{stem} object {}", set.object));
+                    }
+                    far = far.max(before);
+                }
+            }
+        }
+        println!("base shape's distance from the vertices, worst by (costume, entries): {worst_by_size:.4?}");
+        println!("sets by (costume, entries): {sizes:?}; base shapes at most {far:.5} m from their vertices");
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first

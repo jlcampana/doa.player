@@ -488,7 +488,10 @@ pub fn parse_hand_events(bin: &[u8]) -> HashMap<u16, Vec<HandEvent>> {
         .collect();
     starts.sort_unstable();
     starts.dedup();
-    let word = |at: usize| Some(u16::from_le_bytes(bin.get(at..at + 2)?.try_into().ok()?));
+    let word = |at: usize| {
+        let bytes: [u8; 2] = bin.get(at..at + 2)?.try_into().ok()?;
+        Some(if super::doa3_chains::big_endian() { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) })
+    };
     for start in starts {
         let mut at = start;
         let (mut motion, mut frame) = (None, 0);
@@ -534,6 +537,13 @@ pub fn parse_hand_events(bin: &[u8]) -> HashMap<u16, Vec<HandEvent>> {
         }
     }
     motions
+}
+
+/// DOA4's hand events: its `anm.afs` files are DOA3's character `.bin` with big-endian words,
+/// scripts in section 21 with DOA3's operations. Scripts stop at operations DOA3 does not have
+/// (0x89, 0x70, 0x74, 0x6C, 0x9C... about one script in eight), keeping the events before.
+pub fn parse_hand_events_big_endian(bin: &[u8]) -> HashMap<u16, Vec<HandEvent>> {
+    super::doa3_chains::with_big_endian(|| parse_hand_events(bin))
 }
 
 /// `sub_0004B63C`: some characters replace the open hand with another pose.

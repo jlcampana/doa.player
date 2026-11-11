@@ -475,6 +475,13 @@ struct Doa4Pose {
     springs: Vec<(SoftSprings, Vec<(usize, usize)>)>,
     /// Cloth sheets, likewise.
     cloth: Vec<(SoftCloth, Vec<(usize, usize)>)>,
+    /// The hands' shape sets with the mesh pieces that draw them, and each motion's hand
+    /// events by motion number.
+    hands: Vec<(crate::formats::doa3_morphs::PoseHand, Vec<(usize, usize)>)>,
+    hand_events: HashMap<u16, Vec<HandEvent>>,
+    /// Each entry of the animation list: its motion number, and whether it is from the
+    /// character's main file, whose numbers the scripts use.
+    motion_ids: Vec<(u16, bool)>,
     wind: Wind,
     /// Game frames already simulated.
     chain_frame: u64,
@@ -1189,7 +1196,7 @@ impl App {
         let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
         let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>)> {
+        let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>, Vec<doax2::HandPoses>)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
             let (tpr, cat) = match &file.loose {
                 Some((tpr, cat)) => (std::fs::read(tpr)?, std::fs::read(cat)?),
@@ -1202,9 +1209,10 @@ impl App {
             let chains = doa4::chains(&cat, &loaded.objects);
             let springs = doa4::springs(&cat, &loaded.objects);
             let cloth = doa4::cloth(&cat, &loaded.objects);
-            Ok((loaded, doa4::has_head(&cat)?, chains, springs, cloth))
+            let sets = doa4::shape_sets(&cat, &loaded.objects).map_err(|e| log::warn!("DOA4 shape sets of {stem}: {e:#}")).unwrap_or_default();
+            Ok((loaded, doa4::has_head(&cat)?, chains, springs, cloth, sets))
         };
-        let (body, has_head, body_chains, body_springs, body_cloth) = read(&stem)?;
+        let (body, has_head, body_chains, body_springs, body_cloth, body_sets) = read(&stem)?;
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
@@ -1212,7 +1220,7 @@ impl App {
             .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
         let (head, head_chains, head_springs, head_cloth) = match head_stem.as_deref().map(read).transpose()? {
-            Some((head, _, chains, springs, cloth)) => (Some(head), chains, springs, cloth),
+            Some((head, _, chains, springs, cloth, _)) => (Some(head), chains, springs, cloth),
             None => (None, Vec::new(), Vec::new(), Vec::new()),
         };
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
@@ -1305,12 +1313,14 @@ impl App {
                     .collect();
                 let mut files = Vec::new();
                 let mut motions = Vec::new();
+                let mut motion_ids = Vec::new();
                 if let (Some(name), Ok(mot)) = (doa4::motion_file(&code), doax::LazyArchive::open(doa4::game_dir().join("mot.afs"))) {
                     for prefix in ["", "m_", "c_"] {
                         let file = format!("{prefix}{name}.mot");
                         let Ok(data) = mot.read(&file) else { continue };
                         for (id, tracks) in doa4::list_motions(&data) {
                             let frames = doa4::motion_length(&data, &tracks);
+                            motion_ids.push((id as u16, prefix.is_empty()));
                             motions.push((files.len(), tracks, frames));
                             animations.push(AnimationEntry { name: format!("{prefix}{name} {id:04} ({frames} frames)"), file_key: file.clone(), doa3_motion: None, doa3_motion_id: id });
                         }
@@ -1344,6 +1354,18 @@ impl App {
                         }
                     }
                 }
+                // Hands: the body's shape sets of over ten entries, on the hand bones, driven by
+                // the scripts of the character's file in `anm.afs`.
+                let hands: Vec<(crate::formats::doa3_morphs::PoseHand, Vec<(usize, usize)>)> = body_sets
+                    .iter()
+                    .filter(|set| set.poses.len() > 10)
+                    .filter_map(|set| Some((doa4::pose_hand(set)?, drawn_objects.first()?.get(&set.object)?.clone())))
+                    .collect();
+                let hand_events = doa4::script_file(&code)
+                    .and_then(|file| doax::LazyArchive::open(doa4::game_dir().join("anm.afs")).ok()?.read(&file).ok())
+                    .map(|bin| crate::formats::doa3_morphs::parse_hand_events_big_endian(&bin))
+                    .unwrap_or_default();
+                log::info!("DOA4 hands: {} sets, {} motions with hand events", hands.len(), hand_events.len());
                 let mut cloth = Vec::new();
                 for (file, list) in [body_cloth, head_cloth].into_iter().enumerate() {
                     for sheet in list {
@@ -1354,7 +1376,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, wind: Wind::new(), chain_frame: 0 });
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, motion_ids, wind: Wind::new(), chain_frame: 0 });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2532,6 +2554,16 @@ impl App {
                         for (sheet, _) in &mut pose.cloth {
                             sheet.step(&bones, glam::Vec3::ZERO);
                         }
+                        // Hands: the last event at or before this frame, as for DOA3, whose
+                        // first hand set is the scripts' hand 1.
+                        let (motion_id, main_file) = pose.motion_ids[index];
+                        let events = main_file.then(|| pose.hand_events.get(&motion_id)).flatten();
+                        let frame = self.anim_time as u16;
+                        for (hand_index, (hand, _)) in pose.hands.iter_mut().enumerate() {
+                            let script_hand = hand_index ^ 1;
+                            let event = events.and_then(|list| list.iter().rev().find(|e| e.targets(script_hand) && e.frame <= frame));
+                            hand.step(event.map_or(0, |e| e.pose as usize), event.map_or(1.0 / 26.0, HandEvent::rate));
+                        }
                     }
                     pose.chain_frame = clock.max(1);
                     for (chain, targets) in &pose.chains {
@@ -2540,6 +2572,11 @@ impl App {
                                 let to_piece = (turn(chain.bone) * pose.pieces[node].1).inverse();
                                 self.mesh.set_rest_positions(piece, chain.vertex_positions(target, &bones).map(|(vertex, position)| (vertex, to_piece.transform_point3(position))));
                             }
+                        }
+                    }
+                    for (hand, drawn) in &pose.hands {
+                        for &(piece, _) in drawn {
+                            self.mesh.set_rest_positions(piece, hand.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))));
                         }
                     }
                     for (sheet, drawn) in &pose.cloth {
