@@ -83,7 +83,8 @@ A costume with a head has a `90` draw on bone 1 (Zack, Tina). One without (Kasum
 root goes on that node. Some head files have that root at the origin (`kasAA`), others already at
 the body's place, (0, 0.468, -0.025) in `ayaAA`: the viewer takes the head file's own root out
 first (Ayane's head floated above her trunk before, the user's report). Which hairstyle goes with which costume is not known: the viewer takes
-the first.
+the first (or the swimsuit's, from the manifest), and the panel's Hair row or `--hair N` picks
+any of the character's head files.
 
 ## DOAX2 swimsuits
 

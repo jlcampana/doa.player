@@ -367,6 +367,8 @@ DXT5 alpha was decoded into a quarter of each texture, block numbers taken for p
 wrong hair and too dark lashes the user saw, and why Lei Fang's fringe covered her eyes: with the
 alpha right her fringe stops above them.
 
+Choosing one: the viewer lists a character's heads (`v<code>` and two capitals in `chr.afs`) in the panel's Hair row, and `--hair N` picks the N-th from the command line (2026-11-11). Seen on Kasumi's `AB`. Heads without cloth (the braided `BA` and `BB`) load as any other.
+
 ## Lights and materials
 
 The shaders' constant tables, in the heap with each shader, name their registers: vertex

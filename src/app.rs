@@ -56,6 +56,9 @@ pub struct CharacterEntry {
     pub doa2u_id: Option<usize>,
     /// Not a fighter: listed apart. Some are the intro's, as the user recognized them.
     pub intro: bool,
+    /// DOAX2 and DOA4: the head files the character can wear, each a hairstyle. The panel
+    /// offers them when there are two or more; the first is the default.
+    pub hairstyles: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +216,7 @@ fn doa2u_characters(archives: &[&AfsArchive]) -> Vec<CharacterEntry> {
             doa3: None,
             doa2u_id: Some(*id),
             intro: ["mam", "pdg", "wba", "lor", "hks", "yti"].contains(&prefixes[0]),
+            hairstyles: Vec::new(),
         })
         .collect()
 }
@@ -273,6 +277,7 @@ pub fn doa3_characters(xbe: &Xbe, archive: &AfsArchive) -> Vec<CharacterEntry> {
                 afs_indices: models,
                 doa2u_id: None,
                 intro: false,
+                hairstyles: Vec::new(),
                 doa3: Some(entry),
             }
         })
@@ -657,6 +662,7 @@ impl App {
                     doa3: None,
                     doa2u_id: None,
                     intro: false,
+                    hairstyles: Vec::new(),
                 })
             })
             .collect();
@@ -666,10 +672,19 @@ impl App {
             .filter_map(|path| doax::LazyArchive::open(asset_path(path)).map_err(|e| log::info!("No DOAX2 suits: {e:#}")).ok())
             .collect();
         let doax2_wear_names: Vec<Vec<String>> = doax2_wear.iter().map(|w| w.names().map(str::to_string).collect()).collect();
+        // A character's heads in `chr.afs`: `v<code>` and two capitals, such as `vksAB`.
+        let doax2_heads: Vec<String> = doax2_chr
+            .iter()
+            .flat_map(|chr| chr.names())
+            .filter_map(|name| name.strip_suffix(".tpr"))
+            .filter(|stem| stem.len() == 5 && stem.starts_with('v') && stem[3..].bytes().all(|b| b.is_ascii_uppercase()))
+            .map(str::to_string)
+            .collect();
         let doax2_characters: Vec<CharacterEntry> = doax2_chr
             .iter()
             .flat_map(|_| {
                 let names = &doax2_wear_names;
+                let heads = &doax2_heads;
                 crate::formats::doax2::ROSTER.iter().map(move |(name, code)| CharacterEntry {
                     id: code.to_string(),
                     bin_id: String::new(),
@@ -679,6 +694,7 @@ impl App {
                     doa3: None,
                     doa2u_id: None,
                     intro: false,
+                    hairstyles: heads.iter().filter(|head| head[1..3] == **code).cloned().collect(),
                 })
             })
             .collect();
@@ -722,6 +738,7 @@ impl App {
                     doa3: None,
                     doa2u_id: None,
                     intro: false,
+                    hairstyles: doa4_files.iter().filter(|f| f.loose.is_none() && f.stem.starts_with(code) && !crate::formats::doa4::is_costume(&f.stem)).map(|f| f.stem.clone()).collect(),
                 })
             })
             .collect();
@@ -913,7 +930,8 @@ impl App {
         let suits = doax2::suits(&self.doax2_wear_names, &code);
         let suit = suits.get(costume_idx).context("unknown suit")?;
         let wear = &self.doax2_wear[suit.archive];
-        let head = format!("v{code}AA");
+        // The hairstyle picked in the panel, or the first head.
+        let head = self.char_panel.selected_hair_idx.and_then(|i| entry.hairstyles.get(i)).cloned().unwrap_or_else(|| format!("v{code}AA"));
         let body_cat = chr.read(&format!("v{code}1.cat"))?;
         // Suits hold a list per body type; the body's CAT says which is hers.
         let body_type = doax2::body_type(&body_cat).ok();
@@ -1218,8 +1236,9 @@ impl App {
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
+        let picked = self.char_panel.selected_hair_idx.and_then(|i| self.doa4_characters.get(char_idx)?.hairstyles.get(i)).cloned();
         let head_stem = (!has_head)
-            .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
+            .then(|| picked.or_else(|| self.doa4_suit_heads.get(&stem).cloned()).or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
         let (head, head_chains, head_springs, head_cloth, head_sets) = match head_stem.as_deref().map(read).transpose()? {
             Some((head, _, chains, springs, cloth, sets)) => (Some(head), chains, springs, cloth, sets),

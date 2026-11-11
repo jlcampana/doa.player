@@ -497,6 +497,8 @@ fn load_from_arguments(app: &mut App) {
     app.char_panel.selected_source = if doa4 { app::GameSource::Doa4 } else if doax2 { app::GameSource::Doax2 } else if doax { app::GameSource::Doax } else if doa2u { app::GameSource::Doa2U } else { app::GameSource::Doa3 };
     app.char_panel.selected_char_idx = Some(index);
     app.char_panel.selected_costume_idx = number(0);
+    // `--hair N` picks the character's N-th head, for games with separate heads.
+    app.char_panel.selected_hair_idx = args.iter().position(|a| a == "--hair").and_then(|i| args.get(i + 1)?.parse().ok());
     if let Some(scale) = args.iter().position(|a| a == "--bounce").and_then(|i| args.get(i + 1)?.parse().ok()) {
         app.bg_panel.bounce_scale = scale;
     }

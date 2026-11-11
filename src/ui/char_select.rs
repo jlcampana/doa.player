@@ -5,6 +5,8 @@ pub struct CharSelectPanel {
     pub selected_source: GameSource,
     pub selected_char_idx: Option<usize>,
     pub selected_costume_idx: usize,
+    /// The hairstyle picked for games with separate heads; `None` is the costume's own.
+    pub selected_hair_idx: Option<usize>,
     /// Exports with all motions, not only the playing one.
     pub export_all_motions: bool,
     pub export_request: Option<ExportRequest>,
@@ -27,6 +29,7 @@ impl CharSelectPanel {
             selected_source: GameSource::Doa2U,
             selected_char_idx: None,
             selected_costume_idx: 0,
+            selected_hair_idx: None,
             export_all_motions: false,
             export_request: None,
             filter: String::new(),
@@ -64,6 +67,7 @@ impl CharSelectPanel {
                     ).clicked() {
                         self.selected_source = GameSource::Doa2U;
                         self.selected_char_idx = None;
+                        self.selected_hair_idx = None;
                         self.selected_costume_idx = 0;
                     }
                     if ui.selectable_label(
@@ -71,6 +75,7 @@ impl CharSelectPanel {
                     ).clicked() {
                         self.selected_source = GameSource::Doa3;
                         self.selected_char_idx = None;
+                        self.selected_hair_idx = None;
                         self.selected_costume_idx = 0;
                     }
                     if ui.selectable_label(
@@ -78,6 +83,7 @@ impl CharSelectPanel {
                     ).clicked() {
                         self.selected_source = GameSource::Doax;
                         self.selected_char_idx = None;
+                        self.selected_hair_idx = None;
                         self.selected_costume_idx = 0;
                     }
                     if ui.selectable_label(
@@ -85,6 +91,7 @@ impl CharSelectPanel {
                     ).clicked() {
                         self.selected_source = GameSource::Doax2;
                         self.selected_char_idx = None;
+                        self.selected_hair_idx = None;
                         self.selected_costume_idx = 0;
                     }
                     if ui.selectable_label(
@@ -92,6 +99,7 @@ impl CharSelectPanel {
                     ).clicked() {
                         self.selected_source = GameSource::Doa4;
                         self.selected_char_idx = None;
+                        self.selected_hair_idx = None;
                         self.selected_costume_idx = 0;
                     }
                 });
@@ -128,6 +136,7 @@ impl CharSelectPanel {
                                 if !selected {
                                     self.selected_char_idx = Some(i);
                                     self.selected_costume_idx = 0;
+                                    self.selected_hair_idx = None;
                                     on_char_selected(i, crate::app::DEFAULT_COSTUME);
                                 }
                             }
@@ -150,6 +159,27 @@ impl CharSelectPanel {
                         });
                         ui.checkbox(&mut self.export_all_motions, "All motions")
                             .on_hover_text("Otherwise only the playing motion. Files get large, and Blender takes long to import them.");
+                        if entry.hairstyles.len() > 1 {
+                            ui.separator();
+                            ui.label("Hair:");
+                            ui.horizontal_wrapped(|ui| {
+                                let mut pick = None;
+                                if ui.selectable_label(self.selected_hair_idx.is_none(), "Default").on_hover_text("The head the costume comes with").clicked() {
+                                    pick = Some(None);
+                                }
+                                for (hi, name) in entry.hairstyles.iter().enumerate() {
+                                    // The last two letters tell the heads apart.
+                                    let short = name.get(name.len().saturating_sub(2)..).unwrap_or(name);
+                                    if ui.selectable_label(self.selected_hair_idx == Some(hi), short).on_hover_text(name).clicked() {
+                                        pick = Some(Some(hi));
+                                    }
+                                }
+                                if let Some(pick) = pick.filter(|pick| *pick != self.selected_hair_idx) {
+                                    self.selected_hair_idx = pick;
+                                    on_char_selected(char_idx, self.selected_costume_idx);
+                                }
+                            });
+                        }
                         ui.separator();
                         ui.label("Costume:");
                         // The up and down keys walk the list, loading each costume, unless a
