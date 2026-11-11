@@ -80,6 +80,27 @@ Fang, `tin` Tina, `lis` La Mariposa, `cri` Christie, `boy` Eliot, `jan` Jann Lee
 Alpha-152, `spa` Spartan-458, `rtm` unknown. Seen in the viewer and recognizable: Kasumi, Zack,
 Tina, Kokoro (`hak00`), Hayabusa, Helena, the Spartan.
 
+## Motions (looked at, not read by the viewer yet)
+
+`mot.afs` has, per character, `zack.mot`, `m_zack.mot` and `c_zack.mot`, plus tag files
+(`t_ay_ks.mot`...). The layout is DOA3's in big-endian (checked with a script on `zack.mot`,
+`kasumi.mot` and `tina.mot`, 2026-11-11):
+
+- The file starts with a table of block offsets, one per motion number; unused numbers point at
+  a placeholder block, the first word's. The table's length is the placeholder's first track
+  offset over 4 (1002 entries in `zack.mot`, 377 of them motions).
+- A block is a list of track offsets, each lower than the block and rising: 44 of them in over
+  90 percent of the motions, DOA3's count. The rest stop early under that test, likely tracks
+  shared with another motion.
+- Walking each track with DOA3's key records (a 16-bit head with the kind in its low 2 bits and
+  the frames to the next key in the 10 above; sizes 10, 4, 6 and 8 bytes) gives sane lengths (49,
+  49, 65, 29... frames) and ends exactly on the next track's start for two thirds of the tracks.
+
+The draw lists' bone numbers also match DOA3's limb chains (upper arm 8, forearm 4, hand 5;
+thigh 6, shin 7, foot 3; 14, 10, 11 and 12, 13, 9 on the other side). So the next step is
+DOA3's evaluator and pose solve with big-endian reads and the skeleton's offsets taken from the
+node tree. Whether the 44 tracks mean what they mean in DOA3 is not checked.
+
 ## In the viewer
 
 `--doa4`, or the DOA4 button: a costume in the files' rest pose with its textures, lit by the
