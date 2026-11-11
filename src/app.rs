@@ -862,6 +862,7 @@ impl App {
         let mut chest = Vec::new();
         let mut body_objects = Vec::new();
         let mut head_objects = Vec::new();
+        let mut suit_objects = Vec::new();
         for (index, file) in files.iter().enumerate() {
             let drawn_before = drawn.len();
             let texture_base = textures.len();
@@ -911,6 +912,9 @@ impl App {
                 if index == 1 {
                     head_objects.push((placed.object, drawn.len()));
                 }
+                if index == 2 {
+                    suit_objects.push((placed.object, drawn.len()));
+                }
                 drawn.push(Drawn { piece, first_texture: texture_base, texture_count: file.textures.len(), node, multi });
             }
         }
@@ -956,16 +960,19 @@ impl App {
                 })
                 .collect()
         };
-        let cloths: Vec<Doax2Cloth> = chr
-            .read(&format!("{head}.cat"))
-            .ok()
-            .and_then(|cat| crate::formats::doax2_cloth::read(&cat).map_err(|e| log::warn!("DOAX2 hair: {e:#}")).ok())
-            .unwrap_or_default()
+        // The suit's cloths (skirts, sleeves, hanging pieces) come the same way from its CAT,
+        // which holds a set per body type.
+        let read_cloths = |cat: anyhow::Result<Vec<u8>>, what: &str| {
+            cat.ok().and_then(|cat| crate::formats::doax2_cloth::read_for(&cat, body_type).map_err(|e| log::warn!("DOAX2 {what} cloth: {e:#}")).ok()).unwrap_or_default()
+        };
+        let sources = [(read_cloths(chr.read(&format!("{head}.cat")), "hair"), &head_objects), (read_cloths(wear.read_index(suit.entry + 1), "suit"), &suit_objects)];
+        let cloths: Vec<Doax2Cloth> = sources
             .into_iter()
-            .filter_map(|cloth| {
+            .flat_map(|(cloths, objects)| cloths.into_iter().map(move |cloth| (cloth, objects)))
+            .filter_map(|(cloth, objects)| {
                 let mut node = None;
                 let mut targets = Vec::new();
-                for &(_, drawn_index) in &head_objects {
+                for &(_, drawn_index) in objects {
                     let d = &drawn[drawn_index];
                     if d.multi.is_some() {
                         continue;
@@ -990,7 +997,8 @@ impl App {
                     targets.push((drawn_index, pairs));
                 }
                 let node = node?;
-                log::info!("DOAX2 hair {}: {} particles on {} pieces", cloth.name, cloth.particles.len(), targets.len());
+                let matched: std::collections::HashSet<usize> = targets.iter().flat_map(|(_, pairs): &(usize, Vec<(usize, usize)>)| pairs.iter().map(|&(_, particle)| particle)).collect();
+                log::info!("DOAX2 cloth {}: {} of {} particles found on {} pieces", cloth.name, matched.len(), cloth.particles.len(), targets.len());
                 Some(Doax2Cloth { sim: crate::formats::doax2_cloth::ClothSim::new(cloth), node, targets })
             })
             .collect();

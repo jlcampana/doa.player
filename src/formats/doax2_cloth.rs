@@ -144,10 +144,54 @@ impl Cloth {
 
 /// The cloths of a head CAT, or none when it has no `MULTI_CLOTH` block (word 5 zero).
 pub fn read(cat: &[u8]) -> Result<Vec<Cloth>> {
+    let mut cloths = Vec::new();
+    for block in blocks(cat)?.into_iter().flatten() {
+        cloths.extend(read_block(cat, block)?);
+    }
+    Ok(cloths)
+}
+
+/// The cloths a CAT has for a body type: a head's are for every body, a suit's come in a pack
+/// with a block per body type.
+pub fn read_for(cat: &[u8], body: Option<usize>) -> Result<Vec<Cloth>> {
+    let blocks = blocks(cat)?;
+    let block = match (blocks.len(), body) {
+        (1, _) => blocks[0],
+        (_, Some(body)) => blocks.get(body).copied().flatten(),
+        _ => None,
+    };
+    block.map_or(Ok(Vec::new()), |block| read_block(cat, block))
+}
+
+/// The `MULTI_CLOTH` blocks word 5 of a CAT leads to. A head's CAT points at one. A suit's
+/// points at a `tdpack`: +0x14 the number of slots (6), +0x18 how many are used, +0x20 the
+/// offset of the slots' table, each slot the offset of a `MULTI_CLOTH` from the pack or 0. The
+/// slots are body types, in the order of the CAT's draw lists: a skirt fills five, with cloths
+/// named `ks_skirt`, `ht_skirt`, `he_skirt`, `tn_skirt` and `cr_skirt`.
+fn blocks(cat: &[u8]) -> Result<Vec<Option<usize>>> {
     let block = be32(cat, 20)? as usize;
-    if block == 0 || tag(cat, block) != b"MULTI_CLOTH" {
+    if block == 0 {
         return Ok(Vec::new());
     }
+    if tag(cat, block) == b"MULTI_CLOTH" {
+        return Ok(vec![Some(block)]);
+    }
+    if tag(cat, block) != b"tdpack" {
+        return Ok(Vec::new());
+    }
+    let (slots, table) = (be32(cat, block + 0x14)? as usize, block + be32(cat, block + 0x20)? as usize);
+    if slots > 64 {
+        bail!("{slots} slots in a cloth pack");
+    }
+    (0..slots)
+        .map(|k| {
+            let offset = be32(cat, table + 4 * k)? as usize;
+            Ok((offset != 0 && tag(cat, block + offset) == b"MULTI_CLOTH").then_some(block + offset))
+        })
+        .collect()
+}
+
+fn read_block(cat: &[u8], block: usize) -> Result<Vec<Cloth>> {
     let count = be32(cat, block + 0x18)? as usize;
     if count > 64 {
         bail!("{count} cloths");
@@ -225,9 +269,16 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
     };
 
     let mut fixed = vec![false; count];
-    for k in 0..be32(cat, fix + 0x1C)? as usize {
-        // (1, particle as an offset from GRID_DATA, 2, 0) after the position.
-        let particle = index(be32(cat, fix + 0x20 + 0x20 * k + 0x14)?)?;
+    // Entries of 0x20 bytes from the offset at +0x18 (0x20 in version 1 blocks, 0x30 in version
+    // 2, whose longer header names a list of vertices the entries are read back from): the
+    // position, then (CAT bone, particle as an offset from GRID_DATA, 2, 0).
+    let entries = fix + be32(cat, fix + 0x18)? as usize;
+    let fix_count = be32(cat, fix + 0x1C)? as usize;
+    if fix_count > count {
+        bail!("{fix_count} fixed particles of {count}");
+    }
+    for k in 0..fix_count {
+        let particle = index(be32(cat, entries + 0x20 * k + 0x14)?)?;
         fixed[particle] = true;
     }
 
@@ -941,6 +992,37 @@ mod tests {
             without.clone().map(|g| g.1 + g.2).sum::<usize>(),
             without.map(|g| g.1).sum::<usize>()
         );
+    }
+
+    /// Every cloth of the suits and items reads. Prints one line per distinct name.
+    #[test]
+    #[ignore]
+    fn suit_cloths_read() {
+        let mut seen = std::collections::BTreeMap::new();
+        let mut total = 0;
+        for archive in ["werone", "wertwo", "itm"] {
+            let afs = LazyArchive::open(&format!("assets/doax2/{archive}.afs")).unwrap();
+            // Entries carry no extension and names repeat, so they are read by index.
+            let names: Vec<String> = afs.names().map(str::to_string).collect();
+            for (index, name) in names.iter().enumerate() {
+                let cat = afs.read_index(index).unwrap();
+                if !cat.starts_with(b"CAT\0") {
+                    continue;
+                }
+                let cloths = read(&cat).unwrap_or_else(|e| panic!("{archive} {name}: {e:#}"));
+                total += cloths.len();
+                for cloth in cloths {
+                    let fixed = cloth.fixed.iter().filter(|&&f| f).count();
+                    let kinds: std::collections::BTreeSet<u32> = cloth.colliders.iter().map(|c| c.kind).collect();
+                    seen.entry(cloth.name.clone()).or_insert_with(|| format!("{archive} {name}: {} particles, {fixed} fixed, {} threads, collider types {kinds:?}", cloth.particles.len(), cloth.threads.len()));
+                }
+            }
+        }
+        for (name, line) in &seen {
+            println!("{name}: {line}");
+        }
+        println!("{total} cloths");
+        assert!(total >= 170);
     }
 
     /// A hanging cloth stays near its rest length and does not fall through: stepping Lei

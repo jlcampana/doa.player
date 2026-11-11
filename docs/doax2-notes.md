@@ -682,12 +682,38 @@ not explained: no list found so far names them. The head CAT's blocks tagged 0x0
 0x1680 (two values 0.3 and 0.8, a point behind the head, offsets) are still not decoded and may
 be theirs.
 
-### Suit cloths (2026-11-11, not in the viewer yet)
+### Suit cloths (2026-11-11)
 
 The suits have cloth too: `werone.afs` holds 73 `CLOTH_DATA` blocks, `wertwo.afs` 105 and
 `itm.afs` 2 (`zgra_pre`), named by body code and part: `ks_skirt` (336 particles), `ht_lsode_b`
 and `_f`, `ht_rsode_b` and `_f` (sleeves, 72 and 80), `ks_base` (182), `ks_tareb`, `ks_taref`.
-The viewer reads cloths from the head's CAT only, so these hang rigid.
+
+A suit CAT's word 5 points at a `tdpack`, not at a `MULTI_CLOTH`: +0xC its header's size (0x30),
++0x10 the pack's size, +0x14 the number of slots (6), +0x18 how many are used, +0x20 the offset
+of the slots' table; each slot is the offset of a `MULTI_CLOTH` from the pack, or 0. The slots
+are body types in the order of the CAT's draw lists, and the cloths' prefixes name them: 0 `ks`,
+1 `ht`, 2 `he`, 3 `tn`, 4 `cr`. A suit any body can wear fills five (`vco_sk_c_m`: a skirt
+each); a suit of one character fills hers alone (`vtn_on_s_m`: slot 3, `tn_tareb` and
+`tn_taref`). The ignored test `suit_cloths_read` reads all 180.
+
+`FIX_GRID` comes in two versions (+0x10). Both keep entries of 0x20 bytes at the offset in
++0x18: the position, then (CAT bone, particle as an offset from `GRID_DATA`, 2, 0).
+
+- Version 1 (entries at 0x20): hair, skirts (bone 2), `tareb` and `taref` (bone 2).
+- Version 2 (entries at 0x30; +0x20 is 1, +0x24 an object number, +0x28 the offset of a list
+  with a vertex per entry): `base` and `sode`, on bone 0. `0x82496F88` reads each entry's
+  position back from its vertex, so these roots follow whatever moved the vertex: the blend
+  below.
+
+`PROPERTY`+0x30 is the bone whose space the particles are in: 2 for skirts and hanging pieces, 0
+for `base` and `sode`. It is also the fixed particles' bone in every file read.
+
+In the viewer since 2026-11-11: the suit's cloths for the body's type run through the hair's
+simulation, on the suit piece whose vertices sit at the particles (every particle found, on
+Helena's `sk_a` skirt, Tina's `on_s` dress and `sk_j` skirt, Kokoro's `sk_c`). By eye they hang
+and stay off the legs in a standing pose. Not compared with the game. Missing: collider type 9
+(skipped, as on the hair), and the roots of `base` and `sode` cloths following the chest (they
+stay on bone 0).
 
 93 of them (the `base` and `sode` ones, no skirt) have an `MPV` block at `CLOTH_DATA`+0x58, 0 on
 every hair cloth. The second half of `0x824969F0` blends it on the CPU (read from the code, not
