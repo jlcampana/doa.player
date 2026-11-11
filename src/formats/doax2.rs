@@ -35,6 +35,9 @@ pub struct Xpr2<'a> {
     /// Where the data section starts; buffer and texture addresses are relative to it.
     pub data: usize,
     pub resources: Vec<([u8; 4], usize, usize)>,
+    /// How many bytes come before a buffer's or texture's fetch constant: 24 in DOAX2, whose
+    /// resource headers are 0x20 bytes for a buffer, and 12 in DOA4, where they are 0x14.
+    pub fetch_at: usize,
 }
 
 impl<'a> Xpr2<'a> {
@@ -51,10 +54,14 @@ impl<'a> Xpr2<'a> {
                 Ok((tag, 12 + be32(file, at + 4)? as usize, be32(file, at + 8)? as usize))
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { file, data: 12 + header, resources })
+        let fetch_at = match resources.iter().find(|r| &r.0 == b"VBUF" || &r.0 == b"IBUF") {
+            Some(&(_, _, 0x14)) => 12,
+            _ => 24,
+        };
+        Ok(Self { file, data: 12 + header, resources, fetch_at })
     }
 
-    fn of_kind(&self, tag: &[u8; 4]) -> impl Iterator<Item = usize> + '_ {
+    pub fn of_kind(&self, tag: &[u8; 4]) -> impl Iterator<Item = usize> + '_ {
         let tag = *tag;
         self.resources.iter().filter(move |r| r.0 == tag).map(|r| r.1)
     }
@@ -65,10 +72,10 @@ impl<'a> Xpr2<'a> {
     }
 
     /// A vertex or index buffer: its address in the file and size, from the fetch constant
-    /// at +0x18 (address with the type in the low bits) and +0x1C.
-    fn buffer(&self, header: usize, vertex: bool) -> Result<(usize, usize)> {
-        let address = be32(self.file, header + 0x18)? as usize & !3;
-        let size = be32(self.file, header + 0x1C)? as usize;
+    /// (address with the type in the low bits, then the size), at +0x18 in DOAX2.
+    pub fn buffer(&self, header: usize, vertex: bool) -> Result<(usize, usize)> {
+        let address = be32(self.file, header + self.fetch_at)? as usize & !3;
+        let size = be32(self.file, header + self.fetch_at + 4)? as usize;
         Ok((self.data + address, if vertex { (size >> 2) * 4 } else { size }))
     }
 }
@@ -632,8 +639,8 @@ pub fn textures(xpr: &Xpr2) -> Vec<ModelTexture> {
 
 fn texture(xpr: &Xpr2, header: usize) -> Result<ModelTexture> {
     let file = xpr.file;
-    // The fetch constant follows the 28-byte resource header.
-    let word = |k: usize| be32(file, header + 28 + k * 4);
+    // The fetch constant follows the resource header: 28 bytes in DOAX2, 16 in DOA4.
+    let word = |k: usize| be32(file, header + xpr.fetch_at + 4 + k * 4);
     let (w0, w1, w2) = (word(0)?, word(1)?, word(2)?);
     let tiled = w0 >> 31 != 0;
     let format = w1 & 0x3F;
@@ -872,16 +879,21 @@ impl Loaded {
 /// that type. Of a foot's two shapes, the one on the leg (marker -5) is drawn and the one on
 /// the free foot nodes (-6) is left out.
 pub fn load_for(tpr: &[u8], cat: &[u8], body: Option<usize>) -> Result<Loaded> {
-    let xpr = Xpr2::parse(tpr)?;
-    let objects = objects(&xpr)?;
-    let nodes = hierarchy(&xpr)?;
-    let rest = rest_pose(&nodes);
-    let placed_nodes = object_nodes(&nodes, objects.len());
     let lists = draw_lists_by_type(cat)?;
     let list = body
         .and_then(|b| lists.get(b).cloned().flatten())
         .or_else(|| lists.iter().flatten().next().cloned())
         .context("no draw list")?;
+    load_list(tpr, list)
+}
+
+/// Reads a model's pieces for a draw list, each on the node its object hangs from.
+pub fn load_list(tpr: &[u8], list: Vec<Placed>) -> Result<Loaded> {
+    let xpr = Xpr2::parse(tpr)?;
+    let objects = objects(&xpr)?;
+    let nodes = hierarchy(&xpr)?;
+    let rest = rest_pose(&nodes);
+    let placed_nodes = object_nodes(&nodes, objects.len());
     let mut pieces = Vec::new();
     let mut weights = Vec::new();
     let mut shapes = Vec::new();
