@@ -730,6 +730,14 @@ and six shapes under its left and right springs: the part of a top that lies on 
 follows the chest's shapes here, as the GPU does for the body. Not confirmed; an earlier note
 took this for a face blend, which it is not (no head's cloth has the block).
 
+Collider type 9 (0x90 bytes, on the hips, thighs and chest of skirts and `base` cloths) is not
+decoded. `ks_skirt`'s on the left thigh (bone 6): +0x30 a point (-0.009, -0.21, 0.007), +0x40 a
+unit vector (0, 0, 1), +0x50 a vector (0.07, -0.04, -0.005), +0x60 the integer 2, +0x64 0.097;
+the right thigh's mirrors x. The same thigh also has a type 1 capsule from (-0.006, -0.21,
+0.0085) along (-0.0175, -0.205, -0.017) with radius 0.093, which the viewer does use, so the
+legs are covered without it. Its unit matrix can be read from the game with a skirt on screen
+(`doax2_hair_capture.py --name ks_skirt`, not tried).
+
 The game keeps its loaded cloths in a table at `0x83C0B740`, 0x80 bytes a slot: a matrix at +0,
 the `MULTI_CLOTH` at +0x40, the bone matrices at +0x4C, the vertex buffers at +0x50 and +0x54.
 `0x824AF538` (r3 the slot) runs, per cloth, `0x824969F0`, `0x824938B0` and the step
