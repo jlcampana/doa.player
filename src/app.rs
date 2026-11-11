@@ -1255,11 +1255,9 @@ impl App {
                     let multi = doa4::weight_nodes(placed.slot as usize, groups).filter(|_| groups > 0 && weights.len() == piece.vertices.len()).map(|bones| {
                         let groups = bones
                             .iter()
-                            .map(|&(solve_node, rest_frame)| {
-                                // The twist nodes sit on the forearm's joint.
-                                let place = if solve_node >= 19 { at(placed.slot as usize) } else { at(solve_node) };
+                            .map(|&(solve_node, place_bone, rest_frame)| {
                                 nodes.push(flip * lift * rest);
-                                followed.push((solve_node, place, rest_frame, rest));
+                                followed.push((solve_node, at(place_bone), rest_frame, rest));
                                 (nodes.len() - 1, glam::Vec3::ZERO)
                             })
                             .collect();

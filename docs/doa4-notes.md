@@ -150,10 +150,17 @@ floats, as DOAX2's blended pieces). The first weight is the bone itself and the 
 parent: in `kas00` the vertices heavy on the first sit down the limb from the joint, those
 heavy on the second towards the body (ignored test `costume_weights`). The viewer blends them
 linearly between the two solved bones, and knees, elbows, shoulders, hips and neck bend without
-lumps (by eye). A third weight on the elbow pieces is taken to be the forearm's twist node; no
-vertex of `kas00` is heavy on it. Drawn rigid still, each logged when loaded: knee pieces with
-three weights (Zack's and Kokoro's trousers), pieces on bones 32 and 33, and the chest's `91`
-piece, whose weights are of another type (`0x1A2360`) that the reader does not take.
+lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
+
+- A third weight on the elbow pieces is taken to be the forearm's twist node, and on the knee
+  pieces of trousers (Zack, Kokoro) the shin again, DOA3's solve having no twist there. No
+  vertex is heavy on either: guesses, which leave the knees smooth by eye.
+- Bones 32 and 33 are pieces along the forearms, heavy on the first weight near the elbow and
+  on the second near the wrist: taken as the forearm and its twist node.
+- The chest's `91` piece has four weights as half floats (`D3DDECLTYPE_FLOAT16_4`, `0x1A2360`).
+  In `kas00` the first two are heavy on its front and back, in `zac00` on its top and bottom,
+  the other two light on both sides. Not understood: it stays rigid on the chest, logged when
+  loaded.
 
 Missing: hair and cloth do not move; hands and faces have no shapes; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and

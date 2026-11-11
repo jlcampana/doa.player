@@ -93,6 +93,8 @@ pub struct Element {
 /// Element types seen in the files.
 pub const FLOAT3: u32 = 0x2A23B9;
 pub const FLOAT2: u32 = 0x2C23A5;
+/// `D3DDECLTYPE_FLOAT16_4`.
+pub const HALF4: u32 = 0x1A2360;
 pub const FLOAT4: u32 = 0x1A23A6;
 pub const HALF2: u32 = 0x2C235F;
 /// Three signed normalized values in 11, 11 and 10 bits, x in the low bits.
@@ -424,16 +426,19 @@ pub fn object_weights(xpr: &Xpr2, object: &Object) -> Result<Vec<Vec<f32>>> {
         let count = match element.map(|e| e.kind) {
             Some(FLOAT2) => 2,
             Some(FLOAT3) => 3,
-            Some(FLOAT4) => 4,
+            Some(FLOAT4) | Some(HALF4) => 4,
             _ => 0,
         };
+        // DOA4's chest pieces keep four weights as half floats.
+        let halves = element.map(|e| e.kind) == Some(HALF4);
         let &(buffer, stride) = decl.streams.first().context("no stream 0")?;
         let (at, _) = xpr.buffer(*vbufs.get(buffer).context("VBUF out of range")?, true)?;
         for v in 0..decl.vertex_count {
             let mut weights = Vec::with_capacity(count);
             if let Some(element) = element {
                 for k in 0..count {
-                    weights.push(bef32(file, at + v * stride + element.offset as usize + k * 4)?);
+                    let field = at + v * stride + element.offset as usize;
+                    weights.push(if halves { half(be16(file, field + k * 2)?) } else { bef32(file, field + k * 4)? });
                 }
             }
             // Some suits' weights add up to more than one: a single 2.307 in Tina's `on_s_m`,

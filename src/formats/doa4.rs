@@ -494,27 +494,44 @@ pub fn rest_frame(bone: usize) -> glam::Mat3 {
     }
 }
 
-/// The solve's node and rest frame for each blend weight of a piece drawn with 0x91 on `bone`:
-/// the vertices carry two or three weights, the first for the bone itself and the second for
-/// its parent (in `kas00` the vertices heavy on the first sit down the limb from the joint,
-/// those heavy on the second towards the body). A third weight, on the elbow pieces only, is
-/// taken to be the forearm's twist node; no vertex of `kas00` is heavy on it.
-pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, glam::Mat3)>> {
-    let parent = BONE_PARENTS.iter().find(|p| p.0 == bone)?.1;
-    let mut nodes = vec![(bone, rest_frame(bone)), (parent, rest_frame(parent))];
-    if count == 3 {
-        let twist = match bone {
-            4 => super::doa3::NODE_TWIST[0],
-            10 => super::doa3::NODE_TWIST[1],
-            _ => return None,
-        };
+/// For each blend weight of a piece drawn with 0x91 on `bone`: the solve's node, the bone
+/// whose rest place that node has, and the node's rest frame. The vertices carry two to four
+/// weights, the first for the bone itself and the second for its parent (in `kas00` the
+/// vertices heavy on the first sit down the limb from the joint, those heavy on the second
+/// towards the body).
+///
+/// - A third weight on the elbow pieces is taken to be the forearm's twist node, and on the
+///   knee pieces (Zack's and Kokoro's trousers) the shin again, DOA3's solve having no twist
+///   there. No vertex is heavy on either; both are guesses.
+/// - Bones 32 and 33 are pieces along the forearms: their first weight is heavy near the elbow
+///   and the second near the wrist, so they are taken as the forearm and its twist node.
+/// - The chest's piece has four weights (half floats). In `kas00` the first two are heavy on
+///   its front and its back, in `zac00` on its top and bottom, and the other two are light on
+///   both sides: not understood, so it stays rigid on the chest.
+pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, usize, glam::Mat3)>> {
+    let twist = |mid: usize| {
         // The solve turns the forearm about its z until the hand's z lies along x; at rest
         // the hand is unturned.
-        let sign = if bone == 4 { 1.0 } else { -1.0 };
-        let hand_z = rest_frame(bone).transpose() * glam::Vec3::Z;
-        let angle = (sign * hand_z.y).atan2(sign * hand_z.x);
-        nodes.push((twist, rest_frame(bone) * glam::Mat3::from_rotation_z(angle)));
-    }
+        let (node, sign) = if mid == 4 { (super::doa3::NODE_TWIST[0], 1.0) } else { (super::doa3::NODE_TWIST[1], -1.0) };
+        let hand_z = rest_frame(mid).transpose() * glam::Vec3::Z;
+        (node, mid, rest_frame(mid) * glam::Mat3::from_rotation_z((sign * hand_z.y).atan2(sign * hand_z.x)))
+    };
+    let on = |bone: usize| (bone, bone, rest_frame(bone));
+    let nodes = match (bone, count) {
+        (32, 2) => vec![on(4), twist(4)],
+        (33, 2) => vec![on(10), twist(10)],
+        (0, _) => return None,
+        _ => {
+            let parent = BONE_PARENTS.iter().find(|p| p.0 == bone)?.1;
+            let mut nodes = vec![on(bone), on(parent)];
+            match (bone, count) {
+                (4 | 10, 3) => nodes.push(twist(bone)),
+                (7 | 13, 3) => nodes.push(on(bone)),
+                _ => {}
+            }
+            nodes
+        }
+    };
     (nodes.len() == count).then_some(nodes)
 }
 
@@ -664,6 +681,13 @@ mod tests {
                 let heavy: Vec<glam::Vec3> = piece.vertices.iter().zip(weights).filter(|(_, w)| w[k] > 0.8).map(|(v, _)| glam::Vec3::from(v.position)).collect();
                 let centre = heavy.iter().copied().sum::<glam::Vec3>() / heavy.len().max(1) as f32;
                 println!("    weight {k}: {} vertices over 0.8, centred at ({:.3}, {:.3}, {:.3})", heavy.len(), centre.x, centre.y, centre.z);
+                // And where the weight's own mass sits, split by side for weights that are never heavy.
+                for (side, sign) in [("+x", 1.0f32), ("-x", -1.0)] {
+                    let part = piece.vertices.iter().zip(weights).filter(|(v, _)| v.position[0] * sign > 0.0);
+                    let total: f32 = part.clone().map(|(_, w)| w[k]).sum();
+                    let mass = part.map(|(v, w)| glam::Vec3::from(v.position) * w[k]).sum::<glam::Vec3>() / total.max(1e-6);
+                    println!("      {side}: total {total:.1}, at ({:.3}, {:.3}, {:.3})", mass.x, mass.y, mass.z);
+                }
             }
         }
     }
