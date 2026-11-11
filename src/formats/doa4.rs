@@ -46,12 +46,58 @@ pub const ROSTER: [(&str, &str); 24] = [
 ];
 
 /// A model in the costume archives: its name without `.tpr`, the archive and the entry of its
-/// `.tpr` (its `.cat` is the next entry).
+/// `.tpr` (its `.cat` is the next entry). A DOAX2 swimsuit is two files on disk instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelFile {
     pub stem: String,
     pub archive: usize,
     pub entry: usize,
+    pub loose: Option<(std::path::PathBuf, std::path::PathBuf)>,
+}
+
+/// Where the port keeps the DOAX2 swimsuits it builds for DOA4, unless `DOA4_SUITS` names
+/// another folder: outside the install, in the Documents folder of its Windows prefix.
+pub const DEFAULT_SUITS_DIR: &str =
+    "/home/pandi/.local/share/com.quiverlauncher.app/proton/DeadOrAlive4Online-DeadOrAlive4Online/pfx/drive_c/users/steamuser/Documents/dead_or_alive_4/doax2_suits";
+
+pub fn suits_dir() -> std::path::PathBuf {
+    std::env::var_os("DOA4_SUITS").map_or_else(|| DEFAULT_SUITS_DIR.into(), Into::into)
+}
+
+/// The game's character numbers of the characters with swimsuits, by their files' letters.
+/// From the port's manifest and log (`vtn` suits go to 1, `vks` to 5...); they are DOA2U's
+/// numbers for Tina (1), Lei Fang (12) and Hitomi (21).
+pub const SUIT_CHARACTERS: [(u32, &str); 9] = [(1, "tin"), (5, "kas"), (7, "hel"), (10, "hak"), (12, "lei"), (13, "aya"), (15, "lis"), (20, "cri"), (21, "kor")];
+
+/// A DOAX2 swimsuit the port built in DOA4's format.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suit {
+    /// The letters of the character it is for.
+    pub code: &'static str,
+    /// DOAX2's suit name and colour, as `vtn_cs_e_0`.
+    pub stem: String,
+    pub tpr: std::path::PathBuf,
+    pub cat: std::path::PathBuf,
+    /// The head it is worn with: the entry of the head's `.tpr`, counted over the three costume
+    /// archives one after another. `None` for Tina, whose suits come with her head (`-` in the
+    /// manifest).
+    pub head_entry: Option<usize>,
+}
+
+/// The swimsuits listed in the folder's `manifest.txt`. A line reads `suit`, the character's
+/// number, `own:N` or `append`, the entries of a costume's `.tpr` and `.cat`, those of the
+/// head's, DOAX2's suit name, its colour, then each file with its size and SHA-1.
+pub fn suits(dir: &std::path::Path) -> Vec<Suit> {
+    let Ok(text) = std::fs::read_to_string(dir.join("manifest.txt")) else { return Vec::new() };
+    text.lines()
+        .filter_map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let ["suit", character, _, _, _, head, _, _, _, tpr, _, _, cat, ..] = words[..] else { return None };
+            let character: u32 = character.parse().ok()?;
+            let code = SUIT_CHARACTERS.iter().find(|c| c.0 == character)?.1;
+            Some(Suit { code, stem: tpr.strip_suffix(".tpr")?.to_string(), tpr: dir.join(tpr), cat: dir.join(cat), head_entry: head.parse().ok() })
+        })
+        .collect()
 }
 
 /// Every model of the costume archives, from their entry names (`names[archive][entry]`).
@@ -62,7 +108,7 @@ pub fn model_files(names: &[Vec<String>]) -> Vec<ModelFile> {
         for (entry, name) in names.iter().enumerate() {
             let Some(stem) = name.strip_suffix(".tpr") else { continue };
             if names.get(entry + 1).is_some_and(|next| next.ends_with(".cat")) && !files.iter().any(|f| f.stem == stem) {
-                files.push(ModelFile { stem: stem.to_string(), archive, entry });
+                files.push(ModelFile { stem: stem.to_string(), archive, entry, loose: None });
             }
         }
     }
@@ -144,6 +190,9 @@ pub fn draw_lists(cat: &[u8]) -> Result<Vec<Vec<Draw>>> {
                 group = Some(byte(1)?);
                 at += 2;
             }
+            // Helena's DOAX2 swimsuits, built by the port from `hel05`'s list, have `60 60 11`
+            // where it has `60 10 90 14 01 60 11`: the first 0x60 is left with nothing.
+            0x60 if byte(1)? == 0x60 => at += 1,
             0x60 => {
                 condition = Some(byte(1)?);
                 at += 2;
@@ -193,6 +242,207 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
     doax2::load_list(tpr, placed)
 }
 
+// ─── Motions ──────────────────────────────────────────────────────────────────
+
+/// A character's motion file in `mot.afs`, by the three letters of her models. The files keep
+/// the series' internal names; `m_<name>.mot` and `c_<name>.mot` come with each.
+pub fn motion_file(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "kas" => "kasumi",
+        "aya" => "ayane",
+        "ryu" => "ryu",
+        "hyt" => "ninja",
+        "ein" => "karate",
+        "hel" => "hika",
+        "hak" => "hakyo",
+        "kor" => "koryu",
+        "lei" => "leifan",
+        "tin" => "tina",
+        "lis" => "lisa",
+        "cri" => "gokei",
+        "boy" => "boy",
+        "jan" => "janlee",
+        "zac" => "zack",
+        "bas" => "bass",
+        "bay" => "sambo",
+        "leo" => "bayman",
+        "bra" => "suiken",
+        "gen" => "genfu",
+        "tng" => "tengu",
+        "alp" => "alpha",
+        "spa" => "spartan",
+        _ => return None,
+    })
+}
+
+pub const TRACK_COUNT: usize = super::doa3::TRACK_COUNT;
+
+/// Offsets of a motion's 44 tracks in its file, as in DOA3.
+pub type MotionTracks = [u32; TRACK_COUNT];
+
+fn be16(data: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(data.get(at..at.checked_add(2)?)?.try_into().ok()?))
+}
+
+fn be32(data: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(data.get(at..at.checked_add(4)?)?.try_into().ok()?))
+}
+
+/// The sizes of DOA3's four kinds of key.
+const KEY_SIZES: [usize; 4] = [10, 4, 6, 8];
+
+/// The frames a track covers, or `None` if it does not end inside the file.
+fn track_length(data: &[u8], start: u32) -> Option<u32> {
+    let (mut at, mut frames) = (start as usize, 0u32);
+    for _ in 0..4096 {
+        let head = be16(data, at)?;
+        if head & 0xFFF == 0 {
+            be16(data, at + 2)?;
+            return Some(frames);
+        }
+        frames += ((head >> 2) & 0x3FF) as u32;
+        at += KEY_SIZES[(head & 3) as usize];
+    }
+    None
+}
+
+/// The motions of a `.mot` file as (number, track offsets): DOA3's layout with big-endian
+/// words. The table's first entry is a placeholder block every unused number points at; a
+/// block is 44 track offsets. A block is taken when every track ends inside the file.
+pub fn list_motions(data: &[u8]) -> Vec<(usize, MotionTracks)> {
+    let Some(placeholder) = be32(data, 0) else { return Vec::new() };
+    let Some(first_track) = be32(data, placeholder as usize) else { return Vec::new() };
+    let table = (first_track as usize / 4).min(data.len() / 4);
+    (0..table)
+        .filter_map(|id| {
+            let block = be32(data, id * 4)? as usize;
+            if block == placeholder as usize {
+                return None;
+            }
+            let mut tracks = [0u32; TRACK_COUNT];
+            for (k, track) in tracks.iter_mut().enumerate() {
+                *track = be32(data, block + 4 * k)?;
+                if (*track as usize) < table * 4 {
+                    return None;
+                }
+                track_length(data, *track)?;
+            }
+            Some((id, tracks))
+        })
+        .collect()
+}
+
+pub fn motion_length(data: &[u8], tracks: &MotionTracks) -> u32 {
+    tracks.iter().filter_map(|&t| track_length(data, t)).max().unwrap_or(0)
+}
+
+fn key_value(data: &[u8], at: usize) -> Option<f32> {
+    let head = be16(data, at)? as i16 as i32;
+    let low = be16(data, at + 2)? as i32;
+    Some((((head & !0xFFF) << 4) | low) as f32 * 1e-4)
+}
+
+/// DOA3's track evaluation (`doa3::eval_track`) on big-endian keys. The two 24-bit slopes of a
+/// kind 0 key are taken as its words swapped one by one, which puts their high bytes at +7 and
+/// +6; not checked against the game.
+fn eval_track(data: &[u8], start: u32, t: f32) -> Option<f32> {
+    let mut at = start as usize;
+    let mut segment = 0f32;
+    loop {
+        let head = be16(data, at)?;
+        if head & 0xFFF == 0 {
+            return key_value(data, at);
+        }
+        let dt = ((head >> 2) & 0x3FF) as f32;
+        let kind = head & 3;
+        let size = KEY_SIZES[kind as usize];
+        if t < segment + dt {
+            let (v0, v1) = (key_value(data, at)?, key_value(data, at + size)?);
+            let x = t - segment;
+            let slope = (v1 - v0) / dt;
+            let hermite = |m0: f32, m1: f32| {
+                let c2 = (3.0 * slope - 2.0 * m0 - m1) / dt;
+                let c3 = (m0 + m1 - 2.0 * slope) / (dt * dt);
+                ((c3 * x + c2) * x + m0) * x + v0
+            };
+            let wide = |low: usize, high: usize| -> Option<f32> { Some((((*data.get(high)? as i8 as i32) << 16) | be16(data, low)? as i32) as f32 * 1e-6) };
+            return Some(match kind {
+                0 => hermite(wide(at + 4, at + 7)?, wide(at + 8, at + 6)?),
+                1 => slope * x + v0,
+                2 => {
+                    let m = be16(data, at + 4)? as i16 as f32 / 32768.0;
+                    ((-m * x) + (slope + m * dt)) * x + v0
+                }
+                _ => hermite(be16(data, at + 4)? as i16 as f32 / 131072.0, be16(data, at + 6)? as i16 as f32 / 131072.0),
+            });
+        }
+        segment += dt;
+        at += size;
+    }
+}
+
+pub fn eval_motion(data: &[u8], tracks: &MotionTracks, frame: f32) -> Result<[f32; TRACK_COUNT]> {
+    let mut values = [0f32; TRACK_COUNT];
+    for (value, &track) in values.iter_mut().zip(tracks) {
+        *value = eval_track(data, track, frame).context("motion track out of bounds")?;
+    }
+    Ok(values)
+}
+
+/// Each bone's parent in DOA3's solve, whose bone numbers DOA4's draw lists share.
+pub const BONE_PARENTS: [(usize, usize); 14] = [(0, 2), (1, 0), (8, 0), (4, 8), (5, 4), (14, 0), (10, 14), (11, 10), (6, 2), (7, 6), (3, 7), (12, 2), (13, 12), (9, 13)];
+
+/// The draw lists' eye bones, and the nodes DOA3's solve gives the eyes.
+pub const EYE_BONES: [u32; 2] = [17, 21];
+
+/// DOA3's skeleton rows from where the bones are at rest: each bone's offset from its parent,
+/// then the eyes' from the head.
+pub fn skeleton(rest: &dyn Fn(u32) -> Option<glam::Vec3>) -> Result<[glam::Vec3; 17]> {
+    let at = |bone: usize| rest(bone as u32).with_context(|| format!("no piece on bone {bone}"));
+    let mut rows = [glam::Vec3::ZERO; 17];
+    for (bone, parent) in BONE_PARENTS {
+        rows[bone] = at(bone)? - at(parent)?;
+    }
+    for (row, bone) in [15, 16].into_iter().zip(EYE_BONES) {
+        rows[row] = rest(bone).map_or(glam::Vec3::ZERO, |eye| eye - rest(HEAD_BONE).unwrap_or(eye));
+    }
+    Ok(rows)
+}
+
+/// The node of DOA3's solve a draw list bone follows, if it has one.
+pub fn solve_node(bone: u32) -> Option<usize> {
+    match bone {
+        0..=14 => Some(bone as usize),
+        17 => Some(super::doa3::NODE_EYES[0]),
+        21 => Some(super::doa3::NODE_EYES[1]),
+        _ => None,
+    }
+}
+
+/// The frame DOA3's solve gives a bone when the character stands as in the files, arms out:
+/// the pieces are modelled in that stance with every node unturned, while the solve's limb
+/// frames run along the limb. Chest, head, pelvis, hands and feet are unturned in both. For a
+/// limb the solve's z runs from the joint to its target and a bend moves the middle joint
+/// along x (or against it, on the two limbs whose angles it negates); here the elbows are taken
+/// to go back and the knees forward, which sets the roll. The forearm and shin are half a turn
+/// about y from there. Chosen by how a limb bends, not read from the game.
+pub fn rest_frame(bone: usize) -> glam::Mat3 {
+    use glam::{Mat3, Vec3};
+    let limb = |x: Vec3, z: Vec3| Mat3::from_cols(x, z.cross(x), z);
+    let turned = |m: Mat3| m * Mat3::from_rotation_y(std::f32::consts::PI);
+    match bone {
+        8 => limb(Vec3::NEG_Z, Vec3::X),
+        4 => turned(limb(Vec3::NEG_Z, Vec3::X)),
+        14 => limb(Vec3::Z, Vec3::NEG_X),
+        10 => turned(limb(Vec3::Z, Vec3::NEG_X)),
+        12 => limb(Vec3::NEG_Z, Vec3::NEG_Y),
+        13 => turned(limb(Vec3::NEG_Z, Vec3::NEG_Y)),
+        6 => limb(Vec3::Z, Vec3::NEG_Y),
+        7 => turned(limb(Vec3::Z, Vec3::NEG_Y)),
+        _ => Mat3::IDENTITY,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +490,50 @@ mod tests {
             let p = rest[k].w_axis;
             println!("node {k}: parent {:?}, object {}, at ({:.3}, {:.3}, {:.3}), local ({:.3}, {:.3}, {:.3}) {draws:?}", node.parent, node.object, p.x, p.y, p.z, node.local.w_axis.x, node.local.w_axis.y, node.local.w_axis.z);
         }
+    }
+
+    /// Every character's motion files list motions whose tracks end inside the file, and every
+    /// motion evaluates at its first, middle and last frame. Prints the counts.
+    #[test]
+    #[ignore]
+    fn motions_read() {
+        let afs = LazyArchive::open(game_dir().join("mot.afs")).unwrap();
+        for (code, _) in ROSTER {
+            let Some(name) = motion_file(code) else { continue };
+            for prefix in ["", "m_", "c_"] {
+                let file = format!("{prefix}{name}.mot");
+                let data = afs.read(&file).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+                let motions = list_motions(&data);
+                let mut longest = 0;
+                for (id, tracks) in &motions {
+                    let length = motion_length(&data, tracks);
+                    longest = longest.max(length);
+                    for frame in [0.0, length as f32 / 2.0, length as f32] {
+                        let values = eval_motion(&data, tracks, frame).unwrap_or_else(|e| panic!("{file} {id}: {e:#}"));
+                        assert!(values.iter().all(|v| v.is_finite()), "{file} {id}");
+                    }
+                }
+                println!("{file}: {} motions, longest {longest} frames", motions.len());
+                assert!(prefix != "" || motions.len() > 100, "{file}");
+            }
+        }
+    }
+
+    /// Every DOAX2 swimsuit the port built loads, and its head is named by the manifest or its
+    /// own.
+    #[test]
+    #[ignore]
+    fn swimsuits_load() {
+        let suits = suits(&suits_dir());
+        assert!(!suits.is_empty(), "no manifest in {}", suits_dir().display());
+        for suit in &suits {
+            let (tpr, cat) = (std::fs::read(&suit.tpr).unwrap(), std::fs::read(&suit.cat).unwrap());
+            let loaded = load(&tpr, &cat).unwrap_or_else(|e| panic!("{}: {e:#}", suit.stem));
+            let own_head = has_head(&cat).unwrap();
+            assert!(own_head || suit.head_entry.is_some(), "{} has no head", suit.stem);
+            println!("{} for {}: {} pieces, {} vertices, own head {own_head}, lists {:?}", suit.stem, suit.code, loaded.pieces.len(), loaded.pieces.iter().map(|p| p.0.vertices.len()).sum::<usize>(), draw_lists(&cat).unwrap().iter().map(Vec::len).collect::<Vec<_>>());
+        }
+        println!("{} swimsuits", suits.len());
     }
 
     /// How far DOAX2's readers get on every DOA4 costume: one line per costume with the first

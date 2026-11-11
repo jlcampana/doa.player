@@ -73,6 +73,26 @@ the body's place, (0, 0.468, -0.025) in `ayaAA`: the viewer takes the head file'
 first (Ayane's head floated above her trunk before, the user's report). Which hairstyle goes with which costume is not known: the viewer takes
 the first.
 
+## DOAX2 swimsuits
+
+The port can build DOAX2's swimsuits for DOA4 from the user's DOAX2 copy (Esc menu, Extras). It
+writes them as loose DOA4 models, outside the install: `doax2_suits/` in the Documents folder of
+its Windows prefix (`~/.local/share/com.quiverlauncher.app/proton/DeadOrAlive4Online-.../pfx/
+drive_c/users/steamuser/Documents/dead_or_alive_4/`, or the folder in `DOA4_SUITS`), 34 pairs
+named after DOAX2's suit and colour (`vtn_cs_e_0.tpr`, `.cat`) and a `manifest.txt`:
+
+    suit <character> <own:N | append> <tpr entry> <cat entry> <head tpr> <head cat> <suit> <colour> <tpr> <size> <sha1> <cat> <size> <sha1>
+
+The character is the game's number: 1 Tina, 5 Kasumi, 7 Helena, 10 Kokoro, 12 Lei Fang, 13 Ayane,
+15 La Mariposa, 20 Christie, 21 Hitomi. The head entries count over the three costume archives
+one after another (509 is `chrthree.afs` entry 308) and are `-` for Tina, whose suits carry her
+head. They tell which hairstyle the port pairs with the suits; the game's own costumes' pairing
+is still not known. The built lists have one level of detail. Helena's have `60 60 11 D4 14 10
+00` where `hel05`, their template, has `60 10 90 14 01 60 11 D4 14 10 00`; the reader skips the
+first 0x60.
+
+The viewer lists them after each character's own costumes (`swimsuits_load`, ignored test).
+
 ## Roster
 
 By file prefix; names inferred, not read from the game's tables: `kas` Kasumi, `aya` Ayane,

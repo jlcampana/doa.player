@@ -411,6 +411,8 @@ pub struct App {
     pub doa4_characters: Vec<CharacterEntry>,
     doa4_archives: Vec<doax::LazyArchive>,
     doa4_files: Vec<crate::formats::doa4::ModelFile>,
+    /// The head each DOAX2 swimsuit is worn with, by the suit's name.
+    doa4_suit_heads: std::collections::HashMap<String, String>,
     doax2_wear_names: Vec<Vec<String>>,
     doax2_mot: Option<doax::LazyArchive>,
     pub anim_panel: AnimPanel,
@@ -656,11 +658,30 @@ impl App {
             .collect();
         let doa4_archives = if doa4_archives.len() == crate::formats::doa4::COSTUME_ARCHIVES.len() { doa4_archives } else { Vec::new() };
         let doa4_names: Vec<Vec<String>> = doa4_archives.iter().map(|a| a.names().map(str::to_string).collect()).collect();
-        let doa4_files = crate::formats::doa4::model_files(&doa4_names);
+        let mut doa4_files = crate::formats::doa4::model_files(&doa4_names);
+        // The DOAX2 swimsuits the port built, each worn with the head its manifest names.
+        let doa4_suits = if doa4_archives.is_empty() { Vec::new() } else { crate::formats::doa4::suits(&crate::formats::doa4::suits_dir()) };
+        let mut doa4_suit_heads = std::collections::HashMap::new();
+        for suit in &doa4_suits {
+            if let Some(mut entry) = suit.head_entry {
+                let archive = doa4_names.iter().position(|names| {
+                    let here = entry < names.len();
+                    if !here {
+                        entry -= names.len();
+                    }
+                    here
+                });
+                if let Some(head) = archive.and_then(|archive| doa4_names[archive].get(entry)).and_then(|name| name.strip_suffix(".tpr")) {
+                    doa4_suit_heads.insert(suit.stem.clone(), head.to_string());
+                }
+            }
+            doa4_files.push(crate::formats::doa4::ModelFile { stem: suit.stem.clone(), archive: 0, entry: 0, loose: Some((suit.tpr.clone(), suit.cat.clone())) });
+        }
         let doa4_characters: Vec<CharacterEntry> = crate::formats::doa4::ROSTER
             .iter()
             .filter_map(|(code, name)| {
-                let costumes: Vec<String> = doa4_files.iter().filter(|f| f.stem.starts_with(code) && crate::formats::doa4::is_costume(&f.stem)).map(|f| f.stem.clone()).collect();
+                let mut costumes: Vec<String> = doa4_files.iter().filter(|f| f.stem.starts_with(code) && crate::formats::doa4::is_costume(&f.stem)).map(|f| f.stem.clone()).collect();
+                costumes.extend(doa4_suits.iter().filter(|s| s.code == *code).map(|s| s.stem.clone()));
                 (!costumes.is_empty()).then(|| CharacterEntry {
                     id: code.to_string(),
                     bin_id: String::new(),
@@ -734,6 +755,7 @@ impl App {
             doa4_characters,
             doa4_archives,
             doa4_files,
+            doa4_suit_heads,
             doax2_wear_names,
             doax2_mot: doax::LazyArchive::open(asset_path(DOAX2_MOT_PATH)).map_err(|e| log::info!("No DOAX2 motions: {e:#}")).ok(),
             anim_panel: AnimPanel::new(),
@@ -1145,15 +1167,22 @@ impl App {
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
         let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
-            let archive = &self.doa4_archives[file.archive];
-            let cat = archive.read_index(file.entry + 1)?;
-            Ok((doa4::load(&archive.read_index(file.entry)?, &cat).with_context(|| stem.to_string())?, doa4::has_head(&cat)?))
+            let (tpr, cat) = match &file.loose {
+                Some((tpr, cat)) => (std::fs::read(tpr)?, std::fs::read(cat)?),
+                None => {
+                    let archive = &self.doa4_archives[file.archive];
+                    (archive.read_index(file.entry)?, archive.read_index(file.entry + 1)?)
+                }
+            };
+            Ok((doa4::load(&tpr, &cat).with_context(|| stem.to_string())?, doa4::has_head(&cat)?))
         };
         let (body, has_head) = read(&stem)?;
         // Where the head goes: the body's node for the head's bone. A costume that draws
         // nothing there takes the character's first head file, put with its root on that node.
         let head_node = body.slot_node(doa4::HEAD_BONE);
-        let head_stem = (!has_head).then(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())).flatten();
+        let head_stem = (!has_head)
+            .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
+            .flatten();
         let head = head_stem.as_deref().map(read).transpose()?.map(|(head, _)| head);
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
         // already at the body's place in others (Ayane's), so it is taken out.
