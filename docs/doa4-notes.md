@@ -102,35 +102,51 @@ Fang, `tin` Tina, `lis` La Mariposa, `cri` Christie, `boy` Eliot, `jan` Jann Lee
 Alpha-152, `spa` Spartan-458, `rtm` unknown. Seen in the viewer and recognizable: Kasumi, Zack,
 Tina, Kokoro (`hak00`), Hayabusa, Helena, the Spartan.
 
-## Motions (looked at, not read by the viewer yet)
+## Motions
 
 `mot.afs` has, per character, `zack.mot`, `m_zack.mot` and `c_zack.mot`, plus tag files
-(`t_ay_ks.mot`...). The layout is DOA3's in big-endian (checked with a script on `zack.mot`,
-`kasumi.mot` and `tina.mot`, 2026-11-11):
+(`t_ay_ks.mot`...), under the series' internal names (`doa4::motion_file`: `ninja` Hayate,
+`karate` Ein, `hika` Helena, `hakyo` Kokoro, `koryu` Hitomi, `gokei` Christie, `suiken` Brad
+Wong, `sambo` Bayman, `bayman` Leon; the last two as in DOA2U, not checked here).
+
+The layout is DOA3's in big-endian:
 
 - The file starts with a table of block offsets, one per motion number; unused numbers point at
   a placeholder block, the first word's. The table's length is the placeholder's first track
   offset over 4 (1002 entries in `zack.mot`, 377 of them motions).
-- A block is a list of track offsets, each lower than the block and rising: 44 of them in over
-  90 percent of the motions, DOA3's count. The rest stop early under that test, likely tracks
-  shared with another motion.
-- Walking each track with DOA3's key records (a 16-bit head with the kind in its low 2 bits and
-  the frames to the next key in the 10 above; sizes 10, 4, 6 and 8 bytes) gives sane lengths (49,
-  49, 65, 29... frames) and ends exactly on the next track's start for two thirds of the tracks.
+- A block is 44 track offsets, DOA3's count. Tracks may be shared, so the offsets do not always
+  rise; a block is taken when every track ends inside the file.
+- A track is DOA3's key records: a 16-bit head with the kind in its low 2 bits and the frames to
+  the next key in the 10 above; sizes 10, 4, 6 and 8 bytes. The two 24-bit slopes of a kind 0 key
+  are read as if each 16-bit word had been swapped (high bytes at +7 and +6): a guess.
 
-The draw lists' bone numbers also match DOA3's limb chains (upper arm 8, forearm 4, hand 5;
-thigh 6, shin 7, foot 3; 14, 10, 11 and 12, 13, 9 on the other side). So the next step is
-DOA3's evaluator and pose solve with big-endian reads and the skeleton's offsets taken from the
-node tree. Whether the 44 tracks mean what they mean in DOA3 is not checked.
+The 44 values go through DOA3's pose solve (`doa3::solve_pose`) unchanged: the draw lists' bone
+numbers are DOA3's nodes (upper arm 8, forearm 4, hand 5; thigh 6, shin 7, foot 3; 14, 10, 11 and
+12, 13, 9 on the other side; 17 and 21 the eyes). The skeleton's 17 offsets come from where the
+bones sit in the files' rest pose (`doa4::skeleton`).
+
+DOA3's pieces are modelled in the solve's frames; DOA4's are modelled standing with the arms
+out and every node unturned. So each piece is moved by the solved node times the inverse of the
+frame the solve would give that bone in the rest stance (`doa4::rest_frame`): the identity for
+chest, head, pelvis, hands and feet, and for a limb z along it with the roll set by taking the
+elbows to bend back and the knees forward. With that, the first motions of Kasumi, Zack and
+Tina are their fighting stances and strikes, with limbs meeting at the joints (by eye,
+2026-11-11). Nothing is compared with the game.
+
+Missing: the `91` pieces at the joints follow their bone rigidly, so knees and elbows show as
+lumps (DOA3 bends them by weights from the CAT; DOA4's CAT sections are not read); hair and
+cloth do not move; hands and faces have no shapes; the forearm twist nodes are not used; pieces
+on bones the solve does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them;
+the tag motions and `comon.mot` are not listed; `rtm` has no motion file of its own.
 
 ## In the viewer
 
-`--doa4`, or the DOA4 button: a costume in the files' rest pose with its textures, lit by the
-viewer's own stage lights. All 160 models load (`doax2_readers_on_costumes`, ignored test).
+`--doa4`, or the DOA4 button: a costume with its textures, lit by the viewer's own stage
+lights. All 160 models load (`doax2_readers_on_costumes`, ignored test).
 
-Not done: motions (`mot.afs`), the lower levels of detail, the loose draws, groups and
-conditions, hairstyle choice, the CAT's other sections (cloth, faces and hands are likely among
-them), materials beyond what DOAX2's reader takes, stages, export checks.
+Motions play from the animation list (the character's three files). Not done: joint bending, the lower levels of detail, the loose draws, groups and
+conditions, hairstyle choice for the game's own costumes, the CAT's other sections (cloth, faces and hands are likely among
+them), materials beyond what DOAX2's reader takes, stages, export of motions.
 
 ## Tests
 

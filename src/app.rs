@@ -403,6 +403,7 @@ pub struct App {
     /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
     doax_pose: Option<DoaxPose>,
     doax2_pose: Option<Doax2Pose>,
+    doa4_pose: Option<Doa4Pose>,
     doax_hdd: Option<doax::LazyArchive>,
     doax_dvd: Option<doax::LazyArchive>,
     pub doax2_characters: Vec<CharacterEntry>,
@@ -458,6 +459,17 @@ pub struct App {
 
 /// The loaded DOAX2 character's motions and, per drawn piece, its DOAX bone and its place
 /// from that bone at rest.
+/// The loaded DOA4 character's motions and how each drawn piece follows DOA3's solve.
+struct Doa4Pose {
+    files: Vec<Vec<u8>>,
+    /// (file, tracks, frames) per entry of the animation list.
+    motions: Vec<(usize, crate::formats::doa4::MotionTracks, u32)>,
+    playing: Option<usize>,
+    skeleton: [glam::Vec3; 17],
+    /// Per mesh node: the solve's node it follows and its place from that node at rest.
+    pieces: Vec<(usize, glam::Mat4)>,
+}
+
 struct Doax2Cloth {
     sim: crate::formats::doax2_cloth::ClothSim,
     node: usize,
@@ -746,6 +758,7 @@ impl App {
             doax_stage_lights,
             doax_pose: None,
             doax2_pose: None,
+            doa4_pose: None,
             doax_hdd,
             doax_dvd,
             doax2_characters,
@@ -813,6 +826,7 @@ impl App {
             .map(|entry| (entry.name.clone(), entry.doa3_motion_id, self.anim_time));
         self.doax_pose = None;
         self.doax2_pose = None;
+        self.doa4_pose = None;
         self.mesh.set_lights_follow_camera(false);
         self.load_character_files(char_idx, costume_idx);
         if let Some((name, id, time)) = kept {
@@ -1199,10 +1213,26 @@ impl App {
         let mut textures = Vec::new();
         let mut nodes = Vec::new();
         let mut inputs: Vec<PieceInput> = Vec::new();
+        // Where each bone sits at rest, from the pieces drawn on it, and the bone each piece
+        // follows: its own if DOA3's solve has it, else that of the nearest node above it.
+        let mut bone_rest: std::collections::HashMap<u32, glam::Vec3> = std::collections::HashMap::new();
+        for (file, frame) in &files {
+            for (_, node, placed) in &file.pieces {
+                bone_rest.entry(placed.slot).or_insert((*frame * file.rest[*node]).w_axis.truncate());
+            }
+        }
+        let mut followed = Vec::new();
         for (file, frame) in &files {
             let first_texture = textures.len();
             textures.extend(file.textures.iter().cloned());
-            for (piece, node, _) in &file.pieces {
+            let node_bone = |node: usize| file.pieces.iter().find(|(_, n, placed)| *n == node && doa4::solve_node(placed.slot).is_some()).map(|(_, _, placed)| placed.slot);
+            for (piece, node, placed) in &file.pieces {
+                let mut bone = doa4::solve_node(placed.slot).map(|_| placed.slot);
+                let mut above = file.nodes[*node].parent;
+                while let (None, Some(up)) = (bone, above) {
+                    bone = node_bone(up);
+                    above = file.nodes[up].parent;
+                }
                 // Solid draws first, then those blended by their texture's alpha.
                 for blended in [false, true] {
                     let draws: Vec<_> = piece
@@ -1216,13 +1246,46 @@ impl App {
                     }
                     inputs.push(PieceInput { node: nodes.len(), vertices: &piece.vertices, draws, parent: nodes.len(), skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false });
                     nodes.push(flip * lift * *frame * file.rest[*node]);
+                    followed.push((bone.unwrap_or(if frame == &glam::Mat4::IDENTITY { 2 } else { doa4::HEAD_BONE }), *frame * file.rest[*node]));
                 }
             }
+        }
+        // Motions: DOA3's tracks and solve, with the skeleton's offsets from the rest pose.
+        let mut pose = None;
+        let mut animations = Vec::new();
+        match doa4::skeleton(&|bone| bone_rest.get(&bone).copied()) {
+            Ok(skeleton) => {
+                let pieces = followed
+                    .iter()
+                    .map(|&(bone, rest)| {
+                        let at = bone_rest.get(&bone).copied().unwrap_or_default();
+                        let solved_rest = glam::Mat4::from_translation(at) * glam::Mat4::from_mat3(doa4::rest_frame(bone as usize));
+                        (doa4::solve_node(bone).unwrap_or(2), solved_rest.inverse() * rest)
+                    })
+                    .collect();
+                let mut files = Vec::new();
+                let mut motions = Vec::new();
+                if let (Some(name), Ok(mot)) = (doa4::motion_file(&code), doax::LazyArchive::open(doa4::game_dir().join("mot.afs"))) {
+                    for prefix in ["", "m_", "c_"] {
+                        let file = format!("{prefix}{name}.mot");
+                        let Ok(data) = mot.read(&file) else { continue };
+                        for (id, tracks) in doa4::list_motions(&data) {
+                            let frames = doa4::motion_length(&data, &tracks);
+                            motions.push((files.len(), tracks, frames));
+                            animations.push(AnimationEntry { name: format!("{prefix}{name} {id:04} ({frames} frames)"), file_key: file.clone(), doa3_motion: None, doa3_motion_id: id });
+                        }
+                        files.push(data);
+                    }
+                }
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces });
+            }
+            Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
         self.doa3_pose = None;
         self.doax_pose = None;
         self.doax2_pose = None;
-        self.current_animations = Vec::new();
+        self.doa4_pose = pose;
+        self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
         self.loaded_name = ("DOA4".to_string(), display_name.clone(), stem.clone());
@@ -1233,7 +1296,11 @@ impl App {
         let pieces = inputs.len();
         drop(inputs);
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
-        Ok(format!("DOA4: {display_name} - {stem}{}, {pieces} pieces, rest pose", head_stem.map_or(String::new(), |h| format!(" with {h}"))))
+        let count = self.current_animations.len();
+        if count > 0 {
+            self.select_motion(0);
+        }
+        Ok(format!("DOA4: {display_name} - {stem}{}, {pieces} pieces, {count} motions", head_stem.map_or(String::new(), |h| format!(" with {h}"))))
     }
 
     /// A DOAX costume: the character's body with a suit, standing in the rest pose.
@@ -2314,6 +2381,16 @@ impl App {
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.
     pub fn select_motion(&mut self, index: usize) {
+        if let Some(pose) = &mut self.doa4_pose {
+            if index < pose.motions.len() {
+                pose.playing = Some(index);
+                self.anim_panel.selected_anim_idx = Some(index);
+                self.anim_panel.playing = true;
+                self.anim_time = 0.0;
+                self.update_doa3_pose();
+            }
+            return;
+        }
         if let Some(pose) = &mut self.doax2_pose {
             if index < pose.motions.len() {
                 pose.playing = Some(index);
@@ -2349,6 +2426,19 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
+        if let Some(pose) = &self.doa4_pose {
+            let Some(index) = pose.playing else { return };
+            let (file, tracks, _) = &pose.motions[index];
+            match crate::formats::doa4::eval_motion(&pose.files[*file], tracks, self.anim_time) {
+                Ok(values) => {
+                    let solved = doa3::solve_pose(&values, &pose.skeleton);
+                    let nodes: Vec<glam::Mat4> = pose.pieces.iter().map(|&(node, place)| solved[node] * place).collect();
+                    self.mesh.apply_pose(&self.ctx.queue, &nodes);
+                }
+                Err(e) => log::warn!("DOA4 motion: {e:#}"),
+            }
+            return;
+        }
         if let Some(pose) = &mut self.doax2_pose {
             let Some(index) = pose.playing else { return };
             let (file, motion) = pose.motions[index];
@@ -2692,7 +2782,8 @@ impl App {
         if self.anim_panel.playing {
             self.anim_time += dt * self.anim_panel.speed * 60.0;
             let doax_length = self.doax_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32))
-                .or_else(|| self.doax2_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32)));
+                .or_else(|| self.doax2_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32)))
+                .or_else(|| self.doa4_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].2 as f32)));
             let length = doax_length.unwrap_or_else(|| self.doa3_pose.as_ref().and_then(|p| p.motion.as_ref()).map_or(0.0, |m| m.length));
             if length > 0.0 && self.anim_time > length {
                 if self.anim_panel.loop_anim {
