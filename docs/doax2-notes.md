@@ -454,22 +454,6 @@ the position alone. Each head has two sets on object 0:
 No working buffer holds them in the running game (only the file's copies were found): the
 blend is done on the GPU, so the weights in use cannot be read from memory.
 
-A CPU blend of seven shapes exists in the code, though (read 2026-11-10, not run against the
-game): the second half of `0x824969F0`, called on a `CLOTH_DATA` whose +0x58 is set (0 in the
-files, so filled at run time). `[+0x58]+0x24` points to a record with seven arrays of 12-byte
-positions at +0x1C to +0x34 (the mouth set has seven shapes: base, A, I, U, E, O, smile), the
-vertex list at +0x18 (ended by -1, a set top bit starting each group, as in the `MPV` lists)
-and the layouts at +0xC. Per group, with x the first array's x:
-
-    left  = clamp((x + 0.03) / 0.06, 0, 1)      right = clamp((0.03 - x) / 0.06, 0, 1)
-    vertex = left * sum(wl[i] * shape[i]) + right * sum(wr[i] * shape[i])
-
-`wl` and `wr` are two arrays of seven floats, pointed to by the owner's +0xD0 and +0xD4 (the
-owner is the cloth's +0x4C). So each half of the face has its own weights, with a soft seam 6 cm
-wide. Whoever fills those two arrays is the mouth's (or the eyes') trigger: the next thing to
-read for facial animation. It also means the "no working buffer" above may only be true of the
-scenes looked at.
-
 Blinks: the scripts' op 22 comes every 20 to 30 frames, mostly with 2 or 3, which the viewer
 takes as a blink to that eye entry: shut over 3 frames, held 2, open over 4 (`blink_weight`,
 timing chosen, not read). Checked by eye on Tina's motion 77, shut at frame 10 and open at 30.
@@ -697,6 +681,33 @@ removed. `vksAA` also has 14 small layout 2 materials with no particles (vertice
 not explained: no list found so far names them. The head CAT's blocks tagged 0x06010001 from
 0x1680 (two values 0.3 and 0.8, a point behind the head, offsets) are still not decoded and may
 be theirs.
+
+### Suit cloths (2026-11-11, not in the viewer yet)
+
+The suits have cloth too: `werone.afs` holds 73 `CLOTH_DATA` blocks, `wertwo.afs` 105 and
+`itm.afs` 2 (`zgra_pre`), named by body code and part: `ks_skirt` (336 particles), `ht_lsode_b`
+and `_f`, `ht_rsode_b` and `_f` (sleeves, 72 and 80), `ks_base` (182), `ks_tareb`, `ks_taref`.
+The viewer reads cloths from the head's CAT only, so these hang rigid.
+
+93 of them (the `base` and `sode` ones, no skirt) have an `MPV` block at `CLOTH_DATA`+0x58, 0 on
+every hair cloth. The second half of `0x824969F0` blends it on the CPU (read from the code, not
+run against the game): `[+0x58]+0x24` is a record with seven arrays of 12-byte positions at
++0x1C to +0x34, the vertex list at +0x18 (ended by -1, a set top bit starting each group, as in
+the `MPV` lists) and the layouts at +0xC. Per group, with x the first array's x:
+
+    left  = clamp((x + 0.03) / 0.06, 0, 1)      right = clamp((0.03 - x) / 0.06, 0, 1)
+    vertex = left * sum(wl[i] * shape[i]) + right * sum(wr[i] * shape[i])
+
+`wl` and `wr` are two arrays of seven floats, pointed to by the owner's +0xD0 and +0xD4 (the
+owner is the cloth's +0x4C). Seven shapes with a weight set per side read as the chest's base
+and six shapes under its left and right springs: the part of a top that lies on the chest
+follows the chest's shapes here, as the GPU does for the body. Not confirmed; an earlier note
+took this for a face blend, which it is not (no head's cloth has the block).
+
+The game keeps its loaded cloths in a table at `0x83C0B740`, 0x80 bytes a slot: a matrix at +0,
+the `MULTI_CLOTH` at +0x40, the bone matrices at +0x4C, the vertex buffers at +0x50 and +0x54.
+`0x824AF538` (r3 the slot) runs, per cloth, `0x824969F0`, `0x824938B0` and the step
+`0x82493920`. With Kasumi alone on screen only slot 4 was in use, with her six hair cloths.
 
 `0x82496F88` and the start of `0x824969F0` use `FIX_GRID`'s own list (+0x28, a word per entry,
 -1 for none; only when +0x10 is 2 or more, +0x14 is 0x30 and +0x20 has bit 0): entries without
