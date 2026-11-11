@@ -199,7 +199,15 @@ bone, not in the solve's limb frames. So the simulations are given each solved b
 by its rest frame (`doa4::rest_frame`). With the solve's own frames the bodies on arms and legs
 flew apart (Zack's trouser legs, Eliot's sleeves); turned back they sit right, by eye.
 
-Kinds 2 (cloth), 250 (vertex copies) and the rest are not read yet. DOA3's and
+Kind 2 (cloth) is not DOA3's record unchanged, so it is not read yet. `kas00`'s two sheets
+start `01 01 02 00  00 01 05 06  FF 00 00 00`: mode 1, axis 1, bone 2 as in DOA3, then the
+object as a 16-bit number (1, the pelvis piece), 5 columns, 6 rows and 0xFF, where DOA3 has
+object, columns, rows and pivot a byte earlier (`aya01`: 21 columns of 6). Eleven floats follow
+from +0xC (0, 0.065, 0.02, 1.2, 0.45, 0, 0.01, 0.3, 0, 0.7, 0.05) where DOA3 has ten, and the
+pointers start at +0x38, four bytes later. Which float is the new one has to be settled against
+a DOA3 or DOA2U record before DOA3's cloth step can take these.
+
+Kinds 250 (vertex copies) and the rest are not read yet. DOA3's and
 DOA2U's readers are the place to start, by the same swap; nothing says their records match as
 kind 1's do.
 
