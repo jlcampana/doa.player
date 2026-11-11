@@ -479,6 +479,8 @@ struct Doa4Pose {
     /// events by motion number.
     hands: Vec<(crate::formats::doa3_morphs::PoseHand, Vec<(usize, usize)>)>,
     hand_events: HashMap<u16, Vec<HandEvent>>,
+    /// The face's eyes and mouth, with the mesh pieces that draw it.
+    face: Option<(FaceMorph, Vec<(usize, usize)>)>,
     /// Each entry of the animation list: its motion number, and whether it is from the
     /// character's main file, whose numbers the scripts use.
     motion_ids: Vec<(u16, bool)>,
@@ -1219,9 +1221,9 @@ impl App {
         let head_stem = (!has_head)
             .then(|| self.doa4_suit_heads.get(&stem).cloned().or_else(|| self.doa4_files.iter().find(|f| f.stem.starts_with(&code) && !doa4::is_costume(&f.stem)).map(|f| f.stem.clone())))
             .flatten();
-        let (head, head_chains, head_springs, head_cloth) = match head_stem.as_deref().map(read).transpose()? {
-            Some((head, _, chains, springs, cloth, _)) => (Some(head), chains, springs, cloth),
-            None => (None, Vec::new(), Vec::new(), Vec::new()),
+        let (head, head_chains, head_springs, head_cloth, head_sets) = match head_stem.as_deref().map(read).transpose()? {
+            Some((head, _, chains, springs, cloth, sets)) => (Some(head), chains, springs, cloth, sets),
+            None => (None, Vec::new(), Vec::new(), Vec::new(), Vec::new()),
         };
         // The head file's own node for that bone is at the origin in some files (Kasumi's) and
         // already at the body's place in others (Ayane's), so it is taken out.
@@ -1366,6 +1368,13 @@ impl App {
                     .map(|bin| crate::formats::doa3_morphs::parse_hand_events_big_endian(&bin))
                     .unwrap_or_default();
                 log::info!("DOA4 hands: {} sets, {} motions with hand events", hands.len(), hand_events.len());
+                // The face is in the head's file, or in the body's when it has its own head.
+                let face = [(1, &head_sets), (0, &body_sets)].into_iter().find_map(|(file, sets)| {
+                    let face = doa4::face(sets)?;
+                    let drawn = drawn_objects.get(file)?.get(&face.object)?.clone();
+                    Some((face, drawn))
+                });
+                log::info!("DOA4 face: {}", if face.is_some() { "blinks" } else { "none" });
                 let mut cloth = Vec::new();
                 for (file, list) in [body_cloth, head_cloth].into_iter().enumerate() {
                     for sheet in list {
@@ -1376,7 +1385,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, motion_ids, wind: Wind::new(), chain_frame: 0 });
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0 });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2572,6 +2581,11 @@ impl App {
                                 let to_piece = (turn(chain.bone) * pose.pieces[node].1).inverse();
                                 self.mesh.set_rest_positions(piece, chain.vertex_positions(target, &bones).map(|(vertex, position)| (vertex, to_piece.transform_point3(position))));
                             }
+                        }
+                    }
+                    if let Some((face, drawn)) = &pose.face {
+                        for &(piece, _) in drawn {
+                            self.mesh.set_rest_positions(piece, face.positions(clock).flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))));
                         }
                     }
                     for (hand, drawn) in &pose.hands {

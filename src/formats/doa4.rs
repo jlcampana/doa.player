@@ -673,6 +673,24 @@ pub fn pose_hand(set: &doax2::HandPoses) -> Option<super::doa3_morphs::PoseHand>
     Some(super::doa3_morphs::PoseHand::new(set.object, set.groups.clone(), shapes, Vec::new(), Vec::new()))
 }
 
+/// The face of a model, from its two smallest shape sets on one object, each of 4 to 10
+/// entries: the one with fewer is taken as the eyes and the other as the mouth, as in DOAX2,
+/// with entry 1 the face at rest and entry 2 the eyes shut or the mouth's first shape. It
+/// blinks and moves its mouth on DOA3's timing, the viewer's stand-in: what drives the face in
+/// DOA4 is not read.
+pub fn face(sets: &[doax2::HandPoses]) -> Option<super::doa3_morphs::FaceMorph> {
+    let mut faces: Vec<&doax2::HandPoses> = sets.iter().filter(|s| (4..=10).contains(&s.poses.len())).collect();
+    faces.sort_by_key(|s| s.poses.len());
+    let (eyes, mouth) = (faces.first()?, faces.get(1)?);
+    if eyes.object != mouth.object {
+        return None;
+    }
+    let shapes = |set: &doax2::HandPoses| -> Option<super::doa3_morphs::FaceShapes> {
+        Some(super::doa3_morphs::FaceShapes { vertices: set.groups.clone(), base: set.poses.get(1)?.clone()?, target: set.poses.get(2)?.clone()? })
+    };
+    Some(super::doa3_morphs::FaceMorph::from_shapes(eyes.object, Some(shapes(eyes)?), shapes(mouth)?))
+}
+
 /// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
 /// record with big-endian words, 0x34 bytes.
 pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {

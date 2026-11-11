@@ -162,7 +162,7 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   the other two light on both sides. Not understood: it stays rigid on the chest, logged when
   loaded.
 
-Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); the chest and face shapes are not used; pieces on bones the solve
+Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); the chest's shapes are not used; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
 
@@ -240,8 +240,12 @@ or 2 and their pose 0 to 16 in the three files looked at.
 In the viewer the hands follow those events as DOA3's do (the last event at or before the
 frame, DOA3's blend rates, the first set as the scripts' hand 1), taking pose p as the set's
 entry p + 1: both of those are assumptions, as is that the motion numbers are those of the
-character's main motion file. By eye the fingers take shapes and nothing tears. The chest's
-and the face's sets are read and not used yet: what drives them is not known.
+character's main motion file. By eye the fingers take shapes and nothing tears. The face's two
+sets blink and move the mouth (`doa4::face`: the smaller set as the eyes, the other as the
+mouth, entry 2 of each as the shut eyes and the first mouth shape) on DOA3's timing, a blink
+every 300 frames, which is the viewer's stand-in: what drives the face in DOA4 is not read. Seen
+once on Tina with the eyes shut and the mouth open, nothing torn. The chest's set is read and
+not used.
 
 
 ## In the viewer
