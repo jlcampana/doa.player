@@ -121,6 +121,8 @@ The error between earlier captures was the stage's floor, at about 1.015 on that
 
 Other costumes were not measured, including Lei Fang's. The viewer's Wind option uses a stand-in, as in DOA3, and it is off by default.
 
+With wind (2026-11-12, the storm stage, ring up to 0.0065, CPU against CPU, Gen Fu `gen00` and Helena `hel00`, 40 pairs per record, `target/captures/doa2u_cloth_pairs_storm.txt`): Helena's object 0 sheets and the coat's first sheet 0.00 mm; Gen Fu's two sheets 0.54 and 0.40 mm (worst 15 and 11 mm). Without the wind the step no longer fits most pairs, so the wind is used as the game does. Open: the coat's second and third sheets, which start on vertices the sheet before writes (flag 8), 8.9 and 8.8 mm, worse than not stepping (5.5 and 0.8 mm), whatever the ring's phase or the floor; they matched in the still capture. The vertex writes come at the end of each sheet's own update (`sub_00051110` calls `sub_00050A50`), in the same frame, as in the viewer, so that is not the cause.
+
 ### Chains, kind 1
 
 Hair and similar. The file's record has DOA3's chain layout: count, bone, object, on, and fields from +4 (`sub_0004BED0`, which swaps bytes 2 and 3 at run time). State at +0x10 of the fighter's state, count in byte +2. `sub_000591A0` is the normal update and `sub_00058D30` the first frame. Differences from DOA3:
@@ -132,7 +134,7 @@ Hair and similar. The file's record has DOA3's chain layout: count, bone, object
 - A moved tip stays where the collision left it: its length is not restored (`sub_0004BFE0`), as on cloth.
 - Stiffness pulls towards the segment before, and only the first segment towards the direction.
 
-One step against the game's particles, 40 pairs per record, wind included (`doa2u_chain_single_steps`): of the 21 records measured on `tin16` and `hel00`, 17 have a median segment error of 0.00 mm, and `hel00` chains 0, 1, 6 and 8 are at or under 0.38 mm. `hel00` chain 7 has 5.07 mm, worse than the 4.15 mm of not stepping at all, unexplained. It differs from chain 6, which matches, only in the sign of its direction's X. Kind 1's collision was read and matches the game's (`sub_0004C290`).
+One step against the game's particles, 40 pairs per record, wind included (`doa2u_chain_single_steps`): of the 21 records measured on `tin16` and `hel00`, 17 have a median segment error of 0.00 mm, and `hel00` chains 0, 1, 6 and 8 are at or under 0.38 mm. `hel00` chain 7 had 5.07 mm, worse than the 4.15 mm of not stepping at all. In a new capture with wind (2026-11-12, storm stage, CPU against CPU, `target/captures/doa2u_chain_pairs_storm.txt`) all 12 records of `gen00` and `hel00` match at 0.00 mm, chain 7 included, with the wind ring: the wind in chains is now tested, and the old error was that capture. Kind 1's collision was read and matches the game's (`sub_0004C290`).
 
 Detached objects, marked `0xFFFF` in a chain's target, are only drawn through the chain, and the viewer does this as in DOA3.
 
