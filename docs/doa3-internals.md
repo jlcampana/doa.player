@@ -157,7 +157,7 @@ Each ring is placed along the bone at the distance of its steps and turned about
 
 Checked with `rings_and_vertices_match_captured_frames` on 90 frames of Hitomi's costume 5, using `DOA3_TUBE_CAPTURE`: ring placement to 0.00004 mm and 1 angle unit; vertices made from the game's ring shapes, including collisions, to 0.0012 mm. Vertices move up to 7.6 cm from the file's shape.
 
-`step_matches_captured_frames`, with `DOA3_TUBE_STEP_CAPTURE`, runs 300 single steps of Hitomi's costume 5 while throwing punches, with the game's own wind ring: mean error median 0.0014 mm, worst particle 0.13 mm, with particles moving 7 mm per frame. Refused: rings of any mode but 0 (mode 1 goes through `sub_00044620`, a spline solver) and records whose rings differ in column count. Hitomi's costumes 0, 3 and 6 and model entry 239, whose character has not been looked up, have such rings.
+`step_matches_captured_frames`, with `DOA3_TUBE_STEP_CAPTURE`, runs 300 single steps of Hitomi's costume 5 while throwing punches, with the game's own wind ring: mean error median 0.0014 mm, worst particle 0.13 mm, with particles moving 7 mm per frame. Refused: rings of any mode but 0 (mode 1 goes through `sub_00044620`, a spline solver: `sub_00045080` stores its inputs in a state at +0x408 to +0x419, two point pointers, a length, a target and a count, and calls it once or twice, then `sub_00044ED0`; it works in the ring's plane on 2D points, moving them by the difference of the two points, and calls `sub_00044110` and `sub_00044270`; 435 lines of generated C, not ported) and records whose rings differ in column count. Hitomi's costumes 0, 3 and 6 and model entry 239, whose character has not been looked up, have such rings.
 
 ## Extra objects
 
