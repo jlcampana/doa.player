@@ -1566,6 +1566,33 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn kind8_records() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        for stem in ["hel00", "hel01", "hel08", "zac02", "zac04", "ryu00"] {
+            let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+            decrypt_cat(&mut cat).unwrap();
+            let skeleton = [Vec3::ZERO; 17];
+            let drawn: Vec<usize> = parse_drawn_objects(&cat, &skeleton).map_or_else(|_| Vec::new(), |d| d.iter().map(|o| o.object).collect());
+            for kind in [8u32, 9, 12, 14] {
+                let Ok((base, offsets)) = soft_body_offsets(&cat, kind) else { continue };
+                for o in offsets {
+                    let r = &cat[base + o..base + o + 0x40];
+                    let f = |a: usize| f32::from_le_bytes(r[a..a + 4].try_into().unwrap());
+                    let h = |a: usize| u16::from_le_bytes(r[a..a + 2].try_into().unwrap());
+                    println!("{stem} kind {kind}: {:02x?}", r);
+                    if kind == 8 {
+                        println!("   bone {} A {} at ({:.3},{:.3},{:.3}) turn {:x} {:x} {:x}; B {} at ({:.3},{:.3},{:.3}); C {} at ({:.3},{:.3},{:.3}); drawn A {} B {} C {}",
+                            r[0], h(2), f(4), f(8), f(0xC), h(0x14), h(0x16), h(0x18), h(0x1A), f(0x1C), f(0x20), f(0x24), h(0x32), f(0x34), f(0x38), f(0x3C),
+                            drawn.contains(&(h(2) as usize)), drawn.contains(&(h(0x1A) as usize)), drawn.contains(&(h(0x32) as usize)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn survey_unknown_slots() {
         let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
         let mut counts: std::collections::BTreeMap<(u8, u8), Vec<String>> = std::collections::BTreeMap::new();
