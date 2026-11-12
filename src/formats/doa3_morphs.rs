@@ -546,12 +546,15 @@ pub fn parse_hand_events_big_endian(bin: &[u8]) -> HashMap<u16, Vec<HandEvent>> 
     super::doa3_chains::with_big_endian(|| parse_hand_events(bin))
 }
 
-/// `sub_0004B63C`: some characters replace the open hand with another pose.
-pub fn character_pose(character: usize, pose: u16) -> usize {
-    match (character, pose) {
-        (0 | 3, 0) => 1,
-        (0x11, 0) => 0x14,
-        (0x12, 0) => 9,
+/// `sub_0004B63C`: some characters replace the open hand with another pose: characters 0 and
+/// 3 on both hands, 0x11 and 0x12 only on the scripts' hand 0 (the loop's counter, `ecx`, must
+/// be 0 there). A fifth case, pose 0x1B for every character but 2 while the flags at `0x4B838A`
+/// and `0x4B8432` are set and clear, depends on game state the viewer does not have.
+pub fn character_pose(character: usize, script_hand: usize, pose: u16) -> usize {
+    match (character, script_hand, pose) {
+        (0 | 3, _, 0) => 1,
+        (0x11, 0, 0) => 0x14,
+        (0x12, 0, 0) => 9,
         _ => pose as usize,
     }
 }

@@ -3238,7 +3238,7 @@ impl App {
                             });
                             let pose = event.map_or(0, |e| e.pose);
                             let rate = event.map_or(1.0 / 26.0, HandEvent::rate);
-                            hand.step(doa3_morphs::character_pose(soft.character, pose), rate);
+                            hand.step(doa3_morphs::character_pose(soft.character, script_hand, pose), rate);
                         }
                         for (index, hand) in soft.pose_hands.iter_mut().enumerate() {
                             let script_hand = index ^ 1;
