@@ -159,9 +159,13 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
 - Bones 32 and 33 are pieces along the forearms, heavy on the first weight near the elbow and
   on the second near the wrist: taken as the forearm and its twist node.
 - The chest's `91` piece has four weights as half floats (`D3DDECLTYPE_FLOAT16_4`, `0x1A2360`).
-  In `kas00` the first two are heavy on its front and back, in `zac00` on its top and bottom,
-  the other two light on both sides. Not understood: it stays rigid on the chest, logged when
-  loaded.
+  Over 116 costumes (ignored test `chest_joint_weights`) the first is heavy on its top and the
+  second on its bottom in 111; in `kas00`, `kas05`, `kas06`, `aya00` and `ryu01` on its front
+  and back. The weights add to 1. The third and fourth never pass 0.5 and sit behind and in
+  front at mid height. Since 2026-11-12 the first is taken as the chest and the second as the
+  pelvis, as on the limbs, and the third and fourth go half to each, as a node midway would
+  (`doa4::joint_weights`): a guess for those two. Waists bend without tearing by eye (Zack,
+  Tina, Kasumi).
 
 Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); the chest's shapes are not used; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and

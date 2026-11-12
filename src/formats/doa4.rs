@@ -584,6 +584,20 @@ pub fn rest_frame(bone: usize) -> glam::Mat3 {
 /// - The chest's piece has four weights (half floats). In `kas00` the first two are heavy on
 ///   its front and its back, in `zac00` on its top and bottom, and the other two are light on
 ///   both sides: not understood, so it stays rigid on the chest.
+/// A joint piece's weights as `weight_nodes` takes them. The chest's piece (bone 0) has four,
+/// half floats: over 116 costumes the first is heavy on its top and the second on its bottom in
+/// 111 (front and back in Kasumi's `kas00`, `kas05`, `kas06`, Ayane's `aya00`, Ryu's `ryu01`),
+/// so they are taken as the chest and its parent the pelvis, as on the limbs. The third and
+/// fourth never pass 0.5 and sit behind and in front at mid height (ignored test
+/// `chest_joint_weights`): what they follow is not known, and here each goes half to the chest
+/// and half to the pelvis, as a node midway would. A guess, not compared with the game.
+pub fn joint_weights(bone: usize, weights: &[Vec<f32>]) -> std::borrow::Cow<'_, [Vec<f32>]> {
+    if bone != 0 || weights.first().map_or(0, Vec::len) != 4 {
+        return std::borrow::Cow::Borrowed(weights);
+    }
+    std::borrow::Cow::Owned(weights.iter().map(|w| { let mid = (w[2] + w[3]) * 0.5; vec![w[0] + mid, w[1] + mid] }).collect())
+}
+
 pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, usize, glam::Mat3)>> {
     let twist = |mid: usize| {
         // The solve turns the forearm about its z until the hand's z lies along x; at rest
@@ -596,6 +610,8 @@ pub fn weight_nodes(bone: usize, count: usize) -> Option<Vec<(usize, usize, glam
     let nodes = match (bone, count) {
         (32, 2) => vec![on(4), twist(4)],
         (33, 2) => vec![on(10), twist(10)],
+        // The chest's piece, its four weights folded to two by `joint_weights`.
+        (0, 2) => vec![on(0), on(2)],
         (0, _) => return None,
         _ => {
             let parent = BONE_PARENTS.iter().find(|p| p.0 == bone)?.1;
@@ -932,6 +948,40 @@ mod tests {
                     let total: f32 = part.clone().map(|(_, w)| w[k]).sum();
                     let mass = part.map(|(v, w)| glam::Vec3::from(v.position) * w[k]).sum::<glam::Vec3>() / total.max(1e-6);
                     println!("      {side}: total {total:.1}, at ({:.3}, {:.3}, {:.3})", mass.x, mass.y, mass.z);
+                }
+            }
+        }
+    }
+
+    /// The chest's joint piece over many costumes: per weight, its weighted centre in the
+    /// model's space, the sum of the weights, and where the nearby bones sit at rest.
+    #[test]
+    #[ignore]
+    fn chest_joint_weights() {
+        let wanted = std::env::var("DOA4_STEMS").ok();
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let all: Vec<String> = afs.names().filter_map(|n| n.strip_suffix(".tpr").map(str::to_string)).collect();
+            for stem in all.iter().filter(|s| wanted.as_ref().map_or(true, |w| w.split(' ').any(|x| x == s.as_str()))) {
+                let (Ok(tpr), Ok(cat)) = (afs.read(&format!("{stem}.tpr")), afs.read(&format!("{stem}.cat"))) else { continue };
+                let loaded = load(&tpr, &cat).unwrap();
+                let bone_at = |slot: u32| loaded.pieces.iter().find(|(_, _, p)| p.slot == slot).map(|(_, n, _)| loaded.rest[*n].w_axis.truncate());
+                println!("{stem}: bones 0 {:?} 2 {:?} 3 {:?} 9 {:?} 18 {:?} 21 {:?} 23 {:?}", bone_at(0), bone_at(2), bone_at(3), bone_at(9), bone_at(18), bone_at(21), bone_at(23));
+                for ((piece, node, placed), weights) in loaded.pieces.iter().zip(&loaded.weights) {
+                    if weights.first().map_or(0, Vec::len) != 4 {
+                        continue;
+                    }
+                    let rest = loaded.rest[*node];
+                    let sums: Vec<f32> = weights.iter().map(|w| w.iter().sum()).collect();
+                    let (lo, hi) = sums.iter().fold((f32::MAX, f32::MIN), |(a, b), &s| (a.min(s), b.max(s)));
+                    println!("  piece on {} object {}: {} vertices, weight sums {lo:.2} to {hi:.2}", placed.slot, placed.object, piece.vertices.len());
+                    for k in 0..4 {
+                        let total: f32 = weights.iter().map(|w| w[k]).sum();
+                        let centre = piece.vertices.iter().zip(weights).map(|(v, w)| rest.transform_point3(glam::Vec3::from(v.position)) * w[k]).sum::<glam::Vec3>() / total.max(1e-6);
+                        let max = weights.iter().map(|w| w[k]).fold(0.0f32, f32::max);
+                        let lean: Vec<String> = [("+x", 1.0f32), ("-x", -1.0)].iter().map(|(n, s)| format!("{n} {:.1}", piece.vertices.iter().zip(weights).filter(|(v, _)| rest.transform_point3(glam::Vec3::from(v.position)).x * s > 0.01).map(|(_, w)| w[k]).sum::<f32>())).collect();
+                        println!("    weight {k}: total {total:.1}, max {max:.2}, centre ({:.3}, {:.3}, {:.3}), {}", centre.x, centre.y, centre.z, lean.join(", "));
+                    }
                 }
             }
         }

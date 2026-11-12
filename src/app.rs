@@ -1370,6 +1370,7 @@ impl App {
                     nodes.push(flip * lift * rest);
                     followed.push((doa4::solve_node(own).unwrap_or(2), at(own as usize), doa4::rest_frame(own as usize), rest));
                     // A piece with blend weights gets a node per weight, on that weight's bone.
+                    let weights = &doa4::joint_weights(placed.slot as usize, weights);
                     let groups = weights.first().map_or(0, Vec::len);
                     let multi = doa4::weight_nodes(placed.slot as usize, groups).filter(|_| groups > 0 && weights.len() == piece.vertices.len()).map(|bones| {
                         let groups = bones
@@ -1380,7 +1381,7 @@ impl App {
                                 (nodes.len() - 1, glam::Vec3::ZERO)
                             })
                             .collect();
-                        crate::renderer::mesh::MultiBend { groups, weights: weights.clone() }
+                        crate::renderer::mesh::MultiBend { groups, weights: weights.to_vec() }
                     });
                     if groups > 0 && multi.is_none() {
                         log::info!("DOA4: piece on bone {} has {groups} weights and is drawn rigid", placed.slot);
