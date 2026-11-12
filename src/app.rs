@@ -344,7 +344,7 @@ fn storm_flash(frame: u64) -> bool {
 /// Every stage's lights from DOA2's executable, the desert first. The snowy night and the
 /// cloudy stage use what was read from the running game, which differs from the table.
 fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
-    use crate::renderer::mesh::{SceneLights, CLOUDY_LIGHTS, FALLBACK_LIGHTS, SNOWY_NIGHT_LIGHTS};
+    use crate::renderer::mesh::{SceneLights, CLOUDY_LIGHTS, FALLBACK_LIGHTS, snowy_night_lights};
     let areas = std::fs::read(asset_path(DOA2U_XBE_PATH)).map_err(anyhow::Error::from).and_then(Xbe::from_bytes).and_then(|xbe| doa2u::area_lights(&xbe));
     let mut list: Vec<(String, SceneLights)> = match areas {
         Ok(areas) => areas
@@ -352,8 +352,8 @@ fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
             .map(|area| {
                 let lights = match area.area {
                     15 => CLOUDY_LIGHTS,
-                    19 => SNOWY_NIGHT_LIGHTS,
-                    _ => SceneLights { ambient: area.ambient, lights: area.lights, ambient_up: [0.0; 3], local_viewer: false },
+                    19 => snowy_night_lights(),
+                    _ => SceneLights { ambient: area.ambient, lights: area.lights, ambient_up: [0.0; 3], local_viewer: false, points: crate::renderer::mesh::NO_POINTS, fighter: [0.0; 3] },
                 };
                 (area.name, lights)
             })

@@ -1221,6 +1221,8 @@ pub fn stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
         lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse)),
         ambient_up,
         local_viewer: true,
+        points: crate::renderer::mesh::NO_POINTS,
+        fighter: [0.0; 3],
     };
     vec![
         ("Match, set 1".to_string(), set([0.33, 0.32, 0.3], [0.0; 3], [

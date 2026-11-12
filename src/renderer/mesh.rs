@@ -66,7 +66,23 @@ pub struct SceneLights {
     /// Specular towards the camera's position, as DOAX2's shaders take `CamPos`, rather than
     /// the fixed function's infinite viewer.
     pub local_viewer: bool,
+    /// Lights that are D3D point lights: where `Some`, the light's direction is not used.
+    pub points: [Option<PointLight>; 4],
+    /// Where the fighter stands on the stage, in the game's space, for point lights.
+    pub fighter: [f32; 3],
 }
+
+/// A D3D point light: position in the game's space, attenuation (constant, linear,
+/// quadratic) and range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointLight {
+    pub position: [f32; 3],
+    pub attenuation: [f32; 3],
+    pub range: f32,
+}
+
+/// No point lights.
+pub const NO_POINTS: [Option<PointLight>; 4] = [None; 4];
 
 impl SceneLights {
     /// The storm stage during a lightning flash, as read from the game (579 reads against
@@ -81,6 +97,7 @@ impl SceneLights {
         }
         let white = [1.248, 1.336, 1.336];
         flash.lights[3] = ([0.677, -0.29, -0.677], white, white.map(|c| c * 0.3));
+        flash.points[3] = None;
         flash
     }
 }
@@ -96,6 +113,8 @@ pub const FALLBACK_LIGHTS: SceneLights = SceneLights {
     ],
     ambient_up: [0.0; 3],
     local_viewer: false,
+    points: NO_POINTS,
+    fighter: [0.0; 3],
 };
 
 /// The cloudy stage's lights, read from the running game: its first light's direction differs
@@ -110,22 +129,45 @@ pub const CLOUDY_LIGHTS: SceneLights = SceneLights {
     ],
     ambient_up: [0.0; 3],
     local_viewer: false,
+    points: NO_POINTS,
+    fighter: [0.0; 3],
 };
 
-/// The snowy night's lights, read from the running game, since that stage changes its table's
-/// values in its own code. Two are lanterns, taken as directional lights from where the
-/// fighters stood in that read.
-pub const SNOWY_NIGHT_LIGHTS: SceneLights = SceneLights {
-    ambient: [71.0 / 255.0; 3],
-    lights: [
-        ([-0.99, -0.098, -0.098], [0.29, 0.22, 0.2], [0.087, 0.066, 0.06]),
-        ([-0.146, -0.105, 0.981], [0.215, 0.142, 0.066], [0.0645, 0.0426, 0.0198]),
-        ([-0.938, -0.297, 0.184], [0.533, 0.4, 0.213], [0.16, 0.12, 0.064]),
-        ([0.988, -0.147, -0.049], [0.12, 0.13, 0.15], [0.036, 0.039, 0.045]),
-    ],
-    ambient_up: [0.0; 3],
-    local_viewer: false,
-};
+/// Where the fighters stood in the snowy night's first read: a fixed place for the viewer's
+/// fighter on that stage.
+pub const SNOWY_NIGHT_FIGHTER: [f32; 3] = [-4.9, 0.75, -7.2];
+
+/// The snowy night's lights, read from the running game (`docs/doa2u-notes.md`, "snowy
+/// night"): two D3D point lights, a fixed one and the lamp nearest the fighters' midpoint,
+/// then two directional lights. The fighter stands at `SNOWY_NIGHT_FIGHTER`. Specular is 0.3
+/// of diffuse, as on other lights; it was not read.
+pub fn snowy_night_lights() -> SceneLights {
+    const ATTENUATION: [f32; 3] = [0.25, 0.25, 0.0];
+    let fighter = SNOWY_NIGHT_FIGHTER;
+    let lamps = [[-5.0, 1.8, -25.0], [-1.58, 1.8, -7.85]];
+    let distance = |p: &[f32; 3]| (p[0] - fighter[0]).powi(2) + (p[2] - fighter[2]).powi(2);
+    let lamp = if distance(&lamps[0]) < distance(&lamps[1]) { lamps[0] } else { lamps[1] };
+    let fixed = [0.59, 0.39, 0.18];
+    let lamp_color = [0.6, 0.45, 0.24];
+    SceneLights {
+        ambient: [71.0 / 255.0; 3],
+        lights: [
+            ([0.0, -1.0, 0.0], fixed, fixed.map(|c| c * 0.3)),
+            ([0.0, -1.0, 0.0], lamp_color, lamp_color.map(|c| c * 0.3)),
+            ([0.988, -0.147, -0.049], [0.12, 0.13, 0.15], [0.036, 0.039, 0.045]),
+            ([-0.99, -0.098, -0.098], [0.29, 0.22, 0.2], [0.087, 0.066, 0.06]),
+        ],
+        ambient_up: [0.0; 3],
+        local_viewer: false,
+        points: [
+            Some(PointLight { position: [-3.441, 1.8, -16.983], attenuation: ATTENUATION, range: 21.25 }),
+            Some(PointLight { position: lamp, attenuation: ATTENUATION, range: 22.25 }),
+            None,
+            None,
+        ],
+        fighter,
+    }
+}
 
 struct LoadedModel {
     /// Vertices in bone space. Posed copies are uploaded every frame.
@@ -558,6 +600,17 @@ impl MeshRenderer {
             buf[108..111].copy_from_slice(&lights.ambient_up);
             buf[111] = if lights.local_viewer { 1.0 } else { 0.0 };
             for (i, (direction, diffuse, specular)) in lights.lights.iter().enumerate() {
+                if let Some(point) = &lights.points[i] {
+                    // Where the light is, from the fighter, in the viewer's space (Z flipped).
+                    let f = lights.fighter;
+                    let p = point.position;
+                    buf[56 + i * 4..60 + i * 4].copy_from_slice(&[p[0] - f[0], p[1] - f[1], -(p[2] - f[2]), 1.0]);
+                    buf[116 + i * 4..119 + i * 4].copy_from_slice(&point.attenuation);
+                    buf[119 + i * 4] = point.range;
+                    buf[72 + i * 4..75 + i * 4].copy_from_slice(diffuse);
+                    buf[88 + i * 4..91 + i * 4].copy_from_slice(specular);
+                    continue;
+                }
                 // Toward the light, in the viewer's space, whose Z is the game's flipped.
                 let toward = if self.lights_follow_camera {
                     // Direct3D's camera looks down +z; the viewer's, down -z.
@@ -931,7 +984,7 @@ fn nearest_along_ray(
 }
 
 /// Floats in the uniform buffer. The material holds 6 vec4 in its own buffer.
-const UNIFORM_FLOATS: usize = 116;
+const UNIFORM_FLOATS: usize = 132;
 
 /// All mip levels, one after another, averaged in linear light with the viewer's sRGB
 /// textures. The viewer's own choice: this is not read from the game's files.
@@ -1099,8 +1152,26 @@ struct Uniforms {
     /// The hemisphere ambient's up colour; w: local viewer.
     ambient_up: vec4<f32>,
     eye: vec4<f32>,
+    /// Point lights (light_to.w = 1): attenuation in xyz, range in w.
+    light_attenuation: array<vec4<f32>, 4>,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+/// Toward light i from a position, and the light's attenuation there: a D3D point light when
+/// light_to.w is 1, otherwise directional.
+fn light_toward(i: i32, position: vec3<f32>) -> vec4<f32> {
+    if u.light_to[i].w < 0.5 {
+        return vec4<f32>(u.light_to[i].xyz, 1.0);
+    }
+    let to = u.light_to[i].xyz - position;
+    let distance = length(to);
+    let a = u.light_attenuation[i];
+    var attenuation = 0.0;
+    if distance <= a.w {
+        attenuation = 1.0 / max(a.x + a.y * distance + a.z * distance * distance, 1e-5);
+    }
+    return vec4<f32>(to / max(distance, 1e-5), attenuation);
+}
 
 struct Material {
     diffuse: vec4<f32>,
@@ -1181,12 +1252,13 @@ fn light_at(n: vec3<f32>, position: vec3<f32>) -> array<vec3<f32>, 2> {
     var rgb = material.emissive.rgb + material.ambient.rgb * (u.ambient.rgb + u.ambient_up.rgb * n.y);
     var specular = vec3<f32>(0.0);
     for (var i = 0; i < 4; i += 1) {
-        let l = u.light_to[i].xyz;
+        let toward = light_toward(i, position);
+        let l = toward.xyz;
         let d = dot(n, l);
         if d > 0.0 {
-            rgb += material.diffuse.rgb * u.light_diffuse[i].rgb * d;
+            rgb += material.diffuse.rgb * u.light_diffuse[i].rgb * d * toward.w;
             let h = normalize(l + to_eye);
-            specular += material.specular.rgb * u.light_specular[i].rgb * pow(max(dot(n, h), 1e-5), material.specular.w);
+            specular += material.specular.rgb * u.light_specular[i].rgb * pow(max(dot(n, h), 1e-5), material.specular.w) * toward.w;
         }
     }
     return array<vec3<f32>, 2>(
@@ -1214,7 +1286,7 @@ fn cel_shaded(v: VertOut, texel: vec4<f32>, layer: vec4<f32>) -> vec4<f32> {
         let strength = dot(c, vec3<f32>(0.299, 0.587, 0.114));
         if material.flags.x > 0.5 && strength > strongest {
             strongest = strength;
-            to_light = u.light_to[i].xyz;
+            to_light = light_toward(i, v.world).xyz;
             tint = c / max(max(c.r, max(c.g, c.b)), 0.001);
         }
     }

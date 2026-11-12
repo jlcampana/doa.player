@@ -282,6 +282,8 @@ fn measured_lights(ambient: [u8; 3], lights: [([f32; 3], [f32; 3]); 4]) -> Scene
         lights: lights.map(|(direction, diffuse)| (direction, diffuse, diffuse.map(|c| c * 0.3))),
         ambient_up: [0.0; 3],
         local_viewer: false,
+        points: crate::renderer::mesh::NO_POINTS,
+        fighter: [0.0; 3],
     }
 }
 
@@ -324,7 +326,7 @@ pub fn stage_lights(xbe: &[u8]) -> Vec<(String, SceneLights)> {
         }
         at += records.len() * LIGHT_RECORD;
         let character = &records[4..8];
-        let lights = SceneLights { ambient: character[0].0, lights: [character[0].1, character[1].1, character[2].1, character[3].1], ambient_up: [0.0; 3], local_viewer: false };
+        let lights = SceneLights { ambient: character[0].0, lights: [character[0].1, character[1].1, character[2].1, character[3].1], ambient_up: [0.0; 3], local_viewer: false, points: crate::renderer::mesh::NO_POINTS, fighter: [0.0; 3] };
         let known = list.iter().any(|(_, other)| other.ambient == lights.ambient && other.lights == lights.lights);
         if !known {
             number += 1;
