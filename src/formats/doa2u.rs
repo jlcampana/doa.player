@@ -488,6 +488,20 @@ pub fn normal_rebuilds(cat: &[u8]) -> Result<Vec<NormalRebuild>> {
             rebuilds.push(rebuild);
         }
     }
+    // A spring (kind 5) names the same data at +0x28, for its object at +2, run after its
+    // vertices are written (`sub_00059970` calls `sub_0004FD00`).
+    let (_, springs) = soft_body_offsets(cat, 5)?;
+    for offset in springs {
+        let at = base + offset;
+        let data = read_u32(cat, at + 0x28)? as usize;
+        if data == 0 {
+            continue;
+        }
+        let object = u16::from_le_bytes(slice(cat, at + 2, 2)?.try_into()?) as usize;
+        if let Ok(rebuild) = read_normal_rebuild(cat, base, object, base + data) {
+            rebuilds.push(rebuild);
+        }
+    }
     Ok(rebuilds)
 }
 
