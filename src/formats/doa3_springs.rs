@@ -53,13 +53,20 @@ pub fn parse_springs(cat: &[u8]) -> Vec<SoftSprings> {
 
 /// DOA4's springs: the same records with big-endian words, at offsets from `base`. Vertices
 /// are left as the file's words, for `map_vertices`.
+/// DOA2U's kind 5: the same record, at offsets from `base` (`sub_0004E200` sets it up,
+/// `sub_00059970` steps it with DOA3's formula, the wind's phase moving 3 a point).
+pub fn parse_spring_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftSprings> {
+    offsets.iter().filter_map(|&offset| parse_record(cat, base, base + offset)).collect()
+}
+
 pub fn parse_spring_records_big_endian(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<SoftSprings> {
     super::doa3_chains::with_big_endian(|| offsets.iter().filter_map(|&offset| parse_record(cat, base, base + offset)).collect())
 }
 
 fn parse_record(cat: &[u8], base: usize, at: usize) -> Option<SoftSprings> {
     let bone = *cat.get(at)?;
-    if bone > MAX_BONE {
+    // DOA2U's bones from 0x80 are matrices from 24, mapped by its reader.
+    if bone > MAX_BONE && bone < 0x80 {
         return None;
     }
     let object = [*cat.get(at + 2)?, *cat.get(at + 3)?];

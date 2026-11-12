@@ -2002,11 +2002,15 @@ impl App {
         }
         let chest_morph = doa2u::chest_morph(&cat, id)?;
         let chain_piece_of_chest = chest_morph.as_ref().and_then(|(object, _)| chain_pieces.get(*object).copied().flatten()).map(|(piece, _)| piece);
+        let springs = doa2u::soft_springs(&cat)?;
+        if !springs.is_empty() {
+            log::info!("DOA2U {stem}: {} springs", springs.len());
+        }
         let chains = Doa3Chains {
             chains,
             cloth,
             tubes: Vec::new(),
-            springs: Vec::new(),
+            springs,
             pieces: chain_pieces,
             frame: 0,
             wind: Wind::new(),

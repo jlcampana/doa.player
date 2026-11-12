@@ -296,6 +296,20 @@ pub fn soft_chains(cat: &[u8], model: &Model, character_id: usize) -> Result<Vec
     Ok(chains)
 }
 
+/// Loose points on springs: kind 5 in the soft body list, DOA3's section 5 record, stepped by
+/// DOA3's formula (`sub_00059970`). Bones from 0x80 are matrices from 24, as for chains.
+pub fn soft_springs(cat: &[u8]) -> Result<Vec<crate::formats::doa3_springs::SoftSprings>> {
+    let (base, offsets) = soft_body_offsets(cat, 5)?;
+    let mut springs = crate::formats::doa3_springs::parse_spring_records(cat, base, &offsets);
+    for spring in &mut springs {
+        if spring.bone >= 128 {
+            spring.bone = node_of_matrix((spring.bone - 128 + 24) as u8).unwrap_or(usize::MAX);
+        }
+    }
+    springs.retain(|spring| spring.bone != usize::MAX);
+    Ok(springs)
+}
+
 /// Extra objects on a bone: kind 3 in the soft body list, with the layout of
 /// DOA3's section 3. They are translucent hair layers and carried items.
 pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
@@ -1482,6 +1496,74 @@ mod tests {
     }
 
     /// Lists a costume's objects and where the CAT uses them. DOA2U_COSTUME is a file stem.
+    #[test]
+    #[ignore]
+    fn survey_soft_kinds() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let mut counts: std::collections::BTreeMap<u32, (usize, Vec<String>)> = Default::default();
+        for name in ["datahdd2.afs", "datadvd.afs"] {
+            let archive = crate::formats::AfsArchive::from_file(format!("{dir}/{name}")).unwrap();
+            for entry in archive.entries() {
+                let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+                let mut cat = archive.get_by_name(&entry.name).unwrap().to_vec();
+                if decrypt_cat(&mut cat).is_err() || cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
+                    continue;
+                }
+                let Ok(base) = read_u32(&cat, 8).map(|b| b as usize) else { continue };
+                let mut seen = std::collections::BTreeSet::new();
+                for at in (base..).step_by(8).take(4096) {
+                    let Ok(kind) = read_u32(&cat, at) else { break };
+                    if kind & 0xFF == 0 || kind == 0xFF {
+                        break;
+                    }
+                    let e = counts.entry(kind).or_default();
+                    e.0 += 1;
+                    if seen.insert(kind) && e.1.len() < 10 {
+                        e.1.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        for (kind, (n, stems)) in counts {
+            println!("kind {kind} ({kind:#x}): {n} records, in {stems:?}");
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn springs_read() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let (mut wanted, mut read, mut outside, mut points) = (0, 0, 0, 0);
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        for entry in archive.entries() {
+            let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+            let mut cat = archive.get_by_name(&entry.name).unwrap().to_vec();
+            let Some(xpr) = archive.get_by_name(&format!("{stem}.xpr")) else { continue };
+            let mut xpr = xpr.to_vec();
+            if decrypt_cat(&mut cat).is_err() || decrypt_xpr(&mut xpr).is_err() || cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
+                continue;
+            }
+            let Ok(model) = parse_model(&xpr) else { continue };
+            let Ok((_, offsets)) = soft_body_offsets(&cat, 5) else { continue };
+            let springs = soft_springs(&cat).unwrap();
+            wanted += offsets.len();
+            read += springs.len();
+            for spring in &springs {
+                let count = model.pieces.get(spring.object).map_or(0, |p| p.vertices.len());
+                let out = spring.vertices().filter(|&v| v >= count).count();
+                points += spring.vertices().count();
+                outside += out;
+                if out > 0 {
+                    println!("{stem}: spring on object {} has {out} vertices outside", spring.object);
+                }
+            }
+            if springs.len() < offsets.len() {
+                println!("{stem}: {} of {} springs read", springs.len(), offsets.len());
+            }
+        }
+        println!("{read} of {wanted} springs read, {points} vertices, {outside} outside their object");
+    }
+
     #[test]
     #[ignore]
     fn survey_unknown_slots() {
