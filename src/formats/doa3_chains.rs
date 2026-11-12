@@ -624,6 +624,7 @@ pub fn parse_chain_records_big_endian(cat: &[u8], base: usize, offsets: &[usize]
             .filter_map(|&offset| {
                 let mut chain = parse_chain(cat, base, base + offset)?;
                 chain.wind_factor = Some(read_f32(cat, base + offset + 0x3C)?);
+                chain.set_placement_code(PlacementCode::Doa2u);
                 Some(chain)
             })
             .collect()
@@ -714,11 +715,12 @@ pub struct PlacedObjects {
 /// The game whose drawing of whole objects a chain follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlacementCode {
-    /// `sub_0003AA20` in DOA3's executable, also taken for DOA4.
+    /// `sub_0003AA20` in DOA3's executable.
     #[default]
     Doa3,
     /// `sub_00050100` in DOA2U's, called from its chain update `sub_000591A0`: the same as
-    /// DOA3's but for mode 2, which turns its objects.
+    /// DOA3's but for mode 2, which turns its objects. DOA4's `0x8233A900` does the same, with
+    /// its angles negated twice over (read from its image, `tools/re/doa4_xex.py`).
     Doa2u,
 }
 

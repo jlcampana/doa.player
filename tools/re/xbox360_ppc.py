@@ -4,12 +4,13 @@ not know (fields and opcodes as Xenia decodes them).
 
   xbox360_ppc.py ADDRESS [COUNT]     e.g. xbox360_ppc.py 82489d68 380 (the chest springs' step)
 
-Reads assets/doax2/image_82000000.bin. vmaddfp128 and vnmsubfp128 use vD as the third operand;
+Reads assets/doax2/image_82000000.bin, or the file in IMAGE (DOA4's from doa4_xex.py). vmaddfp128 and vnmsubfp128 use vD as the third operand;
 vsel128 uses vD as the mask.
 """
 import struct,sys
 from capstone import *
-d=open(__file__.rsplit('/', 3)[0] + '/assets/doax2/image_82000000.bin', 'rb').read()
+import os
+d=open(os.environ.get('IMAGE', __file__.rsplit('/', 3)[0] + '/assets/doax2/image_82000000.bin'), 'rb').read()
 md=Cs(CS_ARCH_PPC,CS_MODE_32|CS_MODE_BIG_ENDIAN)
 def b(w,hi,lo):  # LSB numbering
     return (w>>lo)&((1<<(hi-lo+1))-1)

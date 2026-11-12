@@ -279,10 +279,10 @@ pub struct ChainDraw {
     pub object: usize,
 }
 
-/// The objects that chains draw whole, as DOA3's `sub_0003AA20` does: none of them is in the
-/// draw lists (every costume checked, test `survey_placing_chains`). Only chains on bones the
-/// solve has. Modes past 4 (Zack's `zac00` 31, Christie's `cri04` 8, Kokoro's 5) draw nothing in
-/// DOA3; what DOA4 does with them is not read, so they are left out.
+/// The objects that chains draw whole (`0x8233A900` in DOA4's image, DOA2U's `sub_00050100`
+/// line for line): none of them is in the draw lists (every costume checked, test
+/// `survey_placing_chains`). Only chains on bones the solve has. Modes past 4 (Zack's `zac00`
+/// 31, Christie's `cri04` 8, Kokoro's 5) draw nothing: the game's switch ends there.
 pub fn chain_draws(cat: &[u8]) -> Vec<ChainDraw> {
     chains(cat, &[])
         .iter()

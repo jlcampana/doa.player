@@ -6,6 +6,13 @@ Xbox 360, read from the install of a recompiled build
 the user's machine yet, so nothing is compared with it. Code: `src/formats/doa4.rs`, on top of
 DOAX2's XPR2 reader in `src/formats/doax2.rs`.
 
+## The game's image
+
+`tools/re/doa4_xex.py` writes the game's image from the install's `default.xex` to
+`target/doa4/image_82000000.bin` (retail AES key, then XEX2's basic compression; it loads at
+0x82000000). `IMAGE=target/doa4/image_82000000.bin tools/re/xbox360_ppc.py ADDRESS COUNT`
+disassembles it. Costume and head names are not strings in it: the archives are indexed.
+
 ## Archives
 
 AFS, as the other games. `chrone.afs`, `chrtwo.afs` and `chrthree.afs` hold the models, each a
@@ -203,8 +210,13 @@ the chains that draw whole objects (`sub_0003AA20` in DOA3, see "Chains" in
 `docs/doa3-internals.md`). None of their objects is in the draw lists, so they were not drawn
 before (ignored test `survey_placing_chains`). 100 are mode 0, as all of DOA3's; the others are
 mode 5 (Kokoro's `kor02`, `kor05` to `kor07`), 8 (three of Christie's `cri04`) and 31 (Zack's
-`zac00`, object 69), which DOA3's code would not draw. What DOA4 does with those is not read,
-and they stay undrawn. Numbers carry 0x1000 on some objects (Bass's links, La Mariposa's `lis01`);
+`zac00`, object 69). DOA4's own function is `0x8233A900` in its image: the mode is byte +2,
+`cmplwi 4` then a jump table at `0x8233A9DC` (`9F0, B54, D68, EEC, 9F0`), so modes past 4 draw
+nothing, as in DOA3. It is DOA2U's `sub_00050100` case for case: its angles are made with
+-10430.378 (`0x822BC9E4`) and taken from the half or quarter turn, which comes to the same as
+DOA2U's, and its mode 2 turns the objects as DOA2U's does (y by the heading plus a half turn, x by
+the pitch plus a quarter). The viewer uses DOA2U's placement for DOA4. The degree factor is
+182.044 at `0x822BC824`. Numbers carry 0x1000 on some objects (Bass's links, La Mariposa's `lis01`);
 DOA3 masks it off and so does the viewer, without knowing what it means here.
 
 In the viewer `doa4::chain_draws` lists them and `doa4::load` adds each as a draw, marked
