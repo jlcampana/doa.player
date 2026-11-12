@@ -538,6 +538,7 @@ struct Doa4Pose {
     chain_frame: u64,
 }
 
+#[derive(Clone)]
 struct Doax2Cloth {
     sim: crate::formats::doax2_cloth::ClothSim,
     node: usize,
@@ -563,6 +564,8 @@ struct Doax2Pose {
     /// Hair cloths: the simulation, the node whose space its particles are in, and per mesh
     /// piece the (vertex, particle) pairs it writes.
     cloths: Vec<Doax2Cloth>,
+    /// The cloths before any step, for `bake_soft_frames`.
+    cloths_at_load: Vec<Doax2Cloth>,
     /// The head's face shape sets and the piece they shape.
     faces: Vec<(usize, crate::formats::doax2::HandPoses)>,
     /// Hand events by motion key: own motions by number, shared ones by number + 0x2000.
@@ -1292,7 +1295,7 @@ impl App {
         self.doax2_pose = Some(Doax2Pose {
             files: motion_data, motions, playing: None, rows, pieces: pose_pieces, chest, chest_spring: None,
             rest_nodes: nodes.clone(),
-            hands, events, shared_files, faces, blinks, cloths,
+            hands, events, shared_files, faces, blinks, cloths_at_load: cloths.clone(), cloths,
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -2539,7 +2542,19 @@ impl App {
             write_glb(&Export { model: &model, bind: pose.rest_nodes.clone(), parents, names, clips: &clips, hands: &hands }, &path)?;
             return Ok(path);
         }
-        if let Some(pose) = &self.doax2_pose {
+        if self.doax2_pose.is_some() {
+            // Hair and suit cloths, hands and blinks of a single motion, a shape key per frame,
+            // as for DOA3. The chest has its own keys.
+            let skip: Vec<usize> = self.doax2_pose.as_ref().map_or_else(Vec::new, |pose| pose.chest.iter().map(|c| c.0).collect());
+            let soft_frames = if all_motions || !bake { Vec::new() } else { self.bake_soft_frames(&skip) };
+            let soft_sets: Vec<crate::formats::doa3_morphs::PoseHand> = soft_frames
+                .iter()
+                .map(|(_, frames)| {
+                    let count = frames.first().map_or(0, Vec::len);
+                    crate::formats::doa3_morphs::PoseHand::new(0, (0..count).map(|v| vec![v]).collect(), frames.clone(), Vec::new(), Vec::new())
+                })
+                .collect();
+            let pose = self.doax2_pose.as_ref().context("no costume loaded")?;
             // A node per piece and per weight group, each driven by its DOAX bone. The chest's
             // shapes are shape keys in three sets per piece (sideways, forward, vertical), each
             // weighted per frame by the game's springs, as in the viewer.
@@ -2548,7 +2563,11 @@ impl App {
                 .iter()
                 .flat_map(|(piece, positions)| doax2_chest_sets(positions).into_iter().map(move |set| (set, *piece)))
                 .collect();
-            let hands: Vec<ExportHand> = chest_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set }).collect();
+            let hands: Vec<ExportHand> = chest_sets
+                .iter()
+                .map(|(set, piece)| ExportHand { piece: *piece, hand: set })
+                .chain(soft_frames.iter().zip(&soft_sets).map(|((piece, _), hand)| ExportHand { piece: *piece, hand }))
+                .collect();
             let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions {
                 (0..pose.motions.len()).collect()
@@ -2577,6 +2596,10 @@ impl App {
                         }
                     }
                     frames.push(pose.pieces.iter().map(|(bone, place)| bones[*bone] * *place).collect());
+                    for set in &soft_sets {
+                        let shape = (frame as usize).min(set.shapes.len().saturating_sub(1));
+                        states.push((shape, shape, 1.0));
+                    }
                     set_frames.push(states);
                 }
                 clips.push(ExportClip { name: self.current_animations[index].name.clone(), frames, hands: set_frames });
@@ -2735,7 +2758,12 @@ impl App {
         let mut saved4 = None;
         let mut saved = None;
         let mut saved_chest = None;
-        let length = if let Some(pose) = self.doa4_pose.as_mut() {
+        let mut saved_x2 = None;
+        let length = if let Some(pose) = self.doax2_pose.as_mut() {
+            let Some(length) = pose.playing.and_then(|i| pose.motions.get(i)).map(|m| m.1.frames) else { return Vec::new() };
+            saved_x2 = Some((std::mem::replace(&mut pose.cloths, pose.cloths_at_load.clone()), pose.chest_spring.take()));
+            length
+        } else if let Some(pose) = self.doa4_pose.as_mut() {
             let Some(length) = pose.playing.and_then(|i| pose.motions.get(i)).map(|m| m.2) else { return Vec::new() };
             saved4 = Some(pose.soft());
             let at_load = pose.soft_at_load.clone();
@@ -2761,6 +2789,10 @@ impl App {
             self.game_clock = (frame + 1) as f32;
             self.update_doa3_pose();
             frames.push(counts.iter().enumerate().map(|(piece, &n)| (0..n).map(|v| self.mesh.rest_position(piece, v).map_or([0.0; 3], |p| p.to_array())).collect()).collect());
+        }
+        if let (Some(pose), Some((cloths, spring))) = (self.doax2_pose.as_mut(), saved_x2) {
+            pose.cloths = cloths;
+            pose.chest_spring = spring;
         }
         if let (Some(pose), Some(soft)) = (self.doa4_pose.as_mut(), saved4) {
             pose.set_soft(soft);

@@ -384,6 +384,7 @@ fn read_cloth(cat: &[u8], at: usize) -> Result<Cloth> {
 pub const RECOMP_60_FACTOR: f32 = 0.5;
 
 /// A cloth's particle states, stepped as the game does (see the module's note).
+#[derive(Clone)]
 pub struct ClothSim {
     pub cloth: Cloth,
     pub position: Vec<Vec3>,
