@@ -133,6 +133,11 @@ impl SoftSprings {
 
     /// Advances one 60 Hz game frame (`sub_00042A90`).
     pub fn step(&mut self, nodes: &[Mat4], wind: &Wind) {
+        self.step_with(nodes, |i| wind.force_at_phase(i * PHASE_STEP));
+    }
+
+    /// `step` with the wind of each point given.
+    fn step_with(&mut self, nodes: &[Mat4], wind_at: impl Fn(usize) -> Vec3) {
         let Some(&bone) = nodes.get(self.bone) else { return };
         if !self.ready {
             self.settle(&bone);
@@ -145,7 +150,7 @@ impl SoftSprings {
             let old = point.position;
             let pull = old - (place + point.stretch);
             let mut force = pull * self.pull + point.velocity;
-            force += wind.force_at_phase(i * PHASE_STEP) * self.wind_factor;
+            force += wind_at(i) * self.wind_factor;
             force.y -= self.gravity;
             let mut position = old + force;
             position += (place - position) * self.stiffness;
@@ -187,6 +192,87 @@ impl SoftSprings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One step of DOA2U's springs against the game's points. DOA2U_PAIRS comes from
+    /// `tools/re/doa2u_spring_pairs.py`, DOA2U_RECORDS lists "fighter costume".
+    #[test]
+    #[ignore]
+    fn doa2u_spring_single_steps() {
+        use crate::formats::doa2u::{decrypt_cat, soft_springs};
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        let mut costumes = std::collections::HashMap::new();
+        for pair in std::env::var("DOA2U_RECORDS").expect("DOA2U_RECORDS").split(',') {
+            let (fighter, stem) = pair.split_once(' ').unwrap();
+            let mut cat = archive.get_by_name(&format!("{stem}.cat")).unwrap().to_vec();
+            decrypt_cat(&mut cat).unwrap();
+            costumes.insert(fighter.to_string(), soft_springs(&cat).unwrap());
+        }
+        let text = std::fs::read_to_string(std::env::var("DOA2U_PAIRS").expect("DOA2U_PAIRS")).unwrap();
+        let points = |v: &[f32]| -> Vec<SpringPoint> {
+            v.chunks_exact(16)
+                .map(|p| SpringPoint { position: Vec3::new(p[0], p[1], p[2]), stretch: Vec3::new(p[4], p[5], p[6]), velocity: Vec3::new(p[8], p[9], p[10]) })
+                .collect()
+        };
+        let (mut records, mut nodes, mut before) = (Vec::new(), std::collections::HashMap::<String, Vec<Mat4>>::new(), Vec::new());
+        let (mut head, mut ring) = (0usize, Vec::<f32>::new());
+        let mut results: std::collections::BTreeMap<usize, Vec<(f32, f32)>> = Default::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let kind = words.next().unwrap();
+            let rest: Vec<&str> = words.collect();
+            let floats = |from: usize| rest[from..].iter().map(|v| v.parse().unwrap()).collect::<Vec<f32>>();
+            match kind {
+                "rec" => records.push((rest[0].to_string(), rest[1].parse::<usize>().unwrap())),
+                "wind" => {
+                    head = rest[0].parse().unwrap();
+                    ring = floats(1);
+                }
+                "matrices" => {
+                    let m = floats(1);
+                    let game = |i: usize| Mat4::from_cols_slice(&m[i * 16..i * 16 + 16]);
+                    let mut list = vec![Mat4::IDENTITY; 23];
+                    for (i, node) in list.iter_mut().enumerate().take(15) {
+                        *node = game(i);
+                    }
+                    list[19] = game(24);
+                    list[20] = game(25);
+                    nodes.insert(rest[0].to_string(), list);
+                }
+                "before" => before = points(&floats(1)),
+                "after" => {
+                    let k: usize = rest[0].parse().unwrap();
+                    let after = points(&floats(1));
+                    let (fighter, record) = &records[k];
+                    let Some(spring) = costumes.get_mut(fighter).and_then(|c| c.get_mut(*record)) else { continue };
+                    if spring.points.len() != after.len() {
+                        println!("record {k}: {} points here, {} in the game", spring.points.len(), after.len());
+                        continue;
+                    }
+                    spring.ready = true;
+                    spring.points.copy_from_slice(&before);
+                    // The phase starts at 0 for each record and moves 3 a point, modulo 8.
+                    let wind = |i: usize| {
+                        let index = (head as i64 - ((i * 3) & 7) as i64 - 1).rem_euclid(64) as usize * 4;
+                        Vec3::new(ring[index], ring[index + 1], ring[index + 2])
+                    };
+                    spring.step_with(&nodes[fighter], wind);
+                    let error = spring.points.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0f32, f32::max) * 1000.0;
+                    let still = before.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).fold(0.0f32, f32::max) * 1000.0;
+                    results.entry(k).or_default().push((error, still));
+                }
+                _ => {}
+            }
+        }
+        for (k, mut list) in results {
+            list.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (ours, still): (Vec<f32>, Vec<f32>) = list.iter().copied().unzip();
+            let mut sorted_still = still.clone();
+            sorted_still.sort_by(f32::total_cmp);
+            println!("record {k} {:?}: {} pairs; worst point error median {:.3} mm, 90% {:.3} mm, worst {:.3} mm; points moved median {:.3} mm",
+                records[k], ours.len(), ours[ours.len() / 2], ours[ours.len() * 9 / 10], ours[ours.len() - 1], sorted_still[sorted_still.len() / 2]);
+        }
+    }
 
     fn entry(data: &[u8], index: usize) -> &[u8] {
         let at = 8 + index * 8;
