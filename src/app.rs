@@ -2405,7 +2405,9 @@ impl App {
 
     /// Writes the loaded costume to `exports/<game>/<character>/<costume>.glb`, with the
     /// playing motion or all of them.
-    pub fn export_current(&mut self, all_motions: bool) -> anyhow::Result<PathBuf> {
+    /// Writes the loaded costume. `bake` runs a single motion's soft bodies into shape keys
+    /// (`bake_soft_frames`); bulk exports leave it off, as it steps the viewer every frame.
+    pub fn export_current(&mut self, all_motions: bool, bake: bool) -> anyhow::Result<PathBuf> {
         use anyhow::Context;
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
@@ -2582,7 +2584,7 @@ impl App {
             let hands = pose.chains.pose_hands.iter().filter_map(|hand| Some(pose.chains.pieces.get(hand.object)?.as_ref()?.0));
             hands.chain(pose.chest.as_ref().map(|chest| chest.piece)).collect()
         });
-        let soft_frames = if all_motions { Vec::new() } else { self.bake_soft_frames(&skip) };
+        let soft_frames = if all_motions || !bake { Vec::new() } else { self.bake_soft_frames(&skip) };
         let soft_sets: Vec<crate::formats::doa3_morphs::PoseHand> = soft_frames
             .iter()
             .map(|(_, frames)| {
@@ -2753,7 +2755,7 @@ impl App {
             return;
         }
         self.load_character(queue.character, queue.next);
-        match self.export_current(queue.all_motions) {
+        match self.export_current(queue.all_motions, false) {
             Ok(_) => queue.written += 1,
             Err(error) => log::warn!("Export of costume {} failed: {error:#}", queue.next),
         }
@@ -2777,7 +2779,7 @@ impl App {
         for costume in 0..costumes {
             self.doa3_pose = None;
             self.load_character(char_idx, costume);
-            match self.export_current(all_motions) {
+            match self.export_current(all_motions, false) {
                 Ok(path) => {
                     log::info!("Exported {}", path.display());
                     written += 1;

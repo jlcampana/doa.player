@@ -273,7 +273,7 @@ fn render_frame(app: &mut App, window: &Window) {
     if let Some(request) = app.char_panel.export_request.take() {
         let all_motions = app.char_panel.export_all_motions;
         app.status_msg = match request {
-            ui::char_select::ExportRequest::Costume => match app.export_current(all_motions) {
+            ui::char_select::ExportRequest::Costume => match app.export_current(all_motions, true) {
                 Ok(path) => format!("Exported {}", path.display()),
                 Err(error) => format!("Export failed: {error:#}"),
             },
@@ -535,7 +535,7 @@ fn load_from_arguments(app: &mut App) {
     }
     if args.iter().any(|a| a == "--export") {
         let all_motions = args.iter().any(|a| a == "--all-motions");
-        match app.export_current(all_motions) {
+        match app.export_current(all_motions, true) {
             Ok(path) => println!("Exported {}", path.display()),
             Err(error) => eprintln!("Export failed: {error:#}"),
         }
