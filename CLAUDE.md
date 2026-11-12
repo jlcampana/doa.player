@@ -58,9 +58,24 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: drawing in the game's order, fog, the lightning's own rule (the storm now flashes on timing measured in a match, 2026-11-12), real point lights with a fighter position, and which areas change their table in code.
 2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
 3. **Remaining soft body error.** Chains match with wind, `hel00` chain 7 included (2026-11-12, storm stage). Cloth with wind: every sheet of `hel00` matches at 0.00 mm with Helena still; her coat's sheets are 6 to 9 mm off only while she is thrown or hit (the game seems to hold the coat then, not found in the code); Gen Fu's sheets 0.5 mm in a fight. Springs (kind 5) match at 0.001 mm. Shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each.
-4. **Other soft body kinds:** kind 5 (springs, 282 records) is DOA3's spring, read from the code and running since 2026-11-12. Left: 8 (Helena), 9 (`zac02`, `zac06`), 12 (`zac04`), 14 (`ryu00`), 32 (`pdg`); their handlers are listed in the notes ("Springs, kind 5"), not read yet. Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
-5. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. Pose 0's character substitution was not found.
+4. **Other soft body kinds:** kind 5 (springs, 282 records) is DOA3's spring, read from the code and running since 2026-11-12, checked live at 0.001 mm. Kinds 8 (Helena's item and chain 9, live only in some phases of a round), 9 (a trail effect), 12 (a particle emitter) and 14 (an object aimed at a body point) are read from the code and documented in the notes ("Springs, kind 5" and after); none is a soft body, none is ported. Left: 32 (`pdg`). Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
+5. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. DOA2U has no per-character substitution of pose 0 (DOA3's `sub_0004B63C`; checked 2026-11-12).
 6. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
+
+## Quick wins for the next session (2026-11-12)
+
+Each is small and needs no game running. In rough order of value for effort:
+
+1. **Point lights in the viewer.** DOA2U's snowy night is measured exactly (two D3D point lights, attenuation (0.25, 0.25, 0), one lamp chosen as the one nearest the fighters' midpoint; values in `docs/doa2u-notes.md`, "snowy night"). The shader only has directional lights. Add point lights to `SceneLights` and `mesh.rs` with a fixed fighter position on the stage (e.g. (-4.9, 0.75, -7.2), as the current stand-in assumes), and replace `SNOWY_NIGHT_LIGHTS`' directional stand-in. The storm's lightning flash uses the same light list.
+2. **DOA4 export of the face.** The DOA4 export bakes soft bodies per frame (`bake_soft_frames`) but skips the face only when it does not move; blinks come every 300 frames. Either drive one blink into short motions or export the face's shape set as two shape keys like the chest (`doa4::chest_shapes` shows the pattern).
+3. **DOA2U kind 0xFE variants in the panel.** The variants of a record are read and skipped (`soft_body_offsets` skips 0xFE); a selector per costume (like the Hair row) would show variants 1 to 3, e.g. `hel08`'s object 31 solid on bone 11 and `kas00`'s sword in the hand (objects 15 and 43). Notes: "Other kinds", kind 3 variants.
+4. **DOA3 Kasumi's knife in the hand.** Same mechanism in DOA3: objects 7 and 40 with chains in sections `0xFE` on bone 11 (`docs/doa3-internals.md`, "Extra objects"). A variant switch like 3 would show it.
+5. **Stage light check by table.** `tools/re/doa2u_stage_lights.py` and `area_lights_match_the_measured_ones` cover 8 areas; reading the light records of the other areas against the executable's per-area code (who calls `sub_00118570`: `sub_001188A0`, `sub_00118A00`, `sub_00118EF0`, `sub_001E1BA0`) would tell which areas change their table in code, item 1 of "Next steps".
+6. **Export check of DOA2U springs.** Springs now run in DOA2U; the soft body bake picks them up automatically, but no export with springs was opened in Blender (`kas02`, one motion, `blender -b` like the others).
+
+Bigger, also code-only: DOA3's tube ring mode 1 (`sub_00044620` and four helpers, about 1000 lines of generated C; it also resamples the ring and changes its column count; a capture to check it is in `target/captures/doa3_hitomi_tubes.bin`, see `docs/doa3-internals.md`, "Tubes"); DOA2U kind 14 (needs the 32 body points per fighter at `0x8793F0`, probably from the collision capsules); DOA4 from its image (`tools/re/doa4_xex.py`): the chest's real spring, the face's driver, which hairstyle each costume wears, the props on bones 20 and 16.
+
+Needs the game: DOA2U `ryu00` in a match (kind 14; the first costume in the menu is `ryu06`, tell costumes apart with the ignored test `costume_counts`), when Helena's chain 9 runs, hands frame by frame; DOA3 lighting; DOAX2 chest capture (`live_spring_bones_match`).
 
 ## Tools for this work
 - `tools/re/doa2u_live.py`: read-only guest memory. `capture` writes pose frames.
@@ -71,7 +86,11 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 - `tools/re/doa2u_lights.py`: lists the D3D lights the game enables.
 - `tools/re/doa2u_stage_lights.py`: lists the light records in the executable.
 - `tools/re/doa2u_normal_check.py`: per object in a capture, how many positions and normals the game changes.
-- `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping.
+- `tools/re/doa2u_fn.py`: prints a generated C function without flag bookkeeping. It works on DOA3's generated C too (run it from that folder).
+- `tools/re/doa2u_spring_pairs.py`: consecutive frames of spring points, for `doa2u_spring_single_steps`.
+- `tools/re/doa2u_light_positions.py`: the lights while each fighter draws, with the fighter's position.
+- `tools/re/doa3_tube_capture.py`: DOA3's tube state with matrices and wind, for porting ring mode 1.
+- `tools/re/doa4_xex.py`: DOA4's game image from `default.xex`, for `xbox360_ppc.py` with `IMAGE=`.
 - Ignored tests: `list_costume_objects`, `joint_pieces_match_captured_vertices`, `captured_tracks_are_found_in_motions`, `cloth_follows_captured_vertices`, `doa2u_single_steps`, `doa2u_chain_single_steps`. Each reads its inputs from environment variables, named in its comment.
 - Captures are in `target/captures/`, not tracked. `cargo clean` deletes them, and the tools above recreate them.
 
