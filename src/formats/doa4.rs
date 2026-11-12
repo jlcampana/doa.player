@@ -648,6 +648,25 @@ pub fn soft_records(cat: &[u8]) -> Option<(usize, Vec<(u8, usize)>)> {
     None
 }
 
+/// The number of variants of a model's soft body records (kind 254, DOA2U's 0xFE): 1 when none
+/// has variants.
+pub fn variant_count(cat: &[u8]) -> usize {
+    let Some((_, records)) = soft_records(cat) else { return 1 };
+    let kinds: Vec<u8> = records.iter().map(|r| r.0).collect();
+    super::doa3_chains::variant_groups(&kinds).iter().map(Vec::len).max().unwrap_or(1)
+}
+
+/// The CAT with each record that has variants switched to `variant`, as for DOA2U
+/// (`doa3_chains::select_variant`; the offsets are big-endian, which the copy does not mind).
+pub fn with_variant(cat: &[u8], variant: usize) -> Vec<u8> {
+    let mut out = cat.to_vec();
+    if let Some((base, records)) = soft_records(cat) {
+        let kinds: Vec<u8> = records.iter().map(|r| r.0).collect();
+        super::doa3_chains::select_variant(&mut out, base, &kinds, variant);
+    }
+    out
+}
+
 /// The chains of a model (kind 1), with each target's vertices numbered as its piece's: the
 /// file's words hold a vertex layout in the top byte and a byte offset in that layout below.
 /// Read by DOA3's parser, whose record this is field for field (on `kasAA`: 8 or 6 particles

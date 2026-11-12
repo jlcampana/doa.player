@@ -70,7 +70,7 @@ Each is small and needs no game running. In rough order of value for effort:
 1. ~~Point lights in the viewer.~~ Done 2026-11-12: `SceneLights::points` and `fighter`, snowy night uses them (`snowy_night_lights`). Not compared with the game by eye. The storm's flash could use the same list once its light type is read.
 2. ~~DOA4 export of the face.~~ Done 2026-11-12: eyes and mouth exported as shape keys at rest (`doa4::face_shapes`), not driven; checked in `blender -b` on `kas00` (2 pieces, 12 keys, up to 2.4 cm).
 3. ~~DOA2U kind 0xFE variants in the panel.~~ Done 2026-11-12: the Variant row and `--variant N` (`doa2u::with_soft_body_variant`). Groups without that variant are dropped, a guess.
-4. ~~DOA3 Kasumi's knife in the hand.~~ Done 2026-11-12, the same row (`doa3_chains::with_section_variant`): variant 1. DOA4's kind 254 is not switched yet.
+4. ~~DOA3 Kasumi's knife in the hand.~~ Done 2026-11-12, the same row (`doa3_chains::with_section_variant`): variant 1. DOA4's kind 254 goes through the same row since 2026-11-12 (`doa4::with_variant`); `kas00` has 3 variants, and no difference shows at full-body framing, not looked into.
 5. **Stage light check by table.** Partly done 2026-11-12 (notes, "Who sets the fighters' lights"): a third table at `0x6D4D78` used under conditions not understood, and the stage object functions that rewrite the first fighters' light, found through descriptors at `0x6E4774`, `0x6E800C`, `0x78158C`. Left: which area each descriptor belongs to.
 6. ~~Export check of DOA2U springs.~~ Done 2026-11-12: `kas02`, one motion, opened in `blender -b`: 11 pieces with keys, the largest move 41 cm (hair and ribbons over the motion), nothing flies off. Not compared with the viewer frame by frame.
 

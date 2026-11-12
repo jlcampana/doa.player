@@ -1360,6 +1360,10 @@ impl App {
         let entry = self.doa4_characters.get(char_idx).context("unknown character")?;
         let (code, display_name) = (entry.id.clone(), entry.display_name.clone());
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
+        // Records with variants (kind 254) show the one picked; the count is the largest of
+        // the files read.
+        let variant = self.char_panel.selected_variant;
+        let variants = std::cell::Cell::new(1usize);
         let read = |stem: &str| -> anyhow::Result<(doax2::Loaded, bool, Vec<SoftChain>, Vec<SoftSprings>, Vec<SoftCloth>, Vec<doax2::HandPoses>, Vec<doa4::ChainDraw>, Vec<doa4::WornDraw>)> {
             let file = self.doa4_files.iter().find(|f| f.stem == stem).with_context(|| format!("no {stem}"))?;
             let (tpr, cat) = match &file.loose {
@@ -1369,6 +1373,8 @@ impl App {
                     (archive.read_index(file.entry)?, archive.read_index(file.entry + 1)?)
                 }
             };
+            variants.set(variants.get().max(doa4::variant_count(&cat)));
+            let cat = doa4::with_variant(&cat, variant);
             let loaded = doa4::load(&tpr, &cat).with_context(|| stem.to_string())?;
             let chains = doa4::chains(&cat, &loaded.objects);
             let springs = doa4::springs(&cat, &loaded.objects);
@@ -1596,6 +1602,8 @@ impl App {
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
         Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOA4".to_string(), display_name.clone(), stem.clone()));
+        self.char_panel.variant_count = variants.get();
+        log::info!("DOA4 record variants: {}", variants.get());
         self.mesh.set_lights(Some(self.current_stage_lights()));
         self.mesh.set_lights_follow_camera(false);
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
