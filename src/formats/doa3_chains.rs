@@ -8,6 +8,8 @@ use glam::{Mat4, Vec3};
 const CHAIN_SECTION: u8 = 1;
 const KNOWN_SECTIONS: [u8; 11] = [0, 1, 2, 3, 4, 5, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE];
 const SECTION_END: u8 = 0xFF;
+/// A variant of the record before it in the section list.
+const VARIANT_SECTION: u8 = 0xFE;
 /// The game ends each segment's point list with this value, 999.0.
 pub(super) const POINT_LIST_END: u32 = 0x4479_C000;
 pub(super) const NO_VERTEX: u32 = u32::MAX;
@@ -419,6 +421,62 @@ pub(super) fn find_sections(cat: &[u8]) -> Option<(usize, Vec<(u8, usize)>)> {
         // A lone entry is too easy to find by chance.
         (chains_valid && sections.len() >= 2).then_some((base, sections))
     })
+}
+
+/// A record and the variants that follow it in the section list (kind 0xFE): entry indices,
+/// the record first. Only records with at least one variant.
+pub fn variant_groups(kinds: &[u8]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (index, &kind) in kinds.iter().enumerate() {
+        if kind == VARIANT_SECTION {
+            if let Some(group) = groups.last_mut().filter(|g| g.last() == Some(&(index - 1))) {
+                group.push(index);
+            }
+        } else {
+            groups.push(vec![index]);
+        }
+    }
+    groups.retain(|g| g.len() > 1);
+    groups
+}
+
+/// Rewrites a section list of 8-byte entries (kind in the first byte, offset at +4) at `list`
+/// so that each record with variants points at its variant `variant`, which every reader then
+/// takes as the record. Records without that variant get kind 0xFE, which readers skip: the
+/// game's group holds -1 there (DOA2U's `sub_000587F0`), taken here to mean nothing is used,
+/// which was not checked. Variant 0 is the list as it is.
+pub fn select_variant(cat: &mut [u8], list: usize, kinds: &[u8], variant: usize) {
+    if variant == 0 {
+        return;
+    }
+    for group in variant_groups(kinds) {
+        let leader = list + group[0] * 8;
+        match group.get(variant) {
+            Some(&chosen) => {
+                let from = list + chosen * 8 + 4;
+                let offset: [u8; 4] = cat[from..from + 4].try_into().unwrap();
+                cat[leader + 4..leader + 8].copy_from_slice(&offset);
+            }
+            None => cat[leader] = VARIANT_SECTION,
+        }
+    }
+}
+
+/// The number of variants of a DOA3 costume's records: 1 when none has variants.
+pub fn section_variant_count(cat: &[u8]) -> usize {
+    let Some((_, sections)) = find_sections(cat) else { return 1 };
+    let kinds: Vec<u8> = sections.iter().map(|s| s.0).collect();
+    variant_groups(&kinds).iter().map(Vec::len).max().unwrap_or(1)
+}
+
+/// A DOA3 costume's CAT with its records switched to `variant` (`select_variant`).
+pub fn with_section_variant(cat: &[u8], variant: usize) -> Vec<u8> {
+    let mut out = cat.to_vec();
+    if let Some((base, sections)) = find_sections(cat) {
+        let kinds: Vec<u8> = sections.iter().map(|s| s.0).collect();
+        select_variant(&mut out, base, &kinds, variant);
+    }
+    out
 }
 
 pub(super) fn parse_shapes(cat: &[u8], mut at: usize) -> Option<Vec<Shape>> {
@@ -1038,6 +1096,24 @@ fn segment_frame(point: Vec3, along: Vec3) -> Mat4 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn variants_replace_their_record() {
+        // Entries: chain at 0x10 with a variant at 0x20, cloth at 0x30, overlay at 0x40 with two.
+        let kinds = [1u8, 0xFE, 2, 3, 0xFE, 0xFE];
+        let mut cat = vec![0u8; 48];
+        for (i, &kind) in kinds.iter().enumerate() {
+            cat[i * 8] = kind;
+            cat[i * 8 + 4] = 0x10 * (i as u8 + 1);
+        }
+        assert_eq!(variant_groups(&kinds), vec![vec![0, 1], vec![3, 4, 5]]);
+        let mut two = cat.clone();
+        select_variant(&mut two, 0, &kinds, 2);
+        assert_eq!(two[0], 0xFE, "the chain has no variant 2");
+        assert_eq!(two[3 * 8 + 4], 0x60);
+        select_variant(&mut cat, 0, &kinds, 1);
+        assert_eq!((cat[0], cat[4], cat[16 + 4], cat[24 + 4]), (1, 0x20, 0x30, 0x50));
+    }
+
     use super::*;
 
     #[test]

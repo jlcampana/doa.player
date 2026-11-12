@@ -258,6 +258,37 @@ pub fn soft_body_offsets(cat: &[u8], wanted: u32) -> Result<(usize, Vec<usize>)>
     Ok((base, offsets))
 }
 
+/// The kinds of the soft body list's entries, by index, as bytes (kinds stay below 0x100).
+fn soft_body_kinds(cat: &[u8]) -> Result<(usize, Vec<u8>)> {
+    let base = read_u32(cat, 8)? as usize;
+    let mut kinds = Vec::new();
+    for at in (base..).step_by(8) {
+        let kind = read_u32(cat, at)?;
+        if kind & 0xFF == 0 || kind == 0xFF {
+            break;
+        }
+        kinds.push(kind as u8);
+    }
+    Ok((base, kinds))
+}
+
+/// The number of variants of a costume's soft body records (kind 0xFE follows a record with
+/// another version of it): 1 when none has variants. The game picks one per fighter at run
+/// time (`0x877CA0`, set by `sub_0005B050`), for every group at once.
+pub fn soft_body_variant_count(cat: &[u8]) -> usize {
+    soft_body_kinds(cat).map_or(1, |(_, kinds)| crate::formats::doa3_chains::variant_groups(&kinds).iter().map(Vec::len).max().unwrap_or(1))
+}
+
+/// The CAT with every soft body record switched to its variant `variant`, as the game reloads
+/// the groups (`sub_0004FC40`). Readers then see the variant as the record.
+pub fn with_soft_body_variant(cat: &[u8], variant: usize) -> Vec<u8> {
+    let mut out = cat.to_vec();
+    if let Ok((base, kinds)) = soft_body_kinds(cat) {
+        crate::formats::doa3_chains::select_variant(&mut out, base, &kinds, variant);
+    }
+    out
+}
+
 /// Whether a character's body may have soft bodies in the viewer.
 pub fn allows_body_soft_bodies(character_id: usize) -> bool {
     return true;

@@ -7,6 +7,10 @@ pub struct CharSelectPanel {
     pub selected_costume_idx: usize,
     /// The hairstyle picked for games with separate heads; `None` is the costume's own.
     pub selected_hair_idx: Option<usize>,
+    /// The variant of the costume's records that have them (kind 0xFE), 0 being the default.
+    pub selected_variant: usize,
+    /// How many the loaded costume has, set at load.
+    pub variant_count: usize,
     /// Exports with all motions, not only the playing one.
     pub export_all_motions: bool,
     pub export_request: Option<ExportRequest>,
@@ -30,6 +34,8 @@ impl CharSelectPanel {
             selected_char_idx: None,
             selected_costume_idx: 0,
             selected_hair_idx: None,
+            selected_variant: 0,
+            variant_count: 1,
             export_all_motions: false,
             export_request: None,
             filter: String::new(),
@@ -177,6 +183,18 @@ impl CharSelectPanel {
                                 if let Some(pick) = pick.filter(|pick| *pick != self.selected_hair_idx) {
                                     self.selected_hair_idx = pick;
                                     on_char_selected(char_idx, self.selected_costume_idx);
+                                }
+                            });
+                        }
+                        if self.variant_count > 1 {
+                            ui.separator();
+                            ui.label("Variant:").on_hover_text("Records the costume holds in more than one version, such as an item worn or held. The game picks one in play; 0 is the default.");
+                            ui.horizontal_wrapped(|ui| {
+                                for variant in 0..self.variant_count {
+                                    if ui.selectable_label(self.selected_variant == variant, variant.to_string()).clicked() && variant != self.selected_variant {
+                                        self.selected_variant = variant;
+                                        on_char_selected(char_idx, self.selected_costume_idx);
+                                    }
                                 }
                             });
                         }

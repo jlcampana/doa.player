@@ -1333,7 +1333,7 @@ impl App {
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
-        self.loaded_name = ("DOAX2".to_string(), display_name.clone(), suit.label.clone());
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOAX2".to_string(), display_name.clone(), suit.label.clone()));
         self.mesh.set_lights(Some(self.current_stage_lights()));
         // DOAX2's light directions are in the camera's space.
         self.mesh.set_lights_follow_camera(true);
@@ -1595,7 +1595,7 @@ impl App {
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
-        self.loaded_name = ("DOA4".to_string(), display_name.clone(), stem.clone());
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOA4".to_string(), display_name.clone(), stem.clone()));
         self.mesh.set_lights(Some(self.current_stage_lights()));
         self.mesh.set_lights_follow_camera(false);
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
@@ -1771,7 +1771,7 @@ impl App {
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
-        self.loaded_name = ("DOAX".to_string(), display_name.clone(), stem.clone());
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOAX".to_string(), display_name.clone(), stem.clone()));
         self.mesh.set_lights(Some(self.current_stage_lights()));
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
@@ -1802,6 +1802,16 @@ impl App {
         }
     }
 
+    /// Sets the loaded costume's name, and goes back to variant 0 when it is another costume.
+    /// Takes the fields, not `self`, so that loaders can call it while holding other fields.
+    fn set_loaded_name(loaded: &mut (String, String, String), panel: &mut crate::ui::char_select::CharSelectPanel, name: (String, String, String)) {
+        if !loaded.0.is_empty() && *loaded != name {
+            panel.selected_variant = 0;
+        }
+        panel.variant_count = 1;
+        *loaded = name;
+    }
+
     fn try_load_doa2u_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
         use anyhow::Context;
 
@@ -1818,7 +1828,7 @@ impl App {
         }
         let xbe = self.doa2u_xbe.as_ref().context("DOA2.xbe not loaded")?;
         let stem = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
-        self.loaded_name = ("DOA2U".to_string(), display_name.clone(), stem.clone());
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOA2U".to_string(), display_name.clone(), stem.clone()));
         // datahdd2.afs first: it holds the game's own copy where a name is in both.
         let archive = self
             .hdd2_archive
@@ -1830,6 +1840,15 @@ impl App {
         let mut cat = archive.get_by_name(&format!("{stem}.cat")).with_context(|| format!("no {stem}.cat"))?.to_vec();
         doa2u::decrypt_xpr(&mut xpr)?;
         doa2u::decrypt_cat(&mut cat)?;
+        // Records with variants (kind 0xFE, or DOA3's section 0xFE) show the one picked.
+        let variant = self.char_panel.selected_variant;
+        if cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
+            self.char_panel.variant_count = doa3_chains::section_variant_count(&cat);
+            cat = doa3_chains::with_section_variant(&cat, variant);
+        } else {
+            self.char_panel.variant_count = doa2u::soft_body_variant_count(&cat);
+            cat = doa2u::with_soft_body_variant(&cat, variant);
+        }
         if cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
             let home = self.doa3_xbe.as_ref().filter(|_| self.loadfile_archive.is_some()).and_then(|xbe| {
                 let home = xbe.roster().ok()?.into_iter().find(|r| Some(r.id) == doa3_character)?;
@@ -2246,12 +2265,16 @@ impl App {
         self.char_panel.selected_costume_idx = costume_idx;
         let roster = entry.doa3.clone().context("character has no DOA3 data")?;
         let model_entry = *entry.afs_indices.get(costume_idx).context("unknown costume")?;
-        self.loaded_name = ("DOA3".to_string(), display_name.clone(), format!("costume_{costume_idx:02}"));
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOA3".to_string(), display_name.clone(), format!("costume_{costume_idx:02}")));
 
         let archive = self.loadfile_archive.as_ref().context("loadfile.afs not loaded")?;
         let xbe = self.doa3_xbe.as_ref().context("default.xbe not loaded")?;
         let xpr = archive.get_by_index(model_entry).context("model entry missing")?;
         let cat = archive.get_by_index(model_entry + 1).context("CAT entry missing")?;
+        // Records with variants (section 0xFE) show the one picked.
+        let variant_count = doa3_chains::section_variant_count(cat);
+        let cat = &doa3_chains::with_section_variant(cat, self.char_panel.selected_variant)[..];
+        self.char_panel.variant_count = variant_count;
 
         let mut pieces = parse_xpr_model(xpr)?;
         let textures = parse_xpr_textures(xpr)?;

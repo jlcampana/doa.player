@@ -28,6 +28,7 @@ BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|
 EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"                 # a DOAX suit and motion
 EXTRA="--doax2" tools/re/shot.sh out "Tina Armstrong|2|0|200|2.2|1.1"              # a DOAX2 suit and motion
 EXTRA="--doa4 --hair 2" tools/re/shot.sh out "Kasumi|0|1|200|3.6|0.9"              # a DOA4 costume and motion, with her third head file
+EXTRA="--doa2u --variant 1" tools/re/shot.sh out "Kasumi|0|0|200|3|1"           # records' variant 1 (0xFE), e.g. the sword in the hand
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
 
@@ -68,8 +69,8 @@ Each is small and needs no game running. In rough order of value for effort:
 
 1. ~~Point lights in the viewer.~~ Done 2026-11-12: `SceneLights::points` and `fighter`, snowy night uses them (`snowy_night_lights`). Not compared with the game by eye. The storm's flash could use the same list once its light type is read.
 2. ~~DOA4 export of the face.~~ Done 2026-11-12: eyes and mouth exported as shape keys at rest (`doa4::face_shapes`), not driven; checked in `blender -b` on `kas00` (2 pieces, 12 keys, up to 2.4 cm).
-3. **DOA2U kind 0xFE variants in the panel.** The variants of a record are read and skipped (`soft_body_offsets` skips 0xFE); a selector per costume (like the Hair row) would show variants 1 to 3, e.g. `hel08`'s object 31 solid on bone 11 and `kas00`'s sword in the hand (objects 15 and 43). Notes: "Other kinds", kind 3 variants.
-4. **DOA3 Kasumi's knife in the hand.** Same mechanism in DOA3: objects 7 and 40 with chains in sections `0xFE` on bone 11 (`docs/doa3-internals.md`, "Extra objects"). A variant switch like 3 would show it.
+3. ~~DOA2U kind 0xFE variants in the panel.~~ Done 2026-11-12: the Variant row and `--variant N` (`doa2u::with_soft_body_variant`). Groups without that variant are dropped, a guess.
+4. ~~DOA3 Kasumi's knife in the hand.~~ Done 2026-11-12, the same row (`doa3_chains::with_section_variant`): variant 1. DOA4's kind 254 is not switched yet.
 5. **Stage light check by table.** `tools/re/doa2u_stage_lights.py` and `area_lights_match_the_measured_ones` cover 8 areas; reading the light records of the other areas against the executable's per-area code (who calls `sub_00118570`: `sub_001188A0`, `sub_00118A00`, `sub_00118EF0`, `sub_001E1BA0`) would tell which areas change their table in code, item 1 of "Next steps".
 6. ~~Export check of DOA2U springs.~~ Done 2026-11-12: `kas02`, one motion, opened in `blender -b`: 11 pieces with keys, the largest move 41 cm (hair and ribbons over the motion), nothing flies off. Not compared with the viewer frame by frame.
 

@@ -169,7 +169,7 @@ Section 3 (`sub_0003CE40`, `sub_0003EBA0`) draws an object on a bone. Record: +0
 
 Vertices of a detached object that no particle moves stay at the chain's anchor (`anchored_vertices`). Left at the bone's origin they stretch into long thin lines. This follows from the object's space; it has not been compared with the game.
 
-The knife in her hand is two more objects, 7 and 40 on costume 0, one per grip, with a second set of chains in sections `0xFE` on bone 11. What switches between them is not known and they are not drawn.
+The knife in her hand is two more objects, 7 and 40 on costume 0, one per grip, with a second set of chains in sections `0xFE` on bone 11. What switches between them in the game is not known. Since 2026-11-12 the Variant row (`--variant N`) switches every record with sections `0xFE` to its variant N (`doa3_chains::with_section_variant`); variant 1 on costume 0 draws the knife in her hand with its tassel chains, by eye.
 
 ## Back faces
 

@@ -498,6 +498,7 @@ fn load_from_arguments(app: &mut App) {
     app.char_panel.selected_char_idx = Some(index);
     app.char_panel.selected_costume_idx = number(0);
     // `--hair N` picks the character's N-th head, for games with separate heads.
+    app.char_panel.selected_variant = args.iter().position(|a| a == "--variant").and_then(|i| args.get(i + 1)?.parse().ok()).unwrap_or(0);
     app.char_panel.selected_hair_idx = args.iter().position(|a| a == "--hair").and_then(|i| args.get(i + 1)?.parse().ok());
     if let Some(scale) = args.iter().position(|a| a == "--bounce").and_then(|i| args.get(i + 1)?.parse().ok()) {
         app.bg_panel.bounce_scale = scale;
