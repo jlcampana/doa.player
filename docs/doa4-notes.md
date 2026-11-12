@@ -208,14 +208,15 @@ vertex it names is inside its object (ignored test `chains_read`). The other 108
 sort: their target's head is an object number (`00 22`, `10 24`...) instead of 0xFFFE or 0xFFFF,
 the chains that draw whole objects (`sub_0003AA20` in DOA3, see "Chains" in
 `docs/doa3-internals.md`). None of their objects is in the draw lists, so they were not drawn
-before (ignored test `survey_placing_chains`). 100 are mode 0, as all of DOA3's; the others are
-mode 5 (Kokoro's `kor02`, `kor05` to `kor07`), 8 (three of Christie's `cri04`) and 31 (Zack's
-`zac00`, object 69). DOA4's own function is `0x8233A900` in its image: the mode is byte +2,
-`cmplwi 4` then a jump table at `0x8233A9DC` (`9F0, B54, D68, EEC, 9F0`), so modes past 4 draw
-nothing, as in DOA3. It is DOA2U's `sub_00050100` case for case: its angles are made with
--10430.378 (`0x822BC9E4`) and taken from the half or quarter turn, which comes to the same as
-DOA2U's, and its mode 2 turns the objects as DOA2U's does (y by the heading plus a half turn, x by
-the pitch plus a quarter). The viewer uses DOA2U's placement for DOA4. The degree factor is
+before (ignored test `survey_placing_chains`). The mode is the file's +3 (the loader swaps
+bytes 2 and 3, as DOA3's does): all 108 are mode 1, each object on its particle, and the +2 the
+survey first took for the mode (31 on `zac00`, 8, 5) is the root's object. DOA4's own function is
+`0x8233A900` in its image: the mode is byte +2 at run time, `cmplwi 4` then a jump table at
+`0x8233A9DC` (`9F0, B54, D68, EEC, 9F0`). It is DOA2U's `sub_00050100` case for case: its angles
+are made with -10430.378 (`0x822BC9E4`) and taken from the half or quarter turn, which comes to
+the same as DOA2U's, its mode 2 turns the objects as DOA2U's does, and each segment reloads only
+the three rows of the turn (`ld`/`std` of 0x30 bytes), so the objects follow one another down the
+chain. The viewer uses DOA2U's placement for DOA4. The degree factor is
 182.044 at `0x822BC824`. Numbers carry 0x1000 on some objects (Bass's links, La Mariposa's `lis01`);
 DOA3 masks it off and so does the viewer, without knowing what it means here.
 

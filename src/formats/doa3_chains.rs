@@ -643,8 +643,12 @@ pub fn parse_chains(cat: &[u8]) -> Vec<SoftChain> {
 fn parse_chain(cat: &[u8], base: usize, at: usize) -> Option<SoftChain> {
     let count = *cat.get(at)? as usize;
     let bone = *cat.get(at + 1)? as usize;
-    // The fourth byte turns the chain on. Bone 0xFF is a stage object.
-    if *cat.get(at + 3)? == 0 || bone == 0xFF {
+    // The loader swaps bytes 2 and 3 (seen in DOA3's memory, 2026-11-12): the file's +2 is the
+    // root's object (+3 at run time, `sub_00042540`) and +3 the mode (+2 at run time). Mode 0
+    // is not simulated (`sub_00042540` jumps to the drawing) and draws whole objects rigid;
+    // vertex chains of mode 0 are left as the file has them. Bone 0xFF is a stage object.
+    let mode = *cat.get(at + 3)?;
+    if bone == 0xFF {
         return None;
     }
     let field = |offset: usize| read_u32(cat, at + offset);
@@ -654,7 +658,10 @@ fn parse_chain(cat: &[u8], base: usize, at: usize) -> Option<SoftChain> {
     // A head that is not 0xFFFE or 0xFFFF is an object list: the chain draws whole objects.
     let head_at = base + field(0x4C)? as usize;
     let head = read_u16(cat, head_at)?;
-    let placed = (head != 0xFFFE && head != 0xFFFF).then(|| parse_placed(cat, head_at, count, *cat.get(at + 2)?)).flatten();
+    let placed = (head != 0xFFFE && head != 0xFFFF).then(|| parse_placed(cat, head_at, count, mode)).flatten();
+    if placed.is_none() && mode == 0 {
+        return None;
+    }
     let mut targets = match placed {
         Some(_) => Vec::new(),
         None => vec![parse_target(cat, base, count, field(0x4C)?, field(0x50)?, field(0x54)?)?],
@@ -770,10 +777,12 @@ impl SoftChain {
     }
 
     /// `sub_0003AA20`: each object this chain draws, with its place in the space of the
-    /// chain's bone. All start from the chain's offset:
+    /// chain's bone. The first segment's objects sit at the chain's offset, and each next
+    /// segment's one segment length down the turned y of the one before. The turn per mode
+    /// (the record's +3 in the file, +2 at run time):
     ///
-    /// - Modes 0 and 4: turned by the record's direction read as degrees, z then y then x,
-    ///   and one segment length further down y per object. The particles are not used.
+    /// - Modes 0 and 4: the record's direction read as degrees, z then y then x, the same for
+    ///   all. Mode 0 is not simulated, so these hang rigid.
     /// - Mode 1: turned as `sub_0003F5F0` turns a segment, by its own particle's segment.
     /// - Mode 2: DOA3 does not turn them: it works out a frame from the segment and does not
     ///   use it. DOA2U turns them about y by the segment's heading plus a half turn, then about
@@ -784,48 +793,38 @@ impl SoftChain {
         let Some(placed) = &self.placed else { return Vec::new() };
         let to_radians = |angle: i32| angle as f32 / ANGLE_UNITS;
         let to_game_angle = |radians: f32| (radians * ANGLE_UNITS) as i32;
-        let root = Mat4::from_translation(self.offset);
         let inverse = nodes.get(self.bone).map_or(Mat4::IDENTITY, Mat4::inverse);
         let segment = |i: usize| self.particles.get(i).map_or(Vec3::ZERO, |p| inverse.transform_vector3(p.segment));
+        let heading = |s: Vec3| to_game_angle(s.x.atan2(s.z));
+        let pitch = |s: Vec3| to_game_angle(s.y.atan2((s.x * s.x + s.z * s.z).sqrt()));
+        let degrees = |value: f32| to_radians((value * DEGREE_UNITS) as i32);
+        // Each segment's turn, in the bone's space.
+        let turn = |i: usize| -> Option<Mat4> {
+            let s = segment(i);
+            Some(match (placed.mode, placed.code) {
+                (0 | 4, _) => {
+                    Mat4::from_rotation_z(degrees(self.direction.z))
+                        * Mat4::from_rotation_y(degrees(self.direction.y))
+                        * Mat4::from_rotation_x(degrees(self.direction.x))
+                }
+                (1, _) => segment_frame(Vec3::ZERO, s),
+                (2, PlacementCode::Doa3) => Mat4::IDENTITY,
+                (2, PlacementCode::Doa2u) => {
+                    Mat4::from_rotation_y(to_radians(heading(s) + FULL_TURN_HALF)) * Mat4::from_rotation_x(to_radians(pitch(s) + QUARTER_TURN))
+                }
+                (3, _) => Mat4::from_rotation_y(to_radians(heading(s) - QUARTER_TURN)) * Mat4::from_rotation_z(to_radians(pitch(s) + QUARTER_TURN)),
+                _ => return None,
+            })
+        };
+        // The game reloads only the turn for each segment (`sub_001540C0` copies the three
+        // rows), and moves one segment length down the turned y after each segment's objects:
+        // the objects follow one another down the chain.
+        let mut point = self.offset;
         let mut out = Vec::new();
-        match placed.mode {
-            0 | 4 => {
-                let degrees = |value: f32| to_radians((value * DEGREE_UNITS) as i32);
-                let turned = root
-                    * Mat4::from_rotation_z(degrees(self.direction.z))
-                    * Mat4::from_rotation_y(degrees(self.direction.y))
-                    * Mat4::from_rotation_x(degrees(self.direction.x));
-                for (i, objects) in placed.segments.iter().enumerate() {
-                    let place = turned * Mat4::from_translation(Vec3::new(0.0, -self.segment_length * i as f32, 0.0));
-                    out.extend(objects.iter().map(|&object| (object, place)));
-                }
-            }
-            1 => {
-                for (i, objects) in placed.segments.iter().enumerate() {
-                    let place = segment_frame(self.offset, segment(i));
-                    out.extend(objects.iter().map(|&object| (object, place)));
-                }
-            }
-            2 if placed.code == PlacementCode::Doa3 => out.extend(placed.segments.iter().flatten().map(|&object| (object, root))),
-            2 => {
-                for (i, objects) in placed.segments.iter().enumerate() {
-                    let s = segment(i);
-                    let heading = to_game_angle(s.x.atan2(s.z)) + FULL_TURN_HALF;
-                    let pitch = to_game_angle(s.y.atan2((s.x * s.x + s.z * s.z).sqrt())) + QUARTER_TURN;
-                    let place = root * Mat4::from_rotation_y(to_radians(heading)) * Mat4::from_rotation_x(to_radians(pitch));
-                    out.extend(objects.iter().map(|&object| (object, place)));
-                }
-            }
-            3 => {
-                for (i, objects) in placed.segments.iter().enumerate() {
-                    let s = segment(i);
-                    let heading = to_game_angle(s.x.atan2(s.z)) - QUARTER_TURN;
-                    let pitch = to_game_angle(s.y.atan2((s.x * s.x + s.z * s.z).sqrt())) + QUARTER_TURN;
-                    let place = root * Mat4::from_rotation_y(to_radians(heading)) * Mat4::from_rotation_z(to_radians(pitch));
-                    out.extend(objects.iter().map(|&object| (object, place)));
-                }
-            }
-            _ => {}
+        for (i, objects) in placed.segments.iter().enumerate() {
+            let Some(turn) = turn(i) else { break };
+            out.extend(objects.iter().map(|&object| (object, Mat4::from_translation(point) * turn)));
+            point += turn.transform_vector3(Vec3::new(0.0, -self.segment_length, 0.0));
         }
         out
     }
