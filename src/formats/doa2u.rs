@@ -1512,6 +1512,27 @@ mod tests {
     /// Lists a costume's objects and where the CAT uses them. DOA2U_COSTUME is a file stem.
     #[test]
     #[ignore]
+    fn costume_counts() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let prefix = std::env::var("DOA2U_PREFIX").unwrap_or("zac".into());
+        let archive = crate::formats::AfsArchive::from_file(format!("{dir}/datahdd2.afs")).unwrap();
+        for entry in archive.entries() {
+            let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+            if !stem.starts_with(&prefix) {
+                continue;
+            }
+            let mut cat = archive.get_by_name(&entry.name).unwrap().to_vec();
+            if decrypt_cat(&mut cat).is_err() {
+                continue;
+            }
+            let count = |k: u32| soft_body_offsets(&cat, k).map_or(0, |(_, o)| o.len());
+            let generic: usize = (6..=14).map(count).sum();
+            println!("{stem}: chains {} cloth {} kind3 {} tubes {} springs {} generic {generic} (9: {}, 12: {}, 14: {})", count(1), count(2), count(3), count(4), count(5), count(9), count(12), count(14));
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn survey_soft_kinds() {
         let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
         let mut counts: std::collections::BTreeMap<u32, (usize, Vec<String>)> = Default::default();
