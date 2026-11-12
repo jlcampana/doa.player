@@ -321,6 +321,26 @@ fn doa2u_animations(bin_id: &str, archive: &AfsArchive) -> Vec<AnimationEntry> {
     animations
 }
 
+/// Whether the storm's lightning flashes at a game frame: 5 frames on, after waits of 120 to
+/// 720 frames drawn from a fixed sequence.
+fn storm_flash(frame: u64) -> bool {
+    const FLASH: u64 = 5;
+    let mut start = 0u64;
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    loop {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        start += 120 + seed % 601;
+        if frame < start {
+            return false;
+        }
+        if frame < start + FLASH {
+            return true;
+        }
+    }
+}
+
 /// Every stage's lights from DOA2's executable, the desert first. The snowy night and the
 /// cloudy stage use what was read from the running game, which differs from the table.
 fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
@@ -958,7 +978,18 @@ impl App {
     }
 
     pub fn current_stage_lights(&self) -> crate::renderer::mesh::SceneLights {
-        self.stage_light_list().get(self.bg_panel.lights).or(self.stage_light_list().first()).map_or(crate::renderer::mesh::FALLBACK_LIGHTS, |entry| entry.1)
+        let entry = self.stage_light_list().get(self.bg_panel.lights).or(self.stage_light_list().first());
+        let Some((name, lights)) = entry else { return crate::renderer::mesh::FALLBACK_LIGHTS };
+        // DOA2U's storm flashes now and then: in 60 s of a match (2026-11-12), 11 flashes of 4
+        // to 6 game frames, 2 to 12 s apart with no pattern. Here a flash of 5 frames comes
+        // after a pseudo-random wait in that range, on the game clock: measured timing, not the
+        // game's own rule, which was not read. The list's "lightning" entry holds the flash.
+        if name.contains("storm") && !name.contains("lightning") {
+            if storm_flash(self.game_clock as u64) {
+                return lights.lightning_flash();
+            }
+        }
+        *lights
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {

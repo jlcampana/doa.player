@@ -1102,6 +1102,13 @@ mod tests {
                     let Some((base, offsets)) = soft_body_offsets(&cat, 1).ok() else { continue };
                     offsets.iter().filter_map(|&offset| parse_chain(&cat, base, base + offset)).collect()
                 };
+                if std::env::var("DOA2U_RAW").is_ok_and(|w| w == stem) && !doa3_format {
+                    if let Ok((base, offsets)) = soft_body_offsets(&cat, 1) {
+                        for o in offsets {
+                            println!("raw {stem} {:02x?}", &cat[base + o..base + o + 0x20]);
+                        }
+                    }
+                }
                 for chain in chains.iter().filter(|c| c.placed.is_some()) {
                     let placed = chain.placed.as_ref().unwrap();
                     println!("{name} {stem} doa3 format {doa3_format}: bone {} mode {} objects {:?}", chain.bone, placed.mode, placed.segments);
