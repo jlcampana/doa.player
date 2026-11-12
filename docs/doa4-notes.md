@@ -304,8 +304,16 @@ character's main motion file. By eye the fingers take shapes and nothing tears. 
 sets blink and move the mouth (`doa4::face`: the smaller set as the eyes, the other as the
 mouth, entry 2 of each as the shut eyes and the first mouth shape) on DOA3's timing, a blink
 every 300 frames, which is the viewer's stand-in: what drives the face in DOA4 is not read. Seen
-once on Tina with the eyes shut and the mouth open, nothing torn. The chest's set is read and
-not used.
+once on Tina with the eyes shut and the mouth open, nothing torn.
+
+The chest's set (3 entries, on the chest piece of the women's costumes, ignored test
+`chest_sets`): entry 1 is the piece at rest exactly, entry 2 the same moved down, 1 to 2 cm at
+most, and slightly forward or back. One shape, so presumably blended both ways by a signed value.
+DOAX2's three springs' constants are not in DOA4's image, nor DOA3's (0.128 is absent), so its
+driver is not found; the shaders do name `PosWeight`. Since 2026-11-12 the viewer drives the set
+with DOA3's chest spring on the chest's bone, as a stand-in, the Bounce slider scaling it
+(`doa4::chest_shapes`: rest, the shape, and the shape mirrored for negative values), and the
+export bakes the same as shape keys (checked in `blender -b` on `tin01`).
 
 
 ## In the viewer

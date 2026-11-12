@@ -480,6 +480,9 @@ struct Doa4Pose {
     placed: Vec<PlacedPiece>,
     /// The mesh nodes as first shown, before a motion: the export's bind pose.
     rest_nodes: Vec<glam::Mat4>,
+    /// The chest's shapes (`doa4::chest_shapes`) with the pieces that draw them, and DOA3's
+    /// chest spring driving them, the viewer's stand-in.
+    chest: Option<(Vec<(usize, usize)>, crate::formats::doa3_morphs::PoseHand, Option<ChestSpring>)>,
     /// Objects worn on bones (kinds 0 and 3): piece, node, the draw, the object's vertices.
     worn: Vec<(usize, usize, crate::formats::doa4::WornDraw, Vec<crate::formats::model::ModelVertex>)>,
     /// Points on springs, each with the mesh pieces that draw its object and their nodes.
@@ -1480,6 +1483,7 @@ impl App {
                     .map(|bin| crate::formats::doa3_morphs::parse_hand_events_big_endian(&bin))
                     .unwrap_or_default();
                 log::info!("DOA4 hands: {} sets, {} motions with hand events", hands.len(), hand_events.len());
+                let chest = doa4::chest_shapes(&body_sets).and_then(|set| Some((drawn_objects.first()?.get(&set.object)?.clone(), set, None)));
                 // The face is in the head's file, or in the body's when it has its own head.
                 let face = [(1, &head_sets), (0, &body_sets)].into_iter().find_map(|(file, sets)| {
                     let face = doa4::face(sets)?;
@@ -1497,7 +1501,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone() });
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone(), chest });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2421,7 +2425,13 @@ impl App {
                 let Some(&(_, place)) = chain.placed_objects(&[]).get(placed.index) else { continue };
                 put(placed.piece, (turn(chain.bone) * pose.pieces[placed.node].1).inverse() * place, &placed.rest);
             }
-            let hands: Vec<ExportHand> = pose.hands.iter().flat_map(|(hand, drawn)| drawn.iter().map(move |&(piece, _)| ExportHand { piece, hand })).collect();
+            // Hands, then the chest's shapes on each piece that draws them.
+            let mut hands: Vec<ExportHand> = pose.hands.iter().flat_map(|(hand, drawn)| drawn.iter().map(move |&(piece, _)| ExportHand { piece, hand })).collect();
+            let chest_pieces = pose.chest.as_ref().map_or(0, |(drawn, _, _)| drawn.len());
+            if let Some((drawn, shapes, _)) = &pose.chest {
+                hands.extend(drawn.iter().map(|&(piece, _)| ExportHand { piece, hand: shapes }));
+            }
+            let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions { (0..pose.motions.len()).collect() } else { pose.playing.or(self.anim_panel.selected_anim_idx).into_iter().collect() };
             let mut clips = Vec::new();
             for index in chosen {
@@ -2430,9 +2440,17 @@ impl App {
                 let events = main_file.then(|| pose.hand_events.get(&motion_id)).flatten();
                 let mut states: Vec<_> = pose.hands.iter().map(|(hand, _)| hand.at_rest()).collect();
                 let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
+                // The chest's spring starts at rest on the motion's first frame, as in the viewer.
+                let mut spring: Option<ChestSpring> = None;
                 for frame in 0..=*length {
                     let values = crate::formats::doa4::eval_motion(&pose.files[*file], tracks, frame as f32)?;
                     let solved = doa3::solve_pose(&values, &pose.skeleton);
+                    let chest_state = (chest_pieces > 0).then(|| {
+                        let spring = spring.get_or_insert_with(|| ChestSpring::with_parameters(&solved[0], ChestSpring::DOA3));
+                        spring.step(&solved[0]);
+                        let value = (spring.value * bounce).clamp(-1.0, 1.0);
+                        (0, if value >= 0.0 { 1 } else { 2 }, value.abs())
+                    });
                     frames.push(pose.pieces.iter().map(|&(node, place)| solved[node] * place).collect());
                     // As in the viewer: the last event at or before the frame, the scripts'
                     // hand 1 being the first hand set.
@@ -2441,7 +2459,9 @@ impl App {
                         let event = events.and_then(|list| list.iter().rev().find(|e| e.targets(script_hand) && e.frame <= frame as u16));
                         state.step(event.map_or(0, |e| e.pose as usize), event.map_or(1.0 / 26.0, HandEvent::rate));
                     }
-                    hand_frames.push(pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect());
+                    let mut frame_states: Vec<(usize, usize, f32)> = pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect();
+                    frame_states.extend(chest_state.into_iter().flat_map(|state| std::iter::repeat(state).take(chest_pieces)));
+                    hand_frames.push(frame_states);
                 }
                 let name = self.current_animations.get(index).map_or_else(|| format!("motion_{index}"), |a| a.name.clone());
                 clips.push(ExportClip { name, frames, hands: hand_frames });
@@ -2773,6 +2793,9 @@ impl App {
                     let steps = clock.saturating_sub(pose.chain_frame).clamp(u64::from(pose.chain_frame == 0), MAX_CHAIN_CATCH_UP);
                     for _ in 0..steps {
                         pose.wind.step(0.0);
+                        if let Some((_, _, spring)) = &mut pose.chest {
+                            spring.get_or_insert_with(|| ChestSpring::with_parameters(&solved[0], ChestSpring::DOA3)).step(&solved[0]);
+                        }
                         for (chain, _) in &mut pose.chains {
                             chain.step(&bones, glam::Vec3::ZERO);
                         }
@@ -2794,6 +2817,13 @@ impl App {
                         }
                     }
                     pose.chain_frame = clock.max(1);
+                    if let Some((drawn, shapes, Some(spring))) = &mut pose.chest {
+                        let value = (spring.value * self.bg_panel.bounce_scale).clamp(-1.0, 1.0);
+                        shapes.set_blend(0, if value >= 0.0 { 1 } else { 2 }, value.abs());
+                        for &(piece, _) in drawn.iter() {
+                            self.mesh.set_rest_positions(piece, shapes.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))));
+                        }
+                    }
                     for (chain, targets) in &pose.chains {
                         for (target, drawn) in chain.targets.iter().zip(targets) {
                             for &(piece, node) in drawn {
@@ -3204,6 +3234,7 @@ impl App {
         self.doax_pose.as_ref().is_some_and(|pose| !pose.chest_sets.is_empty())
             || self.doax2_pose.as_ref().is_some_and(|pose| !pose.chest.is_empty())
             || self.doa3_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
+            || self.doa4_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
     }
 
     pub fn reset_animation(&mut self) {

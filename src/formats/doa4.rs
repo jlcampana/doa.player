@@ -765,6 +765,20 @@ pub fn pose_hand(set: &doax2::HandPoses) -> Option<super::doa3_morphs::PoseHand>
     Some(super::doa3_morphs::PoseHand::new(set.object, set.groups.clone(), shapes, Vec::new(), Vec::new()))
 }
 
+/// The chest's shape set as three shapes: at rest, the set's one shape, and that shape mirrored
+/// through the rest. The sets of three entries are on the chest's piece of the women's costumes
+/// (ignored test `chest_sets`): entry 1 is the piece at rest exactly and entry 2 the same moved
+/// down, 1 to 2 cm at most. A value from -1 to 1 then blends to the second for positive values
+/// and to the third for negative ones, which is moving along the one shape both ways. What
+/// drives it in DOA4 is not read; the viewer steps DOA3's chest spring on the chest's bone, as a
+/// stand-in.
+pub fn chest_shapes(sets: &[doax2::HandPoses]) -> Option<super::doa3_morphs::PoseHand> {
+    let set = sets.iter().find(|set| set.poses.len() == 3)?;
+    let (base, down) = (set.poses.get(1)?.clone()?, set.poses.get(2)?.clone()?);
+    let up = base.iter().zip(&down).map(|(b, d)| [2.0 * b[0] - d[0], 2.0 * b[1] - d[1], 2.0 * b[2] - d[2]]).collect();
+    Some(super::doa3_morphs::PoseHand::new(set.object, set.groups.clone(), vec![base, down, up], Vec::new(), Vec::new()))
+}
+
 /// The face of a model, from its two smallest shape sets on one object, each of 4 to 10
 /// entries: the one with fewer is taken as the eyes and the other as the mouth, as in DOAX2,
 /// with entry 1 the face at rest and entry 2 the eyes shut or the mouth's first shape. It
@@ -948,6 +962,43 @@ mod tests {
                     let total: f32 = part.clone().map(|(_, w)| w[k]).sum();
                     let mass = part.map(|(v, w)| glam::Vec3::from(v.position) * w[k]).sum::<glam::Vec3>() / total.max(1e-6);
                     println!("      {side}: total {total:.1}, at ({:.3}, {:.3}, {:.3})", mass.x, mass.y, mass.z);
+                }
+            }
+        }
+    }
+
+    /// The chest's shape sets (3 entries): per costume, the object, its bone, how far entries 1
+    /// and 2 are from the object's own vertices, and the mean move of entry 2 from entry 1.
+    #[test]
+    #[ignore]
+    fn chest_sets() {
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().filter_map(|n| n.strip_suffix(".tpr").map(str::to_string)).collect();
+            for stem in names.iter().take(400) {
+                let (Ok(tpr), Ok(cat)) = (afs.read(&format!("{stem}.tpr")), afs.read(&format!("{stem}.cat"))) else { continue };
+                let Ok(loaded) = load(&tpr, &cat) else { continue };
+                let Ok(sets) = shape_sets(&cat, &loaded.objects) else { continue };
+                for set in sets.iter().filter(|s| s.poses.len() == 3) {
+                    let Some((piece, _, placed)) = loaded.pieces.iter().find(|(_, _, p)| p.object == set.object) else { println!("{stem}: set on object {} not drawn", set.object); continue };
+                    let own = |pose: &Vec<[f32; 3]>| -> (f32, usize) {
+                        let mut worst = 0.0f32;
+                        let mut count = 0;
+                        for (group, value) in set.groups.iter().zip(pose) {
+                            for &v in group {
+                                if let Some(vertex) = piece.vertices.get(v) {
+                                    worst = worst.max((glam::Vec3::from(vertex.position) - glam::Vec3::from(*value)).length());
+                                    count += 1;
+                                }
+                            }
+                        }
+                        (worst, count)
+                    };
+                    let (Some(Some(one)), Some(Some(two))) = (set.poses.get(1), set.poses.get(2)) else { continue };
+                    let moves: Vec<glam::Vec3> = one.iter().zip(two).map(|(a, b)| glam::Vec3::from(*b) - glam::Vec3::from(*a)).collect();
+                    let mean = moves.iter().copied().sum::<glam::Vec3>() / moves.len().max(1) as f32;
+                    let largest = moves.iter().map(|m| m.length()).fold(0.0f32, f32::max);
+                    println!("{stem}: object {} bone {} groups {}: entry 1 off by {:.4} ({} vertices), entry 2 off by {:.4}; entry 2 - 1 mean ({:.4}, {:.4}, {:.4}), largest {largest:.4}", set.object, placed.slot, set.groups.len(), own(one).0, own(one).1, own(two).0, mean.x, mean.y, mean.z);
                 }
             }
         }
