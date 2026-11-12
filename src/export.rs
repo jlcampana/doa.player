@@ -1,8 +1,9 @@
 //! Writes a costume as a binary glTF (`.glb`), which Blender imports directly: one object per
 //! piece, an armature, skin weights, embedded PNG textures and baked animations.
 //!
-//! What it does not hold: soft bodies stay on their bone, in the shape of the file, because
-//! they are simulated at run time. DOA3 hand poses and faces are not exported either.
+//! Soft bodies are simulated at run time: the app bakes them, with DOA3's hands and the faces,
+//! as one shape key per frame of a single exported motion (`bake_soft_frames`); with all
+//! motions they stay on their bone, in the shape of the file.
 //! Joint pieces bend by quaternion in the game and by weights here, so they differ slightly
 //! from the viewer away from the rest pose. Rigid pieces are exact.
 //! The chest spring is baked for every game: DOAX's shape sets, DOAX2's up and down shapes

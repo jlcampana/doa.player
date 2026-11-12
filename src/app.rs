@@ -565,11 +565,14 @@ pub struct Doa3Pose {
     pub motion: Option<Doa3Motion>,
     pub chest: Option<Doa3Chest>,
     pub chains: Doa3Chains,
+    /// The soft bodies as loaded, before any step: the export simulates a motion from them.
+    pub chains_at_load: Doa3Chains,
     /// The motions are in DOA3's `loadfile.afs`, not in DOA2U's archive.
     pub motions_in_doa3: bool,
 }
 
 /// Hair, ribbons and hanging cloth.
+#[derive(Clone)]
 pub struct Doa3Chains {
     pub chains: Vec<SoftChain>,
     pub cloth: Vec<SoftCloth>,
@@ -597,6 +600,7 @@ pub struct Doa3Chains {
 
 /// A copy of an object that a chain draws whole, as its own mesh piece on the chain's bone
 /// (`SoftChain::placed_objects`).
+#[derive(Clone)]
 pub struct PlacedPiece {
     pub chain: usize,
     /// Its place in the chain's `placed_objects`.
@@ -652,6 +656,7 @@ fn place_chain_objects<'a>(
     }
 }
 
+#[derive(Clone)]
 pub struct Doa3Chest {
     /// Input piece of the chest in the mesh renderer.
     pub piece: usize,
@@ -1948,7 +1953,7 @@ impl App {
             log::info!("Chest spring on object {object}, {} groups", groups.len());
             Some(Doa3Chest { piece, groups, spring: None, frame: 0 })
         });
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains, motions_in_doa3: false });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: false });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -2139,7 +2144,7 @@ impl App {
             copies: Vec::new(),
             placed,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains, motions_in_doa3: home.is_some() });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains_at_load: chains.clone(), chains, motions_in_doa3: home.is_some() });
         self.game_clock = 0.0;
         self.select_motion(0);
         Ok(format!("DOA2U: {display_name} {stem}, DOA3 format: {piece_count} pieces, {triangles} triangles, {} textures", textures.len()))
@@ -2377,7 +2382,7 @@ impl App {
             copies: Vec::new(),
             placed,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains, motions_in_doa3: true });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: true });
         self.game_clock = 0.0;
         let motion_index = config
             .motion
@@ -2571,6 +2576,20 @@ impl App {
             write_glb(&Export { model: &self.export_source, bind, parents, names, clips: &clips, hands: &hands }, &path)?;
             return Ok(path);
         }
+        // A single motion also carries the soft bodies, hands and face as the viewer moves them,
+        // one shape key per game frame on each piece they move.
+        let skip: Vec<usize> = self.doa3_pose.as_ref().map_or_else(Vec::new, |pose| {
+            let hands = pose.chains.pose_hands.iter().filter_map(|hand| Some(pose.chains.pieces.get(hand.object)?.as_ref()?.0));
+            hands.chain(pose.chest.as_ref().map(|chest| chest.piece)).collect()
+        });
+        let soft_frames = if all_motions { Vec::new() } else { self.bake_soft_frames(&skip) };
+        let soft_sets: Vec<crate::formats::doa3_morphs::PoseHand> = soft_frames
+            .iter()
+            .map(|(_, frames)| {
+                let count = frames.first().map_or(0, Vec::len);
+                crate::formats::doa3_morphs::PoseHand::new(0, (0..count).map(|v| vec![v]).collect(), frames.clone(), Vec::new(), Vec::new())
+            })
+            .collect();
         let pose = self.doa3_pose.as_ref().context("no costume loaded")?;
         let archive = self.motion_archive().context("no motion archive")?;
         let solve = |values: &[f32; doa3::TRACK_COUNT]| match pose.doa2u_style {
@@ -2595,6 +2614,7 @@ impl App {
                 Some(ExportHand { piece, hand })
             })
             .chain(pose.chest.as_ref().zip(chest_set.as_ref()).map(|(chest, set)| ExportHand { piece: chest.piece, hand: set }))
+            .chain(soft_frames.iter().zip(&soft_sets).map(|((piece, _), hand)| ExportHand { piece: *piece, hand }))
             .collect();
         let chest_parameters = if pose.doa2u_style.is_some() { doa2u::CHEST_SPRING } else { ChestSpring::DOA3 };
         let bounce = self.bg_panel.bounce_scale;
@@ -2630,6 +2650,10 @@ impl App {
                     let value = (spring.value * bounce).clamp(-1.0, 1.0);
                     frame_states.push((0, if value >= 0.0 { 1 } else { 2 }, value.abs()));
                 }
+                for set in &soft_sets {
+                    let shape = (frame as usize).min(set.shapes.len().saturating_sub(1));
+                    frame_states.push((shape, shape, 1.0));
+                }
                 hand_frames.push(frame_states);
             }
             clips.push(ExportClip { name: entry.name.clone(), frames, hands: hand_frames });
@@ -2639,6 +2663,49 @@ impl App {
         let (parents, names) = crate::export::standard_skeleton();
         write_glb(&Export { model: &self.export_source, bind: bind.to_vec(), parents, names, clips: &clips, hands: &hands }, &path)?;
         Ok(path)
+    }
+
+    /// Runs the loaded DOA3 or DOA2U costume's soft bodies, hands and face through the motion
+    /// being played, from the state they load in, a game frame at a time, as the viewer does.
+    /// Gives each piece they move, but those in `skip`, with its rest positions per frame.
+    /// The viewer's own state is put back afterwards.
+    fn bake_soft_frames(&mut self, skip: &[usize]) -> Vec<(usize, Vec<Vec<[f32; 3]>>)> {
+        let Some(pose) = self.doa3_pose.as_mut() else { return Vec::new() };
+        let Some(length) = pose.motion.as_ref().map(|m| m.length as u32) else { return Vec::new() };
+        let saved = std::mem::replace(&mut pose.chains, pose.chains_at_load.clone());
+        let saved_chest = pose.chest.clone();
+        if let Some(chest) = &mut pose.chest {
+            chest.spring = None;
+            chest.frame = 0;
+        }
+        let (time, clock) = (self.anim_time, self.game_clock);
+        let counts: Vec<usize> = self.export_source.pieces.iter().map(|p| p.vertices.len()).collect();
+        let mut frames: Vec<Vec<Vec<[f32; 3]>>> = Vec::new();
+        for frame in 0..=length {
+            // The soft bodies step once whenever the clock passes their last frame.
+            self.anim_time = frame as f32;
+            self.game_clock = (frame + 1) as f32;
+            self.update_doa3_pose();
+            frames.push(counts.iter().enumerate().map(|(piece, &n)| (0..n).map(|v| self.mesh.rest_position(piece, v).map_or([0.0; 3], |p| p.to_array())).collect()).collect());
+        }
+        if let Some(pose) = self.doa3_pose.as_mut() {
+            pose.chains = saved;
+            pose.chest = saved_chest;
+        }
+        (self.anim_time, self.game_clock) = (time, clock);
+        self.update_doa3_pose();
+        let mut out = Vec::new();
+        for (piece, source) in self.export_source.pieces.iter().enumerate() {
+            if skip.contains(&piece) {
+                continue;
+            }
+            let moves = frames.iter().any(|frame| frame[piece].iter().zip(&source.vertices).any(|(a, v)| (glam::Vec3::from(*a) - glam::Vec3::from(v.position)).length() > 1e-5));
+            if moves {
+                out.push((piece, frames.iter().map(|frame| frame[piece].clone()).collect()));
+            }
+        }
+        log::info!("Export: {} pieces moved by soft bodies, hands or face over {} frames", out.len(), frames.len());
+        out
     }
 
     /// Queues every costume of a character for `step_character_export`.

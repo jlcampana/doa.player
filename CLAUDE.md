@@ -80,7 +80,7 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 
 DOAX exports its 32 bones from the rest pose, arms out, with hands as shape keys and blended pieces by their weights. Checked in `blender -b` on two costumes, and one frame of `tina 0077` by eye against the viewer. Bulk export over DOAX was measured for 97 s only: 227 costumes, memory flat.
 
-Soft body animations are not exported for DOA3 or DOA2U yet. Soft-body-driven pieces currently remain attached to their bones and retain their undeformed shape from the files. Exporting their animated deformations is still pending.
+Soft bodies of DOA3 and DOA2U are exported since 2026-11-12 when one motion is exported (the Costume button, or `--export` without `--all-motions`): the viewer runs the motion from the state the costume loads in, a game frame at a time, and every piece whose rest positions change (chains, cloth, tubes, springs, vertex copies, and also DOA3's hands and both games' faces) gets one shape key per frame, weighted 1 on its frame (`bake_soft_frames` in `app.rs`). Checked in `blender -b` on `hel00` (3 pieces) and DOA3 Kasumi 0 (15 pieces, rendered at two frames): nothing flies off. Normals stay the file's. With all motions they stay rigid, as before: a key per frame of hundreds of motions would be too large. DOA4 soft bodies are not exported.
 
 Objects that chains draw whole are exported where they hang (placed at load in DOA3 and DOA2U, at export in DOA4).
 
