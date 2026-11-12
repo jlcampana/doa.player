@@ -228,7 +228,10 @@ Kasumi's skirt flaps show it: DOA3's CAT entry 297 and DOA4's `kas00` hold the s
 flags 0x14 there and 0x194 here, DOA2U's wider flags. Byte +3 is 1 in some records (0 in DOA3),
 not understood. `doa3_cloth::parse_cloth_records_doa4` lays each record out again in DOA2U's
 form and gives it to that parser: 167 of 177 sheets read, every vertex inside its object
-(`doa4::cloth`, same test). They run through DOA3's cloth step in the viewer: Kasumi's flaps
+(`doa4::cloth`, same test). The 10 it leaves out (Tengu's `tng00` and `tng02`, La Mariposa's
+`lisCA` and `lisFA`) name their object with 0x1000 (`10 02`, `10 36`) and repeat, field for
+field, a sheet before them that names an object without it (ignored test `refused_cloth`): the
+lower levels of detail, as kinds 0, 3 and 250 have, which the viewer does not draw. They run through DOA3's cloth step in the viewer: Kasumi's flaps
 and Gen Fu's robe hang and follow the legs without tearing (by eye, 2026-11-11). Not compared
 with the game. Not done: sheets rooted on vertices that another body writes (none in the
 costumes tried), and whether DOA2U's limb slots for colliders apply here.
@@ -248,7 +251,9 @@ bodies' bone frames each frame (2026-11-12, by eye on `gen02` and `bas00`). Left
 modes other than DOA3's 1 and 2 (Tina's `tin00` 5, Tengu's `tng00` 0, Brad Wong's `bra01` 4) and
 Tengu's kind 3 of mode 0. Whether DOA4 knocks them off as DOA3 does (`sub_0003DCB0`) is not read.
 
-Kinds 7, 9, 14, 15, 251 and 254 are not read yet. DOA3's and DOA2U's readers are the place to
+Kind 254 follows the record it varies, as DOA2U's 0xFE does (see "Soft bodies" in
+`docs/doa2u-notes.md`: another version of the record before it, chosen by the game in play);
+the viewer skips them, showing the first version. Kinds 7, 9, 14, 15 and 251 are not read yet. DOA3's and DOA2U's readers are the place to
 start, by the same swap; nothing says their records match as kind 1's do.
 
 ## Shapes: hands, chest, faces

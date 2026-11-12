@@ -953,6 +953,25 @@ mod tests {
         }
     }
 
+    /// The headers of the cloth records (kind 2) the reader refuses.
+    #[test]
+    #[ignore]
+    fn refused_cloth() {
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            for stem in ["tng00", "tng02", "lisCA", "lisFA"] {
+                let (Ok(tpr), Ok(cat)) = (afs.read(&format!("{stem}.tpr")), afs.read(&format!("{stem}.cat"))) else { continue };
+                let objects = doax2::objects(&doax2::Xpr2::parse(&tpr).unwrap()).unwrap();
+                let Some((base, list)) = soft_records(&cat) else { continue };
+                for &(_, offset) in list.iter().filter(|r| r.0 == 2) {
+                    let read = super::super::doa3_cloth::parse_cloth_records_doa4(&cat, base, &[offset]).len();
+                    let head: String = cat[base + offset..base + offset + 0x70].iter().map(|b| format!("{b:02x}")).collect();
+                    println!("{stem} {} read {read} objects {}: {head}", offset, objects.len());
+                }
+            }
+        }
+    }
+
     /// The chest's joint piece over many costumes: per weight, its weighted centre in the
     /// model's space, the sum of the weights, and where the nearby bones sit at rest.
     #[test]
