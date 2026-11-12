@@ -478,6 +478,8 @@ struct Doa4Pose {
     chains: Vec<(SoftChain, Vec<Vec<(usize, usize)>>)>,
     /// Objects that chains draw whole, by their place in `chains`.
     placed: Vec<PlacedPiece>,
+    /// The mesh nodes as first shown, before a motion: the export's bind pose.
+    rest_nodes: Vec<glam::Mat4>,
     /// Objects worn on bones (kinds 0 and 3): piece, node, the draw, the object's vertices.
     worn: Vec<(usize, usize, crate::formats::doa4::WornDraw, Vec<crate::formats::model::ModelVertex>)>,
     /// Points on springs, each with the mesh pieces that draw its object and their nodes.
@@ -1495,7 +1497,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces });
+                pose = Some(Doa4Pose { files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone() });
             }
             Err(e) => log::warn!("DOA4: no skeleton, so no motions: {e:#}"),
         }
@@ -2398,6 +2400,59 @@ impl App {
         use anyhow::Context;
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
+        if let Some(pose) = &self.doa4_pose {
+            // A node per mesh node, each the solved bone it follows times its place, as in the
+            // viewer. Hands are shape keys stepped by the move scripts. Objects that chains or
+            // bones carry are put where they sit at rest; soft bodies are not baked.
+            let turn = |bone: usize| glam::Mat4::from_mat3(crate::formats::doa4::rest_frame(bone));
+            let mut model = self.export_source.clone();
+            let mut put = |piece: usize, place: glam::Mat4, rest: &[crate::formats::model::ModelVertex]| {
+                let Some(out) = model.pieces.get_mut(piece) else { return };
+                for (vertex, source) in out.vertices.iter_mut().zip(rest) {
+                    vertex.position = place.transform_point3(source.position.into()).into();
+                    vertex.normal = place.transform_vector3(source.normal.into()).normalize_or_zero().into();
+                }
+            };
+            for (piece, node, draw, rest) in &pose.worn {
+                put(*piece, (turn(draw.bone as usize) * pose.pieces[*node].1).inverse() * draw.place, rest);
+            }
+            for placed in &pose.placed {
+                let Some((chain, _)) = pose.chains.get(placed.chain) else { continue };
+                let Some(&(_, place)) = chain.placed_objects(&[]).get(placed.index) else { continue };
+                put(placed.piece, (turn(chain.bone) * pose.pieces[placed.node].1).inverse() * place, &placed.rest);
+            }
+            let hands: Vec<ExportHand> = pose.hands.iter().flat_map(|(hand, drawn)| drawn.iter().map(move |&(piece, _)| ExportHand { piece, hand })).collect();
+            let chosen: Vec<usize> = if all_motions { (0..pose.motions.len()).collect() } else { pose.playing.or(self.anim_panel.selected_anim_idx).into_iter().collect() };
+            let mut clips = Vec::new();
+            for index in chosen {
+                let Some((file, tracks, length)) = pose.motions.get(index) else { continue };
+                let (motion_id, main_file) = pose.motion_ids[index];
+                let events = main_file.then(|| pose.hand_events.get(&motion_id)).flatten();
+                let mut states: Vec<_> = pose.hands.iter().map(|(hand, _)| hand.at_rest()).collect();
+                let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
+                for frame in 0..=*length {
+                    let values = crate::formats::doa4::eval_motion(&pose.files[*file], tracks, frame as f32)?;
+                    let solved = doa3::solve_pose(&values, &pose.skeleton);
+                    frames.push(pose.pieces.iter().map(|&(node, place)| solved[node] * place).collect());
+                    // As in the viewer: the last event at or before the frame, the scripts'
+                    // hand 1 being the first hand set.
+                    for (hand_index, state) in states.iter_mut().enumerate() {
+                        let script_hand = hand_index ^ 1;
+                        let event = events.and_then(|list| list.iter().rev().find(|e| e.targets(script_hand) && e.frame <= frame as u16));
+                        state.step(event.map_or(0, |e| e.pose as usize), event.map_or(1.0 / 26.0, HandEvent::rate));
+                    }
+                    hand_frames.push(pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect());
+                }
+                let name = self.current_animations.get(index).map_or_else(|| format!("motion_{index}"), |a| a.name.clone());
+                clips.push(ExportClip { name, frames, hands: hand_frames });
+            }
+            let (game, character, costume) = &self.loaded_name;
+            let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
+            let names = pose.pieces.iter().enumerate().map(|(i, (bone, _))| format!("node_{i}_bone_{bone}")).collect();
+            let parents = vec![None; pose.pieces.len()];
+            write_glb(&Export { model: &model, bind: pose.rest_nodes.clone(), parents, names, clips: &clips, hands: &hands }, &path)?;
+            return Ok(path);
+        }
         if let Some(pose) = &self.doax2_pose {
             // A node per piece and per weight group, each driven by its DOAX bone. The chest's
             // shapes are shape keys in three sets per piece (sideways, forward, vertical), each
