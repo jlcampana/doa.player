@@ -622,9 +622,9 @@ fn placed_copies(
     out
 }
 
-/// Whether a chain's placed objects follow its particles (modes 1 and 3).
+/// Whether a chain's placed objects follow its particles: modes 1 and 3, and DOA2U's mode 2.
 fn placement_moves(chain: &SoftChain) -> bool {
-    chain.placed().is_some_and(|placed| matches!(placed.mode, 1 | 3))
+    chain.placed().is_some_and(|placed| matches!(placed.mode, 1 | 3) || (placed.mode == 2 && placed.code == doa3_chains::PlacementCode::Doa2u))
 }
 
 /// Places again the objects of `placed`. `to_piece` takes the chain and the piece's node to
@@ -2015,6 +2015,10 @@ impl App {
         if !allowed {
             chains.retain(|chain| chain.bone == 1);
         }
+        // DOA2U's own code draws the chains that place whole objects (`sub_00050100`).
+        for chain in &mut chains {
+            chain.set_placement_code(doa3_chains::PlacementCode::Doa2u);
+        }
         let cloth = if allowed { doa3_cloth::parse_cloth(cat) } else { Vec::new() };
         let tubes = if allowed { doa3_tubes::parse_tubes(cat) } else { Vec::new() };
         let springs = if allowed { doa3_springs::parse_springs(cat) } else { Vec::new() };
@@ -2032,6 +2036,20 @@ impl App {
                 chain_pieces[target.object] = Some((inputs.len(), chain.bone));
                 inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
             }
+        }
+        // Objects that chains draw whole, a piece per copy on the chain's bone.
+        let copies = placed_copies(&chains, |object| pieces.get(object).map(|piece| piece.vertices.clone()));
+        let mut placed = Vec::new();
+        for (c, index, object, vertices) in &copies {
+            let Some((_, draws)) = draws_of(*object) else { continue };
+            let bone = chains[*c].bone;
+            if placement_moves(&chains[*c]) {
+                placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: pieces[*object].vertices.clone() });
+            }
+            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
+        }
+        if !copies.is_empty() {
+            log::info!("DOA2U {stem}: {} objects drawn whole by chains", copies.len());
         }
         for (prop, translucent) in props.iter().map(|prop| (prop, false)).chain(overlays.iter().map(|overlay| (&overlay.prop, overlay.translucent))) {
             if chain_pieces[prop.object].is_some() {
@@ -2087,7 +2105,7 @@ impl App {
             pose_hands: Vec::new(),
             normal_rebuilds: Vec::new(),
             copies: Vec::new(),
-            placed: Vec::new(),
+            placed,
         };
         self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains, motions_in_doa3: home.is_some() });
         self.game_clock = 0.0;

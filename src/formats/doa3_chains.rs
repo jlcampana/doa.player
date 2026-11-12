@@ -705,6 +705,19 @@ pub struct PlacedObjects {
     /// Mode 1: segments whose list starts with 0xFFFD, which changes the game's draw state
     /// (`sub_00154610`, `sub_00154F70` and others, flag `0x454434`). Not done here.
     pub resets: Vec<bool>,
+    /// Whose code places them. The two differ in mode 2 only.
+    pub code: PlacementCode,
+}
+
+/// The game whose drawing of whole objects a chain follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlacementCode {
+    /// `sub_0003AA20` in DOA3's executable, also taken for DOA4.
+    #[default]
+    Doa3,
+    /// `sub_00050100` in DOA2U's, called from its chain update `sub_000591A0`: the same as
+    /// DOA3's but for mode 2, which turns its objects.
+    Doa2u,
 }
 
 /// Reads the object list at `head`. Modes 0 and 4 read `count` words; mode 1 a list per
@@ -737,12 +750,19 @@ fn parse_placed(cat: &[u8], head: usize, count: usize, mode: u8) -> Option<Place
         segments.push(list);
         resets.push(reset);
     }
-    Some(PlacedObjects { mode, segments, resets })
+    Some(PlacedObjects { mode, segments, resets, code: PlacementCode::Doa3 })
 }
 
 impl SoftChain {
     pub fn placed(&self) -> Option<&PlacedObjects> {
         self.placed.as_ref()
+    }
+
+    /// Places this chain's objects as `code` does.
+    pub fn set_placement_code(&mut self, code: PlacementCode) {
+        if let Some(placed) = &mut self.placed {
+            placed.code = code;
+        }
     }
 
     /// `sub_0003AA20`: each object this chain draws, with its place in the space of the
@@ -751,7 +771,9 @@ impl SoftChain {
     /// - Modes 0 and 4: turned by the record's direction read as degrees, z then y then x,
     ///   and one segment length further down y per object. The particles are not used.
     /// - Mode 1: turned as `sub_0003F5F0` turns a segment, by its own particle's segment.
-    /// - Mode 2: not turned. The game works out a frame from the segment and does not use it.
+    /// - Mode 2: DOA3 does not turn them: it works out a frame from the segment and does not
+    ///   use it. DOA2U turns them about y by the segment's heading plus a half turn, then about
+    ///   x by its pitch plus a quarter turn.
     /// - Mode 3: turned about y by the segment's heading less a quarter turn, then about z
     ///   by its pitch plus a quarter turn.
     pub fn placed_objects(&self, nodes: &[Mat4]) -> Vec<(usize, Mat4)> {
@@ -780,7 +802,16 @@ impl SoftChain {
                     out.extend(objects.iter().map(|&object| (object, place)));
                 }
             }
-            2 => out.extend(placed.segments.iter().flatten().map(|&object| (object, root))),
+            2 if placed.code == PlacementCode::Doa3 => out.extend(placed.segments.iter().flatten().map(|&object| (object, root))),
+            2 => {
+                for (i, objects) in placed.segments.iter().enumerate() {
+                    let s = segment(i);
+                    let heading = to_game_angle(s.x.atan2(s.z)) + FULL_TURN_HALF;
+                    let pitch = to_game_angle(s.y.atan2((s.x * s.x + s.z * s.z).sqrt())) + QUARTER_TURN;
+                    let place = root * Mat4::from_rotation_y(to_radians(heading)) * Mat4::from_rotation_x(to_radians(pitch));
+                    out.extend(objects.iter().map(|&object| (object, place)));
+                }
+            }
             3 => {
                 for (i, objects) in placed.segments.iter().enumerate() {
                     let s = segment(i);
@@ -1021,7 +1052,7 @@ mod tests {
     #[test]
     fn mode_zero_stacks_objects_down_the_bone() {
         let mut chain = parse_chain(&chain_record(), 0, 0).unwrap();
-        chain.placed = Some(PlacedObjects { mode: 0, segments: vec![vec![7], vec![8]], resets: vec![false; 2] });
+        chain.placed = Some(PlacedObjects { mode: 0, segments: vec![vec![7], vec![8]], resets: vec![false; 2], code: PlacementCode::Doa3 });
         chain.direction = Vec3::ZERO;
         let places = chain.placed_objects(&[]);
         assert_eq!(places.iter().map(|p| p.0).collect::<Vec<_>>(), [7, 8]);
@@ -1044,6 +1075,36 @@ mod tests {
         cat[0x4C..0x50].copy_from_slice(&0x70u32.to_le_bytes());
         cat[0x70..0x74].copy_from_slice(&[7, 0, 8, 0]);
         cat
+    }
+
+    /// Lists the chains that draw whole objects in DOA2U's costumes, both those in DOA3's
+    /// format (`A0`) and DOA2U's own, whose parser leaves them out. DOA2U_DISC names the folder.
+    #[test]
+    #[ignore]
+    fn survey_doa2u_placing_chains() {
+        use crate::formats::doa2u::{decrypt_cat, soft_body_offsets};
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        for name in ["datahdd.afs", "datahdd2.afs", "datadvd.afs"] {
+            let Ok(archive) = crate::formats::AfsArchive::from_file(format!("{dir}/{name}")) else { continue };
+            for entry in archive.entries() {
+                let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+                let mut cat = archive.get_by_name(&entry.name).unwrap().to_vec();
+                if decrypt_cat(&mut cat).is_err() {
+                    continue;
+                }
+                let doa3_format = cat.get(..4) == Some(&[1, 0, 0, 0][..]);
+                let chains = if doa3_format {
+                    parse_chains(&cat)
+                } else {
+                    let Some((base, offsets)) = soft_body_offsets(&cat, 1).ok() else { continue };
+                    offsets.iter().filter_map(|&offset| parse_chain(&cat, base, base + offset)).collect()
+                };
+                for chain in chains.iter().filter(|c| c.placed.is_some()) {
+                    let placed = chain.placed.as_ref().unwrap();
+                    println!("{name} {stem} doa3 format {doa3_format}: bone {} mode {} objects {:?}", chain.bone, placed.mode, placed.segments);
+                }
+            }
+        }
     }
 
     /// Lists DOA3's chains whose target head is an object number: mode, count, angles and
