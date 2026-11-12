@@ -1484,6 +1484,53 @@ mod tests {
     /// Lists a costume's objects and where the CAT uses them. DOA2U_COSTUME is a file stem.
     #[test]
     #[ignore]
+    fn survey_unknown_slots() {
+        let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
+        let mut counts: std::collections::BTreeMap<(u8, u8), Vec<String>> = std::collections::BTreeMap::new();
+        for name in ["datahdd2.afs", "datadvd.afs"] {
+            let archive = crate::formats::AfsArchive::from_file(format!("{dir}/{name}")).unwrap();
+            for entry in archive.entries() {
+                let Some(stem) = entry.name.strip_suffix(".cat") else { continue };
+                let mut cat = archive.get_by_name(&entry.name).unwrap().to_vec();
+                if decrypt_cat(&mut cat).is_err() || cat.get(..4) == Some(&[1, 0, 0, 0][..]) {
+                    continue;
+                }
+                let Ok(base) = read_u32(&cat, 4).map(|b| b as usize) else { continue };
+                let mut record = base;
+                let list = loop {
+                    let (Ok(value), Ok(kind)) = (read_u32(&cat, record), read_u32(&cat, record + 4)) else { break None };
+                    match kind {
+                        0 => break None,
+                        1 => break Some(base + value as usize),
+                        _ => record += 8,
+                    }
+                };
+                if let Ok(table) = read_u32(&cat, 0x10) {
+                    let all = parse_sparse_joint_skins(&cat, table as usize).len();
+                    let kept = joint_skins(&cat).map_or(0, |s| s.len());
+                    if kept < all {
+                        counts.entry((0xFF, (all - kept) as u8)).or_default().push(stem.to_string());
+                    }
+                }
+                let Some(list) = list else { continue };
+                for e in cat[list..].chunks_exact(3).take_while(|e| e[0] == 1 || e[0] == 2) {
+                    let known = match e[0] {
+                        1 => rigid_node(e[1]).is_some(),
+                        _ => matches!(e[1], 6..=9),
+                    };
+                    if !known {
+                        counts.entry((e[0], e[1])).or_default().push(format!("{stem}:{}", e[2]));
+                    }
+                }
+            }
+        }
+        for ((kind, slot), uses) in counts {
+            println!("kind {kind} slot {slot}: {} uses, {:?}", uses.len(), &uses[..uses.len().min(12)]);
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn list_costume_objects() {
         let dir = std::env::var("DOA2U_DISC").expect("DOA2U_DISC");
         let stem = std::env::var("DOA2U_COSTUME").expect("DOA2U_COSTUME");

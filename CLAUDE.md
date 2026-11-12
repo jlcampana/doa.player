@@ -105,7 +105,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 ## Unverified in DOA2U
 - Only limbs, pelvis, chest, hands and motion tracks are compared with the running game. Joint pieces are compared on `kas00` only. Head, feet on slopes and drawing are not.
 - Character IDs in `app.rs` are inferred from tables. Measured in matches: Zack is ID 0 (`zack.mot`, `zac00`), Bayman 24 (`sambo.mot`, `bay00`), Leon 8 (`bayman.mot`, `leo00`), Hitomi 21 (`koryu.mot`, `kor00`). Tina is ID 1 and Lei Fang 12, without checking their files. The other IDs are inferred.
-- Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped.
+- Blend slots 18, 22, 134, 135 and objects with 2 or 3 extra floats are not handled. Blend table entries using matrices 16, 19, 20, 23, 30, 31 are unmapped. Over every costume (ignored test `survey_unknown_slots`, 2026-11-12) only `hks00` uses those slots (and kind 2 slots 0, 2, 3, 15), and only Tengu's `tng00` to `tng02` lose joint pieces, 3 each, on matrices 26, 27 and 30; where the game builds those was not found.
 - Plain `stage_XX.xpr` files do not parse with the costume parser.
 
 ## Backlog
