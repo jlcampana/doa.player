@@ -507,10 +507,15 @@ impl WornProp {
 
 pub fn parse_props(cat: &[u8], object_count: usize) -> Vec<WornProp> {
     let Some((base, sections)) = find_sections(cat) else { return Vec::new() };
-    sections
+    let offsets: Vec<usize> = sections.iter().filter(|(kind, _)| *kind == PROP_SECTION).map(|&(_, offset)| offset).collect();
+    parse_prop_records(cat, base, &offsets, object_count)
+}
+
+/// Reads worn objects at offsets from `base`, for lists read elsewhere (DOA4's).
+pub fn parse_prop_records(cat: &[u8], base: usize, offsets: &[usize], object_count: usize) -> Vec<WornProp> {
+    offsets
         .iter()
-        .filter(|(kind, _)| *kind == PROP_SECTION)
-        .filter_map(|&(_, offset)| {
+        .filter_map(|&offset| {
             let record = cat.get(base + offset..base + offset + PROP_RECORD_SIZE)?;
             let (mode, bone) = (record[0], record[1]);
             let object = read_u16(record, 0x32)? as usize;

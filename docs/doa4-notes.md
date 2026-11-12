@@ -231,9 +231,21 @@ costumes tried), and whether DOA2U's limb slots for colliders apply here.
 
 Kind 250 is DOA2U's vertex copy record (a condition, source and target objects, a list of source and target vertices), read by `doa4::vertex_copies`: all 174, every link inside its objects. None targets an object of the first, most detailed list: they carry the soft bodies' result to the lower levels of detail, which the viewer does not draw, so it does not apply them.
 
-Kinds 0, 3, 7, 9, 14, 15, 251 and 254 are not read yet. DOA3's and
-DOA2U's readers are the place to start, by the same swap; nothing says their records match as
-kind 1's do.
+Kinds 0 and 3 are DOA3's sections 0 (worn objects, 0x34 bytes: mode, bone, the object's
+offset at +0x1C, three angles at +0x2C, the object at +0x32) and 3 (overlays, 0x1A bytes: the
+object, mode 1 solid or 2 translucent, bone, offset at +4, angles at +0x14), with big-endian
+words (ignored test `survey_props_and_overlays`). None of their objects is in the draw lists, so
+they were missing: Gen Fu's straw hat (`gen02`), Bass's sunglasses (`bas00` to `bas02`), Helena's
+`hel01` pieces on the forearms, Kasumi's object 31 on the neck, Lei Fang's extra costumes'. Most
+come in pairs, the second naming the object with 0x1000 at the same place, likely a lower level
+of detail; DOA3's readers refuse those. `doa4::worn_draws` reads them, `doa4::load` adds them
+marked `WORN_DRAW_MARK - k`, and the viewer puts their vertices at the record's place in the soft
+bodies' bone frames each frame (2026-11-12, by eye on `gen02` and `bas00`). Left out: kind 0
+modes other than DOA3's 1 and 2 (Tina's `tin00` 5, Tengu's `tng00` 0, Brad Wong's `bra01` 4) and
+Tengu's kind 3 of mode 0. Whether DOA4 knocks them off as DOA3 does (`sub_0003DCB0`) is not read.
+
+Kinds 7, 9, 14, 15, 251 and 254 are not read yet. DOA3's and DOA2U's readers are the place to
+start, by the same swap; nothing says their records match as kind 1's do.
 
 ## Shapes: hands, chest, faces
 

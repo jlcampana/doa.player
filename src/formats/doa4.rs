@@ -224,6 +224,50 @@ pub fn is_loose(draw: &Draw) -> bool {
 /// Marks the pieces `load` adds for the objects that chains draw whole: the k-th of
 /// `chain_draws` has the mark `CHAIN_DRAW_MARK - k`.
 pub const CHAIN_DRAW_MARK: i32 = -1000;
+/// Likewise for `worn_draws`.
+pub const WORN_DRAW_MARK: i32 = -100_000;
+
+/// Which of `chain_draws` a piece's mark names.
+pub fn chain_draw_of(mark: Option<i32>) -> Option<usize> {
+    mark.filter(|&m| m <= CHAIN_DRAW_MARK && m > WORN_DRAW_MARK).map(|m| (CHAIN_DRAW_MARK - m) as usize)
+}
+
+/// Which of `worn_draws` a piece's mark names.
+pub fn worn_draw_of(mark: Option<i32>) -> Option<usize> {
+    mark.filter(|&m| m <= WORN_DRAW_MARK).map(|m| (WORN_DRAW_MARK - m) as usize)
+}
+
+/// An object worn on a bone: kind 0 of the soft body list (DOA3's section 0, a hat, a hair
+/// ornament) or kind 3 (DOA3's section 3, layers such as Helena's `hel01` sleeves pieces).
+/// The records are DOA3's with big-endian words, and none of their objects is in the draw
+/// lists (ignored test `survey_props_and_overlays`). `place` is the object's place in the
+/// bone's space, as `doa3_chains::WornProp::matrix` reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WornDraw {
+    pub bone: u32,
+    pub object: usize,
+    pub place: glam::Mat4,
+    pub translucent: bool,
+}
+
+/// Kinds 0 and 3, read by DOA3's readers. Records whose object carries 0x1000 are refused, as
+/// DOA3 refuses classes above the model; each comes after one without it and the same place,
+/// so they are likely the lower levels of detail. Kind 0 records of modes other than DOA3's 1
+/// and 2 (Tina's `tin00` 5, Tengu's 0, Brad Wong's `bra01` 4) are left out.
+pub fn worn_draws(cat: &[u8]) -> Vec<WornDraw> {
+    use super::doa3_chains::{parse_overlay_records, parse_prop_records, with_big_endian};
+    let Some((base, records)) = soft_records(cat) else { return Vec::new() };
+    let offsets = |kind: u8| records.iter().filter(|r| r.0 == kind).map(|r| r.1).collect::<Vec<_>>();
+    const ANY_OBJECT: usize = 0x1000;
+    let (props, overlays) = with_big_endian(|| (parse_prop_records(cat, base, &offsets(0), ANY_OBJECT), parse_overlay_records(cat, base, &offsets(3), ANY_OBJECT)));
+    props
+        .into_iter()
+        .map(|prop| (prop, false))
+        .chain(overlays.into_iter().map(|overlay| (overlay.prop, overlay.translucent)))
+        .filter(|(prop, _)| solve_node(prop.bone as u32) == Some(prop.bone))
+        .map(|(prop, translucent)| WornDraw { bone: prop.bone as u32, object: prop.object, place: prop.matrix(), translucent })
+        .collect()
+}
 
 /// An object a chain draws whole: the chain's place in `chains`, the object's place in its
 /// `placed_objects`, the chain's bone and the object.
@@ -269,6 +313,7 @@ pub fn load(tpr: &[u8], cat: &[u8]) -> Result<doax2::Loaded> {
         .filter(|d| !is_loose(d) && (d.group.is_none() || d.group == first_group) && (d.condition.is_none() || d.condition == first_condition))
         .map(|d| doax2::Placed { slot: d.bone as u32, object: d.object, mark: None })
         .chain(chain_draws(cat).into_iter().enumerate().map(|(k, draw)| doax2::Placed { slot: draw.bone, object: draw.object, mark: Some(CHAIN_DRAW_MARK - k as i32) }))
+        .chain(worn_draws(cat).into_iter().enumerate().map(|(k, draw)| doax2::Placed { slot: draw.bone, object: draw.object, mark: Some(WORN_DRAW_MARK - k as i32) }))
         .collect::<Vec<_>>();
     let mut loaded = doax2::load_list(tpr, placed)?;
     join_mask_textures(&mut loaded);
@@ -887,6 +932,37 @@ mod tests {
                     let total: f32 = part.clone().map(|(_, w)| w[k]).sum();
                     let mass = part.map(|(v, w)| glam::Vec3::from(v.position) * w[k]).sum::<glam::Vec3>() / total.max(1e-6);
                     println!("      {side}: total {total:.1}, at ({:.3}, {:.3}, {:.3})", mass.x, mass.y, mass.z);
+                }
+            }
+        }
+    }
+
+    /// Kinds 0 and 3 of the soft body list, raw and as DOA3's worn objects and overlays read
+    /// them, with whether their object is in the draw list.
+    #[test]
+    #[ignore]
+    fn survey_props_and_overlays() {
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().map(str::to_string).collect();
+            for (index, name) in names.iter().enumerate() {
+                let Some(stem) = name.strip_suffix(".tpr") else { continue };
+                let cat = afs.read_index(index + 1).unwrap();
+                let objects = doax2::objects(&doax2::Xpr2::parse(&afs.read_index(index).unwrap()).unwrap()).unwrap().len();
+                let Some((base, list)) = soft_records(&cat) else { continue };
+                let draws = draw_lists(&cat).ok().and_then(|l| l.into_iter().next()).unwrap_or_default();
+                for &(kind, offset) in list.iter().filter(|r| r.0 == 0 || r.0 == 3) {
+                    let size = if kind == 0 { 0x34 } else { 0x1A };
+                    let raw: String = cat[base + offset..(base + offset + size).min(cat.len())].iter().map(|b| format!("{b:02x}")).collect();
+                    let read = super::super::doa3_chains::with_big_endian(|| {
+                        if kind == 0 {
+                            super::super::doa3_chains::parse_prop_records(&cat, base, &[offset], objects).first().map(|p| (p.bone, p.object, p.offset, false))
+                        } else {
+                            super::super::doa3_chains::parse_overlay_records(&cat, base, &[offset], objects).first().map(|o| (o.prop.bone, o.prop.object, o.prop.offset, o.translucent))
+                        }
+                    });
+                    let drawn = read.map(|r| draws.iter().filter(|d| d.object == r.1).map(|d| format!("{:02x}/{}", d.op, d.bone)).collect::<Vec<_>>());
+                    println!("{stem} kind {kind} objects {objects}: {read:?} drawn {drawn:?}\n    {raw}");
                 }
             }
         }
