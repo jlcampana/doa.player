@@ -953,6 +953,44 @@ mod tests {
         }
     }
 
+    /// Pieces on bones the solve does not have: where their node sits at rest, the nodes
+    /// above it with their bones, and the piece's size.
+    #[test]
+    #[ignore]
+    fn odd_bones() {
+        let mut seen = std::collections::BTreeMap::new();
+        for archive in COSTUME_ARCHIVES {
+            let afs = LazyArchive::open(game_dir().join(archive)).unwrap();
+            let names: Vec<String> = afs.names().filter_map(|n| n.strip_suffix(".tpr").map(str::to_string)).collect();
+            for stem in names {
+                let (Ok(tpr), Ok(cat)) = (afs.read(&format!("{stem}.tpr")), afs.read(&format!("{stem}.cat"))) else { continue };
+                let Ok(loaded) = load(&tpr, &cat) else { continue };
+                let lists = draw_lists(&cat).unwrap_or_default();
+                for (piece, node, placed) in &loaded.pieces {
+                    if solve_node(placed.slot).is_some() || placed.mark.is_some() {
+                        continue;
+                    }
+                    let op = lists.first().and_then(|l| l.iter().find(|d| d.object == placed.object)).map_or(0, |d| d.op);
+                    let mut above = Vec::new();
+                    let mut up = loaded.nodes[*node].parent;
+                    while let Some(n) = up {
+                        let bone = loaded.pieces.iter().find(|(_, pn, _)| *pn == n).map(|(_, _, p)| p.slot);
+                        above.push(format!("{n}{}", bone.map_or(String::new(), |b| format!("(b{b})"))));
+                        up = loaded.nodes[n].parent;
+                    }
+                    let (lo, hi) = piece.vertices.iter().fold((glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN)), |(a, b), v| (a.min(v.position.into()), b.max(v.position.into())));
+                    let at = loaded.rest[*node].w_axis.truncate();
+                    let count = seen.entry(placed.slot).or_insert(0);
+                    *count += 1;
+                    if *count <= 6 {
+                        println!("{stem} bone {} op {op:x} object {} {} vertices, node {node} at ({:.3}, {:.3}, {:.3}), size ({:.3}, {:.3}, {:.3}), above {}", placed.slot, placed.object, piece.vertices.len(), at.x, at.y, at.z, (hi - lo).x, (hi - lo).y, (hi - lo).z, above.join(" "));
+                    }
+                }
+            }
+        }
+        println!("{seen:?}");
+    }
+
     /// The headers of the cloth records (kind 2) the reader refuses.
     #[test]
     #[ignore]

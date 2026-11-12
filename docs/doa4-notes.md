@@ -167,6 +167,19 @@ lumps (by eye). Beyond those two weights (`doa4::weight_nodes`):
   (`doa4::joint_weights`): a guess for those two. Waists bend without tearing by eye (Zack,
   Tina, Kasumi).
 
+Pieces on bones the solve does not have, over all costumes (ignored test `odd_bones`):
+
+- 24 and 25 (47 each): rigid `90` draws at the wrists, (±0.45, 0.46, -0.03) at rest, under the
+  forearm's node: wristbands and cuffs (Ein, Jann Lee, Ryu, Zack's `zac02`). They follow the
+  forearm; whether they should take the forearm's twist, as bones 32 and 33 do, is not known.
+- 32 and 33 (53, 54): the forearm joint pieces above.
+- 20 (13) and 16 (11): a root of their own at the origin with no parent, and a node under it.
+  Jann Lee's are his nunchaku's two sticks (0.384 long, the second 0.583 above the first); Zack's
+  are a flat object of 0.30 by 0.50, 0.05 thick, on 20 and an 11-vertex square a metre behind on
+  16. The 44 tracks of a motion are all the solve's (root, chest, head, 4 limbs of 8), so nothing
+  in the motion moves them; something else places them, probably the move scripts. The viewer
+  hangs them on the pelvis.
+
 Missing: soft body kinds other than chains, cloth and springs (see "Soft bodies"); the chest's shapes are not used; pieces on bones the solve
 does not have (16, 20, 24, 25, 32, 33) follow the nearest node above them; the tag motions and
 `comon.mot` are not listed; `rtm` has no motion file of its own.
