@@ -797,6 +797,25 @@ pub fn face(sets: &[doax2::HandPoses]) -> Option<super::doa3_morphs::FaceMorph> 
     Some(super::doa3_morphs::FaceMorph::from_shapes(eyes.object, Some(shapes(eyes)?), shapes(mouth)?))
 }
 
+/// The face's two sets as `face` picks them, eyes then mouth, each with its entries from 1
+/// (1 is the face at rest), for the export's shape keys.
+pub fn face_shapes(sets: &[doax2::HandPoses]) -> Vec<super::doa3_morphs::PoseHand> {
+    let mut faces: Vec<&doax2::HandPoses> = sets.iter().filter(|s| (4..=10).contains(&s.poses.len())).collect();
+    faces.sort_by_key(|s| s.poses.len());
+    let (Some(eyes), Some(mouth)) = (faces.first(), faces.get(1)) else { return Vec::new() };
+    if eyes.object != mouth.object {
+        return Vec::new();
+    }
+    [eyes, mouth]
+        .into_iter()
+        .map(|set| {
+            let shapes: Vec<Vec<[f32; 3]>> = set.poses.iter().skip(1).flatten().cloned().collect();
+            super::doa3_morphs::PoseHand::new(set.object, set.groups.clone(), shapes, Vec::new(), Vec::new())
+        })
+        .filter(|set| set.shapes.len() >= 2)
+        .collect()
+}
+
 /// The springs of a model (kind 5): points on a bone, each on a spring to its place. DOA3's
 /// record with big-endian words, 0x34 bytes.
 pub fn springs(cat: &[u8], objects: &[doax2::Object]) -> Vec<super::doa3_springs::SoftSprings> {

@@ -550,6 +550,8 @@ struct Doa4Pose {
     hand_events: HashMap<u16, Vec<HandEvent>>,
     /// The face's eyes and mouth, with the mesh pieces that draw it.
     face: Option<(FaceMorph, Vec<(usize, usize)>)>,
+    /// The face's eyes and mouth as shape sets (`doa4::face_shapes`), for the export.
+    face_shapes: Vec<crate::formats::doa3_morphs::PoseHand>,
     /// Each entry of the animation list: its motion number, and whether it is from the
     /// character's main file, whose numbers the scripts use.
     motion_ids: Vec<(u16, bool)>,
@@ -1559,11 +1561,15 @@ impl App {
                 log::info!("DOA4 hands: {} sets, {} motions with hand events", hands.len(), hand_events.len());
                 let chest = doa4::chest_shapes(&body_sets).and_then(|set| Some((drawn_objects.first()?.get(&set.object)?.clone(), set, None)));
                 // The face is in the head's file, or in the body's when it has its own head.
-                let face = [(1, &head_sets), (0, &body_sets)].into_iter().find_map(|(file, sets)| {
+                let face_and_shapes = [(1, &head_sets), (0, &body_sets)].into_iter().find_map(|(file, sets)| {
                     let face = doa4::face(sets)?;
                     let drawn = drawn_objects.get(file)?.get(&face.object)?.clone();
-                    Some((face, drawn))
+                    Some(((face, drawn), doa4::face_shapes(sets)))
                 });
+                let (face, face_shapes) = match face_and_shapes {
+                    Some((face, shapes)) => (Some(face), shapes),
+                    None => (None, Vec::new()),
+                };
                 log::info!("DOA4 face: {}", if face.is_some() { "blinks" } else { "none" });
                 let mut cloth = Vec::new();
                 for (file, list) in [body_cloth, head_cloth].into_iter().enumerate() {
@@ -1575,7 +1581,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { soft_at_load: Doa4Soft { chains: Vec::new(), springs: Vec::new(), cloth: Vec::new(), hands: Vec::new(), wind: Wind::new(), chain_frame: 0, chest_spring: None }, files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone(), chest });
+                pose = Some(Doa4Pose { soft_at_load: Doa4Soft { chains: Vec::new(), springs: Vec::new(), cloth: Vec::new(), hands: Vec::new(), wind: Wind::new(), chain_frame: 0, chest_spring: None }, files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, face_shapes, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone(), chest });
                 if let Some(pose) = &mut pose {
                     pose.soft_at_load = pose.soft();
                 }
@@ -2493,7 +2499,8 @@ impl App {
             let skip: Vec<usize> = self.doa4_pose.as_ref().map_or_else(Vec::new, |pose| {
                 let hands = pose.hands.iter().flat_map(|(_, drawn)| drawn.iter().map(|d| d.0));
                 let chest = pose.chest.iter().flat_map(|(drawn, _, _)| drawn.iter().map(|d| d.0));
-                hands.chain(chest).chain(pose.worn.iter().map(|w| w.0)).chain(pose.placed.iter().map(|p| p.piece)).collect()
+                let face = pose.face.iter().flat_map(|(_, drawn)| drawn.iter().map(|d| d.0));
+                hands.chain(chest).chain(face).chain(pose.worn.iter().map(|w| w.0)).chain(pose.placed.iter().map(|p| p.piece)).collect()
             });
             let soft_frames = if all_motions || !bake { Vec::new() } else { self.bake_soft_frames(&skip) };
             let soft_sets: Vec<crate::formats::doa3_morphs::PoseHand> = soft_frames
@@ -2530,6 +2537,13 @@ impl App {
             if let Some((drawn, shapes, _)) = &pose.chest {
                 hands.extend(drawn.iter().map(|&(piece, _)| ExportHand { piece, hand: shapes }));
             }
+            // The face's eyes and mouth as shape keys at rest, for animating by hand: what
+            // drives them in DOA4 is not read.
+            let face_drawn: Vec<usize> = pose.face.iter().flat_map(|(_, drawn)| drawn.iter().map(|d| d.0)).collect();
+            let face_keys = face_drawn.len() * pose.face_shapes.len();
+            for &piece in &face_drawn {
+                hands.extend(pose.face_shapes.iter().map(|hand| ExportHand { piece, hand }));
+            }
             hands.extend(soft_frames.iter().zip(&soft_sets).map(|((piece, _), hand)| ExportHand { piece: *piece, hand }));
             let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions { (0..pose.motions.len()).collect() } else { pose.playing.or(self.anim_panel.selected_anim_idx).into_iter().collect() };
@@ -2561,6 +2575,7 @@ impl App {
                     }
                     let mut frame_states: Vec<(usize, usize, f32)> = pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect();
                     frame_states.extend(chest_state.into_iter().flat_map(|state| std::iter::repeat(state).take(chest_pieces)));
+                    frame_states.extend(std::iter::repeat((0, 0, 1.0)).take(face_keys));
                     for set in &soft_sets {
                         let shape = (frame as usize).min(set.shapes.len().saturating_sub(1));
                         frame_states.push((shape, shape, 1.0));

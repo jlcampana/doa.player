@@ -67,11 +67,11 @@ Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same
 Each is small and needs no game running. In rough order of value for effort:
 
 1. ~~Point lights in the viewer.~~ Done 2026-11-12: `SceneLights::points` and `fighter`, snowy night uses them (`snowy_night_lights`). Not compared with the game by eye. The storm's flash could use the same list once its light type is read.
-2. **DOA4 export of the face.** The DOA4 export bakes soft bodies per frame (`bake_soft_frames`) but skips the face only when it does not move; blinks come every 300 frames. Either drive one blink into short motions or export the face's shape set as two shape keys like the chest (`doa4::chest_shapes` shows the pattern).
+2. ~~DOA4 export of the face.~~ Done 2026-11-12: eyes and mouth exported as shape keys at rest (`doa4::face_shapes`), not driven; checked in `blender -b` on `kas00` (2 pieces, 12 keys, up to 2.4 cm).
 3. **DOA2U kind 0xFE variants in the panel.** The variants of a record are read and skipped (`soft_body_offsets` skips 0xFE); a selector per costume (like the Hair row) would show variants 1 to 3, e.g. `hel08`'s object 31 solid on bone 11 and `kas00`'s sword in the hand (objects 15 and 43). Notes: "Other kinds", kind 3 variants.
 4. **DOA3 Kasumi's knife in the hand.** Same mechanism in DOA3: objects 7 and 40 with chains in sections `0xFE` on bone 11 (`docs/doa3-internals.md`, "Extra objects"). A variant switch like 3 would show it.
 5. **Stage light check by table.** `tools/re/doa2u_stage_lights.py` and `area_lights_match_the_measured_ones` cover 8 areas; reading the light records of the other areas against the executable's per-area code (who calls `sub_00118570`: `sub_001188A0`, `sub_00118A00`, `sub_00118EF0`, `sub_001E1BA0`) would tell which areas change their table in code, item 1 of "Next steps".
-6. **Export check of DOA2U springs.** Springs now run in DOA2U; the soft body bake picks them up automatically, but no export with springs was opened in Blender (`kas02`, one motion, `blender -b` like the others).
+6. ~~Export check of DOA2U springs.~~ Done 2026-11-12: `kas02`, one motion, opened in `blender -b`: 11 pieces with keys, the largest move 41 cm (hair and ribbons over the motion), nothing flies off. Not compared with the viewer frame by frame.
 
 Bigger, also code-only: DOA3's tube ring mode 1 (`sub_00044620` and four helpers, about 1000 lines of generated C; it also resamples the ring and changes its column count; a capture to check it is in `target/captures/doa3_hitomi_tubes.bin`, see `docs/doa3-internals.md`, "Tubes"); DOA2U kind 14 (needs the 32 body points per fighter at `0x8793F0`, probably from the collision capsules); DOA4 from its image (`tools/re/doa4_xex.py`): the chest's real spring, the face's driver, which hairstyle each costume wears, the props on bones 20 and 16.
 
@@ -103,7 +103,7 @@ Soft bodies of DOA3 and DOA2U are exported since 2026-11-12 when one motion is e
 
 Objects that chains draw whole are exported where they hang (placed at load in DOA3 and DOA2U, at export in DOA4).
 
-DOA4 exports since 2026-11-12: a node per mesh node, as DOAX2, each the solved bone it follows times its place, motions baked at 60 frames per second, hands as shape keys driven by the scripts, and worn and chain-drawn objects where they sit at rest. Checked in `blender -b` on `zac00` (35 meshes, one motion, every piece near the body but object 63, an 11-vertex draw on bone 16, which the solve does not have and which the viewer puts there too). The chest's shape is a set of shape keys driven by the stand-in spring; soft bodies are baked for a single motion, as for DOA3; the face is not exported.
+DOA4 exports since 2026-11-12: a node per mesh node, as DOAX2, each the solved bone it follows times its place, motions baked at 60 frames per second, hands as shape keys driven by the scripts, and worn and chain-drawn objects where they sit at rest. Checked in `blender -b` on `zac00` (35 meshes, one motion, every piece near the body but object 63, an 11-vertex draw on bone 16, which the solve does not have and which the viewer puts there too). The chest's shape is a set of shape keys driven by the stand-in spring; soft bodies are baked for a single motion, as for DOA3; the face's eyes and mouth are shape keys left at rest (2026-11-12).
 
 DOA3 and `A0` hand poses and facial animations are also not exported. DOA2U hands are exported as shape keys, driven by the move scripts.
 
