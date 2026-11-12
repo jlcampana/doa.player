@@ -596,10 +596,7 @@ pub fn parse_chain_records(cat: &[u8], base: usize, offsets: &[usize]) -> Vec<So
         .filter_map(|&offset| {
             let at = base + offset;
             let mut chain = parse_chain(cat, base, at)?;
-            // How DOA2U draws chains that place whole objects is not read.
-            if chain.placed.is_some() {
-                return None;
-            }
+            chain.set_placement_code(PlacementCode::Doa2u);
             resolve_limb_slots(&mut chain.shapes);
             chain.wind_factor = Some(read_f32(cat, at + 0x3C)?);
             // A root on a vertex of the object at +2, by byte offset (`sub_000591A0`).

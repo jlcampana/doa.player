@@ -1851,6 +1851,23 @@ impl App {
                 });
             }
         }
+        // Objects that chains draw whole (`sub_00050100`), a piece per copy on the chain's bone.
+        let copies = placed_copies(&chains, |object| model.pieces.get(object).map(|piece| piece.vertices.clone()));
+        let mut placed = Vec::new();
+        for (c, index, object, vertices) in &copies {
+            let bone = chains[*c].bone;
+            if chain_pieces.get(*object).is_some_and(Option::is_some) {
+                log::info!("DOA2U {stem}: object {object}, drawn whole by a chain, is also drawn on its own");
+            }
+            if placement_moves(&chains[*c]) {
+                placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: model.pieces[*object].vertices.clone() });
+            }
+            let piece = &model.pieces[*object];
+            inputs.push(PieceInput { node: bone, vertices, draws: draws_of(piece, texture_count), parent: bone, skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false });
+        }
+        if !copies.is_empty() {
+            log::info!("DOA2U {stem}: {} objects drawn whole by chains", copies.len());
+        }
         for extra in &extras {
             if chain_pieces[extra.prop.object].is_some() {
                 continue;
@@ -1909,7 +1926,7 @@ impl App {
             pose_hands: doa2u::hands(&cat)?,
             normal_rebuilds: doa2u::normal_rebuilds(&cat)?,
             copies: doa2u::vertex_copies(&cat, &xpr)?,
-            placed: Vec::new(),
+            placed,
         };
         let chest = chest_morph.and_then(|(object, groups)| {
             let piece = chain_piece_of_chest?;
