@@ -2568,10 +2568,10 @@ impl App {
             if let Some((drawn, shapes, _)) = &pose.chest {
                 hands.extend(drawn.iter().map(|&(piece, _)| ExportHand { piece, hand: shapes }));
             }
-            // The face's eyes and mouth as shape keys at rest, for animating by hand: what
-            // drives them in DOA4 is not read.
+            // The face's eyes and mouth as shape keys, driven per frame by the viewer's
+            // stand-in (DOA3's blink and mouth timing from the motion's first frame): what
+            // drives them in DOA4 is not read. Keys past the second shape stay at 0.
             let face_drawn: Vec<usize> = pose.face.iter().flat_map(|(_, drawn)| drawn.iter().map(|d| d.0)).collect();
-            let face_keys = face_drawn.len() * pose.face_shapes.len();
             for &piece in &face_drawn {
                 hands.extend(pose.face_shapes.iter().map(|hand| ExportHand { piece, hand }));
             }
@@ -2606,7 +2606,11 @@ impl App {
                     }
                     let mut frame_states: Vec<(usize, usize, f32)> = pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect();
                     frame_states.extend(chest_state.into_iter().flat_map(|state| std::iter::repeat(state).take(chest_pieces)));
-                    frame_states.extend(std::iter::repeat((0, 0, 1.0)).take(face_keys));
+                    let (blink, mouth) = FaceMorph::weights(frame as u64);
+                    for _ in &face_drawn {
+                        // `face_shapes` gives the eyes first, then the mouth.
+                        frame_states.extend(pose.face_shapes.iter().enumerate().map(|(set, _)| (0, 1, if set == 0 { blink } else { mouth })));
+                    }
                     for set in &soft_sets {
                         let shape = (frame as usize).min(set.shapes.len().saturating_sub(1));
                         frame_states.push((shape, shape, 1.0));

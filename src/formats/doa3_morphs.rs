@@ -417,9 +417,14 @@ impl FaceMorph {
 
     /// Vertex positions at a game frame. Verified: with the game's own weights
     /// these sections give its vertices with error 0.
+    /// The eyes' and the mouth's weights toward their second shape at a frame, on the timing
+    /// `positions` uses.
+    pub fn weights(frame: u64) -> (f32, f32) {
+        (pulse(frame, BLINK_PERIOD, BLINK_CLOSE, BLINK_OPEN), pulse(frame, MOUTH_PERIOD, MOUTH_RISE, MOUTH_FALL))
+    }
+
     pub fn positions(&self, frame: u64) -> impl Iterator<Item = (&[usize], [f32; 3])> {
-        let blink = pulse(frame, BLINK_PERIOD, BLINK_CLOSE, BLINK_OPEN);
-        let mouth = pulse(frame, MOUTH_PERIOD, MOUTH_RISE, MOUTH_FALL);
+        let (blink, mouth) = Self::weights(frame);
         let eyes = self.eyes.iter().flat_map(move |section| section.values(&FACE_TARGET, blink));
         eyes.chain(self.mouth.values(&FACE_TARGET, mouth))
     }
