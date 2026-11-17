@@ -354,6 +354,9 @@ pub fn extra_objects(cat: &[u8], object_count: usize) -> Result<Vec<Overlay>> {
 pub struct AreaLights {
     pub area: usize,
     pub name: String,
+    /// From the third table at 0x6D4D78, which `sub_00116C30` takes instead of the fighters'
+    /// own under conditions not understood (see the notes). Only areas whose set differs.
+    pub alternate: bool,
     pub ambient: [f32; 3],
     pub lights: [([f32; 3], [f32; 3], [f32; 3]); 4],
 }
@@ -361,6 +364,8 @@ pub struct AreaLights {
 /// The fighters' table follows the stage's, by area number: 71 sets of four 0x50 byte records
 /// from 0x6C9BF8 (`sub_00118570` reads the stage's).
 const AREA_LIGHTS_VA: u32 = 0x6C9BF8 + 71 * 0x140;
+/// The third table, 71 sets right after the fighters', same layout.
+const ALTERNATE_AREA_LIGHTS_VA: u32 = AREA_LIGHTS_VA + 71 * 0x140;
 const AREA_COUNT: usize = 71;
 
 /// Area names by number, from the game's list of `ECUSTOM_` names, which runs down from 70.
@@ -379,44 +384,61 @@ const AREA_NAMES: [&str; AREA_COUNT] = [
 /// Reads the fighters' lights of every named area. Kind 0 is off, 1 directional and 2 a point
 /// (table at 0x7AFF38). The viewer has no point lights nor a place on the stage, so a point
 /// becomes a directional light as seen from the stage's center, with its attenuation there.
+/// After them come the third table's sets that differ from the fighters' own, marked
+/// `alternate`; when the game takes those is not known.
 pub fn area_lights(xbe: &Xbe) -> Result<Vec<AreaLights>> {
-    let center = Vec3::new(0.0, 1.0, 0.0);
     let mut areas = Vec::new();
     for (area, name) in AREA_NAMES.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
         let set = xbe.bytes(AREA_LIGHTS_VA + area as u32 * 0x140, 0x140).context("area lights are outside the file")?;
-        let float = |at: usize| f32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
-        let word = |at: usize| u32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
-        let triple = |at: usize| Vec3::new(float(at), float(at + 4), float(at + 8));
-        let mut lights = [([0.0; 3], [0.0; 3], [0.0; 3]); 4];
-        for (i, light) in lights.iter_mut().enumerate() {
-            let at = i * 0x50;
-            let turn = std::f32::consts::TAU / 65536.0;
-            let (a, b) = (word(at + 0x1C) as i32 as f32 * turn, word(at + 0x20) as i32 as f32 * turn);
-            let mut direction = Vec3::new(-a.cos() * b.sin(), -a.sin(), -a.cos() * b.cos());
-            let mut scale = match word(at) {
-                1 => 1.0,
-                2 => {
-                    let offset = center - triple(at + 0x24);
-                    let distance = offset.length();
-                    direction = offset.normalize_or_zero();
-                    let (att0, att1, att2) = (float(at + 0x30), float(at + 0x34), float(at + 0x38));
-                    let denominator = att0 + att1 * distance + att2 * distance * distance;
-                    if distance <= float(at + 0x3C) && denominator > 0.0 { 1.0 / denominator } else { 0.0 }
-                }
-                _ => 0.0,
-            };
-            if !scale.is_finite() {
-                scale = 0.0;
-            }
-            let diffuse = triple(at + 0x10) * scale;
-            *light = (direction.to_array(), diffuse.to_array(), (diffuse * float(at + 0x4C)).to_array());
+        areas.push(read_area_set(set, area, name.to_string(), false));
+    }
+    for (area, name) in AREA_NAMES.iter().enumerate() {
+        if name.is_empty() {
+            continue;
         }
-        areas.push(AreaLights { area, name: name.to_string(), ambient: triple(4).to_array(), lights });
+        let own = xbe.bytes(AREA_LIGHTS_VA + area as u32 * 0x140, 0x140).context("area lights are outside the file")?;
+        let set = xbe.bytes(ALTERNATE_AREA_LIGHTS_VA + area as u32 * 0x140, 0x140).context("alternate area lights are outside the file")?;
+        if set != own {
+            areas.push(read_area_set(set, area, format!("{name} (alternate)"), true));
+        }
     }
     Ok(areas)
+}
+
+/// One set of four 0x50 byte light records.
+fn read_area_set(set: &[u8], area: usize, name: String, alternate: bool) -> AreaLights {
+    let center = Vec3::new(0.0, 1.0, 0.0);
+    let float = |at: usize| f32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
+    let word = |at: usize| u32::from_le_bytes([set[at], set[at + 1], set[at + 2], set[at + 3]]);
+    let triple = |at: usize| Vec3::new(float(at), float(at + 4), float(at + 8));
+    let mut lights = [([0.0; 3], [0.0; 3], [0.0; 3]); 4];
+    for (i, light) in lights.iter_mut().enumerate() {
+        let at = i * 0x50;
+        let turn = std::f32::consts::TAU / 65536.0;
+        let (a, b) = (word(at + 0x1C) as i32 as f32 * turn, word(at + 0x20) as i32 as f32 * turn);
+        let mut direction = Vec3::new(-a.cos() * b.sin(), -a.sin(), -a.cos() * b.cos());
+        let mut scale = match word(at) {
+            1 => 1.0,
+            2 => {
+                let offset = center - triple(at + 0x24);
+                let distance = offset.length();
+                direction = offset.normalize_or_zero();
+                let (att0, att1, att2) = (float(at + 0x30), float(at + 0x34), float(at + 0x38));
+                let denominator = att0 + att1 * distance + att2 * distance * distance;
+                if distance <= float(at + 0x3C) && denominator > 0.0 { 1.0 / denominator } else { 0.0 }
+            }
+            _ => 0.0,
+        };
+        if !scale.is_finite() {
+            scale = 0.0;
+        }
+        let diffuse = triple(at + 0x10) * scale;
+        *light = (direction.to_array(), diffuse.to_array(), (diffuse * float(at + 0x4C)).to_array());
+    }
+    AreaLights { area, name, alternate, ambient: triple(4).to_array(), lights }
 }
 
 /// Kind 251 in the soft body list (`sub_0004FD00`): rebuilds a moving object's normals from
@@ -1324,7 +1346,7 @@ mod tests {
             (49, 94.0, [-0.539, -0.428, -0.726], [0.61, 0.53, 0.48]),
         ];
         for (area, ambient, direction, diffuse) in measured {
-            let found = areas.iter().find(|a| a.area == area).unwrap();
+            let found = areas.iter().find(|a| a.area == area && !a.alternate).unwrap();
             assert!((found.ambient[0] * 255.0 - ambient).abs() < 2.0, "area {area} ambient {:?}", found.ambient);
             for i in 0..3 {
                 assert!((found.lights[0].0[i] - direction[i]).abs() < 0.002, "area {area} direction {:?}", found.lights[0].0);
@@ -1333,9 +1355,12 @@ mod tests {
             }
         }
         // Disco's ambient is not gray, and its second and third lights are off.
-        let disco = areas.iter().find(|a| a.area == 51).unwrap();
+        let disco = areas.iter().find(|a| a.area == 51 && !a.alternate).unwrap();
         assert!((disco.ambient[1] * 255.0 - 94.0).abs() < 2.0 && (disco.ambient[0] * 255.0 - 76.0).abs() < 2.0);
         assert_eq!(disco.lights[1].1, [0.0; 3]);
+        // The third table differs from the fighters' own in 28 areas (read on 2026-11-12).
+        let alternates: Vec<usize> = areas.iter().filter(|a| a.alternate).map(|a| a.area).collect();
+        assert_eq!(alternates, [0, 3, 8, 10, 11, 12, 13, 16, 18, 21, 24, 26, 27, 30, 31, 33, 41, 48, 49, 50, 51, 53, 54, 55, 56, 57, 63, 64]);
         println!("{} areas", areas.len());
     }
 

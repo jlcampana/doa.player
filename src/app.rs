@@ -350,9 +350,9 @@ fn load_stage_lights() -> Vec<(String, crate::renderer::mesh::SceneLights)> {
         Ok(areas) => areas
             .into_iter()
             .map(|area| {
-                let lights = match area.area {
-                    15 => CLOUDY_LIGHTS,
-                    19 => snowy_night_lights(),
+                let lights = match (area.area, area.alternate) {
+                    (15, false) => CLOUDY_LIGHTS,
+                    (19, false) => snowy_night_lights(),
                     _ => SceneLights { ambient: area.ambient, lights: area.lights, ambient_up: [0.0; 3], local_viewer: false, points: crate::renderer::mesh::NO_POINTS, fighter: [0.0; 3] },
                 };
                 (area.name, lights)
