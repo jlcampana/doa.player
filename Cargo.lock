@@ -571,6 +571,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "env_logger",
+ "flate2",
  "glam",
  "log",
  "png",

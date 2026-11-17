@@ -290,7 +290,7 @@ pub fn rest_pose(nodes: &[Node]) -> Vec<Mat4> {
 }
 
 /// An IEEE half float.
-fn half(bits: u16) -> f32 {
+pub(crate) fn half(bits: u16) -> f32 {
     let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exponent = ((bits >> 10) & 0x1F) as i32;
     let mantissa = (bits & 0x3FF) as f32;

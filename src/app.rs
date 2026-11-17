@@ -38,6 +38,7 @@ pub enum GameSource {
     Doax,
     Doax2,
     Doa4,
+    Doax3,
 }
 
 #[derive(Debug, Clone)]
@@ -435,6 +436,11 @@ pub struct App {
     doax2_chr: Option<doax::LazyArchive>,
     doax2_wear: Vec<doax::LazyArchive>,
     pub doa4_characters: Vec<CharacterEntry>,
+    /// DOAX3 Fortune: characters with costume and hairstyle labels; `doax3_paths` holds the
+    /// TMC path behind each label, in the same order.
+    pub doax3_characters: Vec<CharacterEntry>,
+    doax3_archives: Option<crate::formats::doax3::Archives>,
+    doax3_paths: Vec<(Vec<String>, Vec<String>)>,
     doa4_archives: Vec<doax::LazyArchive>,
     doa4_files: Vec<crate::formats::doa4::ModelFile>,
     /// The head each DOAX2 swimsuit is worn with, by the suit's name.
@@ -875,6 +881,29 @@ impl App {
                 })
             })
             .collect();
+        let doax3_archives = crate::formats::doax3::Archives::open(&crate::formats::doax3::game_dir()).map_err(|e| log::info!("No DOAX3: {e:#}")).ok();
+        let doax3_names: Vec<String> = doax3_archives.iter().flat_map(|a| a.names().map(str::to_string)).collect();
+        let (doax3_characters, doax3_paths): (Vec<CharacterEntry>, Vec<(Vec<String>, Vec<String>)>) = crate::formats::doax3::ROSTER
+            .iter()
+            .filter_map(|(code, name)| {
+                let costumes = crate::formats::doax3::costumes(&doax3_names, code);
+                let hairs = crate::formats::doax3::hairstyles(&doax3_names, code);
+                (!costumes.is_empty()).then(|| {
+                    let entry = CharacterEntry {
+                        id: code.to_string(),
+                        bin_id: String::new(),
+                        display_name: name.to_string(),
+                        costumes: costumes.iter().map(|c| crate::formats::doax3::costume_label(c)).collect(),
+                        afs_indices: vec![],
+                        doa3: None,
+                        doa2u_id: None,
+                        intro: false,
+                        hairstyles: hairs.iter().map(|h| crate::formats::doax3::costume_label(h)).collect(),
+                    };
+                    (entry, (costumes, hairs))
+                })
+            })
+            .unzip();
         let doax_stage_lights = std::fs::read(asset_path(DOAX_XBE_PATH)).map(|xbe| doax::stage_lights(&xbe)).unwrap_or_default();
         let app_icon = read_app_icon(hdd_archive.as_ref());
         let mut char_panel = CharSelectPanel::new();
@@ -938,6 +967,9 @@ impl App {
             doa4_archives,
             doa4_files,
             doa4_suit_heads,
+            doax3_characters,
+            doax3_archives,
+            doax3_paths,
             doax2_wear_names,
             doax2_mot: doax::LazyArchive::open(asset_path(DOAX2_MOT_PATH)).map_err(|e| log::info!("No DOAX2 motions: {e:#}")).ok(),
             anim_panel: AnimPanel::new(),
@@ -1034,6 +1066,16 @@ impl App {
                         log::warn!("Could not load DOA4 character: {e:#}");
                         self.mesh.clear_model();
                         format!("DOA4: could not load character: {e:#}")
+                    }
+                };
+            }
+            GameSource::Doax3 => {
+                self.status_msg = match self.try_load_doax3_character(char_idx, costume_idx) {
+                    Ok(status) => status,
+                    Err(e) => {
+                        log::warn!("Could not load DOAX3 character: {e:#}");
+                        self.mesh.clear_model();
+                        format!("DOAX3: could not load character: {e:#}")
                     }
                 };
             }
@@ -1619,6 +1661,70 @@ impl App {
     }
 
     /// A DOAX costume: the character's body with a suit, standing in the rest pose.
+    /// DOAX3 Fortune at rest: the costume, the face and a hairstyle placed on its head, with
+    /// no textures, materials, skinning or motions yet (see `docs/doax3-notes.md`).
+    fn try_load_doax3_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
+        use crate::formats::doax3;
+        use anyhow::Context;
+
+        let costume_idx = if costume_idx == DEFAULT_COSTUME { 0 } else { costume_idx };
+        self.char_panel.selected_costume_idx = costume_idx;
+        let entry = self.doax3_characters.get(char_idx).context("unknown character")?;
+        let (display_name, code) = (entry.display_name.clone(), entry.id.clone());
+        let label = entry.costumes.get(costume_idx).context("unknown costume")?.clone();
+        let (costumes, hairs) = self.doax3_paths.get(char_idx).context("unknown character")?;
+        let costume = costumes.get(costume_idx).context("unknown costume")?;
+        let hair = hairs.get(self.char_panel.selected_hair_idx.unwrap_or(0)).or(hairs.first()).cloned();
+        let archives = self.doax3_archives.as_ref().context("no DOAX3 archives")?;
+        let read = |tmc: &str| -> anyhow::Result<doax3::Model> {
+            doax3::parse_model(&archives.read(tmc)?, &archives.read(&doax3::tmcl_path(tmc))?).with_context(|| tmc.to_string())
+        };
+        let body = read(costume)?;
+        let mut models = vec![body.clone()];
+        let mut face = read(&doax3::face(&code))?;
+        doax3::place_on(&body, &mut face)?;
+        models.push(face);
+        if let Some(hair) = &hair {
+            let mut model = read(hair)?;
+            doax3::place_on(&body, &mut model)?;
+            models.push(model);
+        }
+        let pieces: Vec<&crate::formats::model::ModelPiece> = models
+            .iter()
+            .flat_map(|m| m.pieces.iter().zip(&m.objects).filter(|(_, o)| doax3::drawn_at_rest(o)).map(|(p, _)| p))
+            .collect();
+        let inputs: Vec<PieceInput> = pieces
+            .iter()
+            .map(|piece| PieceInput {
+                node: 0,
+                vertices: &piece.vertices,
+                draws: piece.materials.iter().map(|m| (m.indices.as_slice(), None, m.cull_back, None)).collect(),
+                parent: 0,
+                skin: None,
+                bend: None,
+                multi: None,
+                welds: Vec::new(),
+                translucent: false,
+            })
+            .collect();
+        let textures: Vec<crate::formats::model::ModelTexture> = Vec::new();
+        self.doa3_pose = None;
+        self.current_animations = Vec::new();
+        self.anim_panel.selected_anim_idx = None;
+        self.anim_time = 0.0;
+        Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOAX3".to_string(), display_name.clone(), label.clone()));
+        self.mesh.set_lights(Some(self.current_stage_lights()));
+        self.export_source = crate::export::ExportModel::new(&inputs, &textures);
+        self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
+        let count = inputs.len();
+        drop(inputs);
+        // The model's origin is at the hips; lifted so the lowest point of the body stands on
+        // the ground, as there is no motion to place it.
+        let lowest = models[0].pieces.iter().zip(&models[0].objects).filter(|(_, o)| doax3::drawn_at_rest(o)).flat_map(|(p, _)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
+        self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * -lowest)]);
+        Ok(format!("DOAX3: {display_name} - {label}, {count} pieces at rest, no textures yet"))
+    }
+
     fn try_load_doax_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
         use anyhow::Context;
 
@@ -2910,6 +3016,7 @@ impl App {
             GameSource::Doax => self.doax_characters.get(char_idx),
             GameSource::Doax2 => self.doax2_characters.get(char_idx),
             GameSource::Doa4 => self.doa4_characters.get(char_idx),
+            GameSource::Doax3 => self.doax3_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
@@ -2965,6 +3072,7 @@ impl App {
             GameSource::Doax => self.doax_characters.get(char_idx),
             GameSource::Doax2 => self.doax2_characters.get(char_idx),
             GameSource::Doa4 => self.doa4_characters.get(char_idx),
+            GameSource::Doax3 => self.doax3_characters.get(char_idx),
         }
         .map_or(0, |entry| entry.costumes.len());
         let mut written = 0;

@@ -8,8 +8,8 @@ GeoDecl (vertex layouts) and its sub-meshes. LHeader lists the TMCL's blocks by
 type (0xC0000002 textures, 3 vertices, 4 indices) with offsets and sizes;
 VtxLay and IdxLay list the buffers inside the vertex and index blocks.
 
-GeoDecl entry (from the table): +0 offset of its element list (relative to the
-GeoDecl), +0x10 index count, +0x14 vertex count. The element list: vertex buffer
+GeoDecl entry (from the table): +4 offset of its element list (relative to the
+entry), +0x10 index count, +0x14 vertex count. The element list: vertex buffer
 u32, stride u32, element count u32, then from +0x18 D3D9-style elements of 8 bytes: stream u16,
 offset u16, type u8, method u8, usage u8, usage index u8. Types seen: 3 four
 floats, 5 four bytes, 0xB four half floats. Usages: 0 position, 1 weights, 2
@@ -56,12 +56,11 @@ def decls(d, geo):
     _, _, count, entries = chunk(d, decl)
     out = []
     for e in entries:
-        elements_at = struct.unpack_from('<I', d, e)[0]
         index_count, vertex_count = struct.unpack_from('<II', d, e + 0x10)
-        el = decl + elements_at
+        el = e + struct.unpack_from('<I', d, e + 4)[0]
         vbuf, stride, n = struct.unpack_from('<III', d, el)
         elements = [struct.unpack_from('<HHBBBB', d, el + 0x18 + 8 * i) for i in range(n)]
-        # The index buffer is the declaration's place in file order (checked on 7 files).
+        # The index buffer is the declaration's place in file order.
         out.append((stride, vbuf, len(out), index_count, vertex_count, elements))
     return out
 
