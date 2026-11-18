@@ -8,7 +8,9 @@ documentado lo que no se pueda hacer sin el juego) antes de pasar al siguiente.
    **Rebote del pecho en tres ejes** (vertical, lateral y adelante-atrás), en el visor y en la
    exportación a Blender, para todos los juegos. Hoy solo DOAX2 tiene los tres ejes (leídos de su
    código); DOA2U, DOA3, DOAX, DOA4 y DOAX3 tienen solo el vertical o un sustituto.
-2. **Sombreado anime** (`cel_shaded`, `vs_outline` en `src/renderer/mesh.rs`): trabajarlo más, en
+2. ~~**Sombreado anime**~~ Hecho el 2026-11-18 (ver "Development notes" en `CLAUDE.md`); falta
+   tu opinión (`humano.md`).
+   **Sombreado anime** (`cel_shaded`, `vs_outline` en `src/renderer/mesh.rs`): trabajarlo más, en
    la línea de Fire Emblem que pidió el usuario.
 3. **DOA3, punto 2 del backlog**: el modo 1 de los tubos (`sub_00044620` y cuatro auxiliares; hay
    una captura en `target/captures/doa3_hitomi_tubes.bin`), y después lo demás de ese punto:

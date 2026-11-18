@@ -1311,15 +1311,30 @@ fn cel_shaded(v: VertOut, texel: vec4<f32>, layer: vec4<f32>) -> vec4<f32> {
     if material.flags.x < 0.5 {
         facing = abs(facing);
     }
-    // A small wrap, so that a surface turning away keeps its light up to the edge.
-    let lit = smoothstep(-0.06, -0.01, facing);
-    let not_deep = smoothstep(-0.56, -0.5, facing);
-    let shadow = mix(base * vec3<f32>(0.34, 0.28, 0.42), base * vec3<f32>(0.6, 0.52, 0.66), not_deep);
-    var color = mix(shadow, base, lit) * mix(vec3<f32>(1.0), tint, 0.25 * lit);
+    // In the manner of Fire Emblem's (Three Houses, Engage): three tones with soft steps, the
+    // shadows the material's own colour made deeper and more saturated with a warm shift (the
+    // base times itself), not one tint for all; a narrow middle tone along the terminator; a
+    // warm rim on the lit side and a faint cool one in shadow; a soft highlight. The viewer's
+    // own choice of values, not compared with those games.
+    let lit = smoothstep(-0.02, 0.06, facing);
+    let middle = smoothstep(-0.3, -0.18, facing);
+    let deep_shadow = base * base * vec3<f32>(0.78, 0.62, 0.7) + base * vec3<f32>(0.1, 0.06, 0.1);
+    let shadow = mix(deep_shadow, base * base * vec3<f32>(1.0, 0.82, 0.86) + base * vec3<f32>(0.18, 0.12, 0.14), middle);
+    let terminator = (smoothstep(-0.02, 0.06, facing) - smoothstep(0.08, 0.2, facing)) * 0.5;
+    let warm_edge = base * vec3<f32>(1.0, 0.86, 0.82);
+    var color = mix(shadow, base, lit);
+    color = mix(color, warm_edge, terminator * lit);
+    color *= mix(vec3<f32>(1.0), tint, 0.2 * lit);
     let half_way = normalize(to_light + to_eye);
-    let highlight = smoothstep(0.972, 0.98, dot(n, half_way)) * lit;
-    let rim = smoothstep(0.74, 0.8, 1.0 - max(dot(n, to_eye), 0.0)) * lit;
-    color += vec3<f32>(0.2) * highlight * max(material.flags.y, 0.25) + base * 0.16 * rim;
+    let gloss = smoothstep(0.86, 0.99, dot(n, half_way)) * lit;
+    let edge = 1.0 - max(dot(n, to_eye), 0.0);
+    let rim_lit = smoothstep(0.68, 0.82, edge) * lit * smoothstep(0.1, 0.5, facing + 0.3);
+    let rim_cool = smoothstep(0.75, 0.9, edge) * (1.0 - lit);
+    // Only on materials with specular, broad and faint: a tight one left white blots on low-poly
+    // surfaces (Helena's and Zack's DOA2U clothes).
+    color += base * vec3<f32>(0.22, 0.2, 0.18) * gloss * material.flags.y;
+    color += base * vec3<f32>(0.3, 0.26, 0.22) * rim_lit;
+    color += vec3<f32>(0.32, 0.4, 0.55) * 0.12 * rim_cool;
     return vec4<f32>(color, alpha);
 }
 
@@ -1331,7 +1346,12 @@ fn vs_outline(v: VertIn) -> VertOut {
     let world_pos = u.model * vec4<f32>(v.pos, 1.0);
     let depth = (u.view_proj * world_pos).w;
     // The width is in plain_color's w, from the slider.
-    let pushed = world_pos.xyz + normalize(v.normal) * min(0.0016 * depth, 0.006) * u.plain_color.w;
+    // Thinner where the surface turns to the camera, full along the silhouette: an ink line of
+    // varying weight, as hand-drawn lines have.
+    let n = normalize((u.model * vec4<f32>(v.normal, 0.0)).xyz);
+    let to_eye = normalize((vec4<f32>(0.0, 0.0, 1.0, 0.0) * u.view).xyz);
+    let weight = mix(1.0, 0.45, abs(dot(n, to_eye)));
+    let pushed = world_pos.xyz + normalize(v.normal) * min(0.0014 * depth, 0.005) * u.plain_color.w * weight;
     out.clip = u.view_proj * vec4<f32>(pushed, 1.0);
     out.normal = v.normal;
     out.uv = v.uv;
@@ -1356,7 +1376,10 @@ fn fs_outline(v: VertOut) -> @location(0) vec4<f32> {
     if dot(v.normal, to_eye) > 0.0 {
         discard;
     }
-    return vec4<f32>(texel.rgb * vec3<f32>(0.14, 0.1, 0.16), 1.0);
+    // The material's own colour, deepened and made more saturated, as Fire Emblem's lines are,
+    // rather than one dark grey for all.
+    let ink = texel.rgb * texel.rgb * vec3<f32>(0.42, 0.3, 0.32) + texel.rgb * vec3<f32>(0.04, 0.03, 0.04);
+    return vec4<f32>(ink, 1.0);
 }
 
 // The game works on stored texture values, with no gamma. The viewer's textures and
