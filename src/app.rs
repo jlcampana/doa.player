@@ -1767,6 +1767,7 @@ impl App {
         let (costumes, hairs) = self.doax3_paths.get(char_idx).context("unknown character")?;
         let costume = costumes.get(costume_idx).context("unknown costume")?;
         let hair = hairs.get(self.char_panel.selected_hair_idx.unwrap_or(0)).or(hairs.first()).cloned();
+        self.char_panel.variant_count = 1;
         let archives = self.doax3_archives.as_ref().context("no DOAX3 archives")?;
         let files = |tmc: &str| -> anyhow::Result<(Vec<u8>, Vec<u8>)> { Ok((archives.read(tmc)?, archives.read(&doax3::tmcl_path(tmc))?)) };
         let read = |tmc: &str| -> anyhow::Result<(doax3::Model, (Vec<u8>, Vec<u8>))> {
@@ -1782,6 +1783,9 @@ impl App {
         if let Some(hair) = &hair {
             let (mut model, hair_files) = read(hair)?;
             doax3::place_on(&body, &mut model)?;
+            self.char_panel.variant_count = model.variant_count();
+            self.char_panel.selected_variant = self.char_panel.selected_variant.min(model.variant_count() - 1);
+            model.choose_variant(self.char_panel.selected_variant);
             models.push((model, hair_files));
         }
         // Each model's colour textures, those its drawn objects use, one list after another.

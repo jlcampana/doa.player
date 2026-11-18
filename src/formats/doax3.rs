@@ -241,6 +241,8 @@ pub struct Model {
     /// Per piece, per vertex: up to 12 (node, weight) pairs, the weights summing to 1, with the
     /// object's palette applied. Empty for pieces without weights or palette.
     pub skins: Vec<Vec<Skin>>,
+    /// Per piece: left out by the chosen variant (`choose_variant`).
+    pub hidden: Vec<bool>,
 }
 
 /// A vertex's influences: node numbers and weights; unused slots have weight 0.
@@ -249,7 +251,22 @@ pub type Skin = [(u16, f32); 12];
 impl Model {
     /// Whether piece `i` is drawn in the rest view: by its object's name and its normals.
     pub fn drawn(&self, i: usize) -> bool {
-        self.objects.get(i).is_some_and(|o| drawn_at_rest(o)) && self.has_normals.get(i).copied().unwrap_or(false)
+        self.objects.get(i).is_some_and(|o| drawn_at_rest(o)) && self.has_normals.get(i).copied().unwrap_or(false) && !self.hidden.get(i).copied().unwrap_or(false)
+    }
+
+    /// How many variants the model has: 2 when it holds wet hair (`WGT_wet_asobi` and
+    /// `WGT_wet_asobi1`, in Kasumi's hairstyles 2, 4 and 5), else 1.
+    pub fn variant_count(&self) -> usize {
+        if self.objects.iter().any(|o| o.contains("wet")) { 2 } else { 1 }
+    }
+
+    /// Variant 0 draws the dry hair and hides the wet objects; variant 1 the wet objects
+    /// instead of `WGT_hair`. The wet hair lies over the dry one in the same file, so drawn
+    /// together a long wet fringe hung over the eyes. When the game shows which is not read.
+    pub fn choose_variant(&mut self, variant: usize) {
+        let wet = self.variant_count() > 1 && variant == 1;
+        let has_wet = self.variant_count() > 1;
+        self.hidden = self.objects.iter().map(|o| has_wet && if wet { o == "WGT_hair" } else { o.contains("wet") }).collect();
     }
 
     /// The drawn pieces with their index.
@@ -727,7 +744,8 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
         }
     }
     let texture_count = texture_files(tmc, tmcl).map_or(0, |t| t.len());
-    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals, skins })
+    let hidden = vec![false; pieces.len()];
+    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals, skins, hidden })
 }
 
 /// The node named after an object. Object names longer than 15 characters are cut from the
@@ -938,6 +956,30 @@ mod texture_tests {
             }
         }
         println!("{} models, {failed} failed; {pieces} drawn pieces, {unskinned} without skin", names.len());
+    }
+
+    /// Lists the object names of every hairstyle and face, with how many files use each.
+    #[test]
+    #[ignore]
+    fn head_object_names() {
+        let archives = Archives::open(&game_dir()).unwrap();
+        let names: Vec<String> = archives.names().filter(|n| n.ends_with("_TMC.tmc") && (n.contains("/hair/") || n.contains("/face/"))).map(str::to_string).collect();
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        for name in &names {
+            let (Ok(tmc), Ok(tmcl)) = (archives.read(name), archives.read(&tmcl_path(name))) else { continue };
+            let Ok(m) = parse_model(&tmc, &tmcl) else { continue };
+            let mut seen: Vec<&String> = m.objects.iter().collect();
+            seen.dedup();
+            if seen.iter().any(|o| o.contains("wet") || o.ends_with("_a") || o.ends_with("_b") || o.contains("hel") || o.contains("FaceOff") || o.contains("face1") || o.contains("bandana") || o.contains("hair02")) {
+                println!("FILE {name}: {seen:?}");
+            }
+            for o in seen {
+                *counts.entry(o.clone()).or_default() += 1;
+            }
+        }
+        for (o, n) in counts {
+            println!("{n:3} {o}");
+        }
     }
 
     /// Counts texture formats, tile modes and resource types over every model in the archives.
