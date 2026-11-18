@@ -362,9 +362,12 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
         }
         let mut indices = Vec::new();
         let mut strip: Vec<u32> = Vec::new();
+        // Triangles wound for the viewer's front face, the reverse of the strips' order: the
+        // file's normals point to the side the strips wind to (every material of Kasumi's
+        // `vksAA`), and the viewer's space is the game's mirrored in z.
         let flush = |strip: &mut Vec<u32>, indices: &mut Vec<u32>| {
             for k in 2..strip.len() {
-                let (a, b, c) = if k % 2 == 0 { (strip[k - 2], strip[k - 1], strip[k]) } else { (strip[k - 1], strip[k - 2], strip[k]) };
+                let (a, b, c) = if k % 2 == 0 { (strip[k - 1], strip[k - 2], strip[k]) } else { (strip[k - 2], strip[k - 1], strip[k]) };
                 if a != b && b != c && a != c {
                     indices.extend([a, b, c]);
                 }
@@ -409,7 +412,12 @@ pub fn object_piece(xpr: &Xpr2, object: &Object) -> Result<ModelPiece> {
             layer_reflects: false,
             unlit: false,
         });
-        materials.push(ModelMaterial { indices, textures, cull_back: false, look });
+        // Back faces hidden. Hair has inner layers and reversed copies of strands in the same
+        // places as the outer ones; drawn, their back sides fought the outer layer in depth and
+        // showed a checkerboard of dark quads under the game's lights (Kasumi in DOAX2 and
+        // DOA4, 2026-11-18). That the game culls every draw is inferred from those copies,
+        // not read from its render states.
+        materials.push(ModelMaterial { indices, textures, cull_back: true, look });
     }
     Ok(ModelPiece { vertices, materials })
 }
@@ -2251,3 +2259,4 @@ mod tests {
         }
     }
 }
+
