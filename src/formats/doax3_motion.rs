@@ -254,6 +254,26 @@ pub fn body_bone(name: &str) -> Option<usize> {
     digits.parse().ok()
 }
 
+/// The face motions' bone for each node of a face model: its `OPT_Face_*` nodes in model
+/// order, then `OPT_Face_Root` (44 on Kasumi). The file's hierarchy agrees: its bone 6 (the
+/// jaw) is the parent of bones 1, 4, 18 and 36 (the lower lips and the tongue). The motions
+/// put the root on the head and its children where rest puts them under the root, so their
+/// locals replace the model's whole.
+pub fn face_bones(nodes: &[super::doax3::Node]) -> Vec<Option<usize>> {
+    let mut out = vec![None; nodes.len()];
+    let mut next = 0;
+    for (i, node) in nodes.iter().enumerate() {
+        if node.name.starts_with("OPT_Face_") && node.name != "OPT_Face_Root" {
+            out[i] = Some(next);
+            next += 1;
+        }
+    }
+    if let Some(root) = nodes.iter().position(|n| n.name == "OPT_Face_Root") {
+        out[root] = Some(next);
+    }
+    out
+}
+
 /// Posed globals of a model's nodes. `fixed(node)` gives a node's global from elsewhere (a
 /// part's node that the body also has); `local(node)` its local from a motion; other nodes keep
 /// their rest local (from the rest globals) under their posed parent. With `fixed` and `local`

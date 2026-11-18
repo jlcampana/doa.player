@@ -11,6 +11,10 @@ pub struct CharSelectPanel {
     pub selected_variant: usize,
     /// How many the loaded costume has, set at load.
     pub variant_count: usize,
+    /// DOAX3: the face's expressions (one-frame motions of `*_FACE_MPM.mpm`), set at load, and
+    /// the one shown, 0 being the model's rest face.
+    pub face_count: usize,
+    pub selected_face: usize,
     /// Exports with all motions, not only the playing one.
     pub export_all_motions: bool,
     pub export_request: Option<ExportRequest>,
@@ -36,6 +40,8 @@ impl CharSelectPanel {
             selected_hair_idx: None,
             selected_variant: 0,
             variant_count: 1,
+            face_count: 0,
+            selected_face: 0,
             export_all_motions: false,
             export_request: None,
             filter: String::new(),
@@ -191,6 +197,20 @@ impl CharSelectPanel {
                                 if let Some(pick) = pick.filter(|pick| *pick != self.selected_hair_idx) {
                                     self.selected_hair_idx = pick;
                                     on_char_selected(char_idx, self.selected_costume_idx);
+                                }
+                            });
+                        }
+                        if self.face_count > 0 {
+                            ui.separator();
+                            ui.label("Face:").on_hover_text("The face file's expressions, in file order; which is which is not read. Rest is the model's own face.");
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.selectable_label(self.selected_face == 0, "Rest").clicked() {
+                                    self.selected_face = 0;
+                                }
+                                for face in 1..=self.face_count {
+                                    if ui.selectable_label(self.selected_face == face, (face - 1).to_string()).clicked() {
+                                        self.selected_face = face;
+                                    }
                                 }
                             });
                         }

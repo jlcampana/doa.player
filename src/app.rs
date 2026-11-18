@@ -582,6 +582,13 @@ struct Doax3Pose {
     drawn: Vec<(usize, usize)>,
     motions: crate::formats::doax3_motion::MotionFile,
     playing: Option<usize>,
+    /// The face's expressions and, per node of the face model (model 1), its bone in them.
+    faces: Option<crate::formats::doax3_motion::MotionFile>,
+    face_bones: Vec<Option<usize>>,
+    /// Lift of the rest pose, used while no motion plays.
+    lift: f32,
+    /// What the vertices were last skinned for: motion, frame, expression.
+    shown: Option<(Option<usize>, f32, usize)>,
 }
 
 struct Doax2Pose {
@@ -1775,7 +1782,21 @@ impl App {
         let lowest = models[0].drawn_pieces().flat_map(|(_, p)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
         self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * -lowest)]);
         let motion_count = motions.motions.len();
-        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None });
+        // Expressions: one-frame motions of the face's 44 bones, which are its `OPT_Face_*`
+        // nodes in model order, the root (`OPT_Face_Root`) last (the file's hierarchy agrees:
+        // bone 6, the jaw, holds the lower lips and the tongue).
+        let face_path = format!("00/character/{code}/animation/{code}_FACE_MPM.mpm");
+        let faces = archives
+            .read(&face_path)
+            .and_then(|d| crate::formats::doax3_motion::parse_mpm(&d))
+            .map_err(|e| log::info!("DOAX3 {face_path}: {e:#}"))
+            .ok()
+            .filter(|f| f.root == "OPT_Face_Root");
+        let face_bones = models.get(1).map_or_else(Vec::new, |face| crate::formats::doax3_motion::face_bones(&face.nodes));
+        let faces = faces.filter(|f| face_bones.iter().flatten().count() == f.bones);
+        self.char_panel.face_count = faces.as_ref().map_or(0, |f| f.motions.len());
+        self.char_panel.selected_face = self.char_panel.selected_face.min(self.char_panel.face_count);
+        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None, faces, face_bones, lift: -lowest, shown: None });
         Ok(format!("DOAX3: {display_name} - {label}, {count} pieces, {} textures, {motion_count} motions", textures.len()))
     }
 
@@ -3206,14 +3227,22 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
-        if let Some(pose) = &self.doax3_pose {
+        if let Some(pose) = &mut self.doax3_pose {
             use crate::formats::doax3_motion as m;
-            let Some(index) = pose.playing else { return };
-            let motion = &pose.motions.motions[index];
+            let face = self.char_panel.selected_face;
+            let key = (pose.playing, self.anim_time, face);
+            if pose.shown == Some(key) {
+                return;
+            }
+            pose.shown = Some(key);
+            let motion = pose.playing.and_then(|i| pose.motions.motions.get(i));
+            let expression = face.checked_sub(1).and_then(|f| pose.faces.as_ref()?.motions.get(f));
             let frame = self.anim_time;
-            // The body from the motion; parts follow the body's nodes of the same name.
+            // The body from the motion, or at rest; parts follow the body's nodes of the same
+            // name; the face's bones take the expression.
             let body = &pose.models[0];
-            let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| m::body_bone(&body.nodes[i].name).filter(|&b| b < pose.motions.bones).map(|b| motion.local(b, frame)));
+            let bones = pose.motions.bones;
+            let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| motion.and_then(|mo| m::body_bone(&body.nodes[i].name).filter(|&b| b < bones).map(|b| mo.local(b, frame))));
             let changes: Vec<Vec<glam::Mat4>> = pose
                 .models
                 .iter()
@@ -3222,7 +3251,12 @@ impl App {
                     let posed = if k == 0 {
                         body_posed.clone()
                     } else {
-                        m::pose_nodes(&model.nodes, |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| body_posed[b]), |_| None)
+                        let face_bones = if k == 1 { pose.face_bones.as_slice() } else { &[] };
+                        m::pose_nodes(
+                            &model.nodes,
+                            |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| body_posed[b]),
+                            |i| expression.and_then(|e| face_bones.get(i).copied().flatten().map(|b| e.local(b, 0.0))),
+                        )
                     };
                     posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect()
                 })
@@ -3234,7 +3268,8 @@ impl App {
                 self.mesh.set_rest_positions(input, skinned.iter().enumerate().map(|(v, (p, _))| (v, *p)));
                 self.mesh.set_rest_normals(input, skinned.iter().enumerate().map(|(v, (_, n))| (v, n.to_array())));
             }
-            self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::IDENTITY]);
+            let lift = if motion.is_some() { 0.0 } else { pose.lift };
+            self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * lift)]);
             return;
         }
         if let Some(pose) = &mut self.doa4_pose {

@@ -437,7 +437,8 @@ fn build_ui(
 /// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
 /// `--all-motions`, all of them.
 /// Also takes `--anime`, `--no-textures`, `--mesh-only`, `--wind`, `--bounce <scale>`, `--motion-id <id>` and
-/// `--frame <frame>`, which holds the motion on that frame.
+/// `--frame <frame>`, which holds the motion on that frame, and for DOAX3 `--face <n>`, an
+/// expression.
 fn load_from_arguments(app: &mut App) {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--install-icon") {
@@ -557,6 +558,11 @@ fn load_from_arguments(app: &mut App) {
     }
     if let Some(height) = float(4) {
         app.camera.target.y = height;
+    }
+    // DOAX3: `--face N` shows the face's expression N - 1 (0 is the rest face).
+    if let Some(face) = value_of("--face") {
+        app.char_panel.selected_face = face.min(app.char_panel.face_count);
+        app.update_doa3_pose();
     }
     if let Some(frame) = value_of("--frame") {
         app.anim_panel.playing = false;
