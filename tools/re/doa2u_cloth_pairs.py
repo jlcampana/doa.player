@@ -81,6 +81,11 @@ def main():
                         print('vertices', *struct.unpack('<%df' % (len(x[3]) // 4), x[3]), file=o)
                         print('before', k, *struct.unpack('<%df' % (r[3] // 4), before[1]), file=o)
                         print('after', k, *struct.unpack('<%df' % (r[3] // 4), x[1]), file=o)
+                        # The global byte at 0x8783C9 (when set, sub_00051F20 skips every
+                        # sheet's step and vertex writes) and each fighter's soft body byte +0
+                        # (bit 2 selects sub_00051110), to tell the coat's odd frames apart.
+                        flags = [g.r(0x8783C9, 1)[0]] + [g.r(0x80B7A8 + f * 0xF994, 1)[0] for f in range(2)]
+                        print('flags', k, *flags, file=o)
                         count += 1
                     last = (x, time.time())
             print('record', k, 'pairs', count)

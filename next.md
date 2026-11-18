@@ -19,7 +19,11 @@ documentado lo que no se pueda hacer sin el juego) antes de pasar al siguiente.
    una captura en `target/captures/doa3_hitomi_tubes.bin`), y después lo demás de ese punto:
    otros objetivos de la cara, viento real del escenario, normales de los vértices, secciones
    0xFA, defectos visuales (bandas del antebrazo de Tina, objeto de la barbilla de Zack).
-4. **DOA2U, punto 3 de "Next steps"**: el error que queda en los cuerpos blandos (abrigo de
+4. ~~**DOA2U, punto 3**~~ Lo que se puede sin el juego, hecho el 2026-11-18: el juego se salta el
+   paso de las telas mientras su byte global 0x8783C9 está activo (congelación), y la marca de
+   «primer fotograma» no explica el abrigo. Falta una captura con ese byte (`humano.md`); los
+   hombros y las tiras de la cabeza también necesitan capturas nuevas.
+   **DOA2U, punto 3 de "Next steps"**: el error que queda en los cuerpos blandos (abrigo de
    Helena al ser lanzada o golpeada, hombros hasta 2,6 cm, tiras de la cabeza y capa de `tin09`).
 5. **DOAX, punto 1**: formas intermedias de las manos, giro del brazo, luces por escenario.
 6. **Todo lo que se pueda**, por este orden de juegos:

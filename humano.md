@@ -14,6 +14,14 @@ Las herramientas leen la memoria del juego sin escribir nada.
   del asalto. Hay que tenerla en pantalla mientras capturo.
 - [ ] **Manos fotograma a fotograma** contra los guiones de movimiento: un luchador haciendo
   movimientos mientras capturo.
+- [ ] **El abrigo de Helena al ser lanzada** (último error de las telas): Helena `hel00` en
+  entrenamiento contra cualquiera que la lance, mientras capturo con
+  `tools/re/doa2u_cloth_pairs.py` (ahora guarda también el byte de congelación del juego por
+  fotograma). Con eso sabré si el juego congela la tela en esos fotogramas.
+- [ ] **Los hombros de `kas00`** (hasta 2,6 cm): Kasumi `kas00` en pantalla, quieta y moviéndose,
+  para una captura de vértices nueva.
+- [ ] **Las tiras de la cabeza (`lei00`, `lei04`) y la capa de `tin09`**: solo encajan con 1 par por
+  hoja; una captura nueva con Lei Fang y Tina en pantalla lo confirmaría.
 - [ ] **Comparar la iluminación** con capturas del juego en `zac01`, `tin09` y `lei03`, cuando
   esté hecha la iluminación que falta.
 

@@ -1018,7 +1018,24 @@ mod tests {
                     let phase = (record * 3) & 7;
                     let index = (head as i64 - phase as i64 - 1).rem_euclid(64) as usize * 4;
                     let wind = Vec3::new(ring[index], ring[index + 1], ring[index + 2]);
+                    // The same pair run as a first frame (`settle`, the per-sheet path the game
+                    // takes when bit 2 of the fighter's soft body byte is set), to compare.
+                    let mut first = cloth.clone();
+                    first.ready = false;
+                    first.step(&nodes[fighter], Vec3::ZERO);
                     cloth.step(&nodes[fighter], if use_wind { wind } else { Vec3::ZERO });
+                    if std::env::var("DOA2U_FIRST_FRAME").is_ok() {
+                        let mean = |list: &[ClothParticle]| list.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).sum::<f32>() / after.len() as f32 * 1000.0;
+                        let moved = before.iter().zip(&after).map(|(a, b)| (a.position - b.position).length()).sum::<f32>() / after.len() as f32 * 1000.0;
+                        let rows = cloth.rows + 1;
+                        let (mut roots_moved, mut others_moved, mut others_kept) = (0.0f32, 0.0f32, 0.0f32);
+                        for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+                            let d = (a.position - b.position).length() * 1000.0;
+                            if i % rows == 0 { roots_moved = roots_moved.max(d) } else { others_moved = others_moved.max(d); others_kept = others_kept.max((a.velocity - b.velocity).length() * 1000.0) }
+                        }
+                        let no_step = moved;
+                        println!("pair record {k}: step {:.2} mm, no step {no_step:.2} mm, first frame {:.2} mm; game: roots moved up to {roots_moved:.2} mm, others up to {others_moved:.2} mm, velocity changed up to {others_kept:.3} mm", mean(&cloth.particles), mean(&first.particles));
+                    }
                     // The vertices this sheet writes, from the game's own particles.
                     let stepped: Vec<ClothParticle> = cloth.particles().to_vec();
                     cloth.particles_mut().copy_from_slice(&after);
