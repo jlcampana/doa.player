@@ -716,6 +716,10 @@ pub struct DoaxPose {
     hands: Vec<(u16, crate::formats::doa3_morphs::PoseHand, usize)>,
     /// The chest's shapes and those of pieces that follow it, with their pieces.
     chest_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)>,
+    /// The sideways and forward sway (the viewer's stand-in, `chest_sway`) of the chest sets on
+    /// pieces that follow the chest node, with their pieces, and its spring.
+    chest_sways: Vec<(crate::formats::chest_sway::SwaySet, usize)>,
+    sway: crate::formats::chest_sway::ChestSway,
     chest_spring: Option<doa3::ChestSpring>,
     /// Game frames the spring has run.
     chest_frame: u64,
@@ -2048,7 +2052,7 @@ impl App {
         self.doa3_pose = None;
         self.doax_pose = Some(DoaxPose {
             rows, files, motions, playing: None, events, shared_events, shared_files, pose_shapes, hands,
-            chest_sets, chest_spring: None, chest_frame: 0,
+            chest_sets, chest_spring: None, chest_frame: 0, chest_sways: Vec::new(), sway: Default::default(),
         });
         self.current_animations = animations;
         self.anim_panel.selected_anim_idx = None;
@@ -2056,6 +2060,27 @@ impl App {
         Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOAX".to_string(), display_name.clone(), stem.clone()));
         self.mesh.set_lights(Some(self.current_stage_lights()));
         self.export_source = crate::export::ExportModel::new(&inputs, &textures);
+        // Every set: the body's chest piece is on node 0 (the spring's frame), the upper arms'
+        // on 30 and 31 and a suit's chest piece on 23 (Tina's `mdAy00tn`); their axes are the
+        // chest's brought into their node by the rest pose.
+        let sways: Vec<(crate::formats::chest_sway::SwaySet, usize)> = self
+            .doax_pose
+            .as_ref()
+            .map(|pose| {
+                let rest = doax::rest_pose(&pose.rows);
+                pose.chest_sets
+                    .iter()
+                    .filter_map(|(set, piece)| {
+                        let node = self.export_source.pieces.get(*piece)?.node;
+                        let turn = glam::Mat3::from_mat4(rest.get(node)?.inverse() * rest[0]);
+                        Some((crate::formats::chest_sway::SwaySet::from_set_in(set, turn)?, *piece))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(pose) = self.doax_pose.as_mut() {
+            pose.chest_sways = sways;
+        }
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
@@ -3030,6 +3055,9 @@ impl App {
                 .map(|(_, hand, piece)| ExportHand { piece: *piece, hand })
                 .chain(pose.chest_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set }))
                 .collect();
+            // The sway's sets after them: per chest piece, sideways then forward.
+            let sway_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)> = pose.chest_sways.iter().flat_map(|(set, piece)| set.export_sets().into_iter().map(move |s| (s, *piece))).collect();
+            let hands: Vec<ExportHand> = hands.into_iter().chain(sway_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set })).collect();
             let bounce = self.bg_panel.bounce_scale;
             let chosen: Vec<usize> = if all_motions {
                 (0..pose.motions.len()).collect()
@@ -3048,6 +3076,7 @@ impl App {
                 let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
                 // The spring starts at rest on the motion's first frame and steps once a frame.
                 let mut spring: Option<doa3::ChestSpring> = None;
+                let mut sway = crate::formats::chest_sway::ChestSway::new();
                 for frame in 0..motion.frames {
                     let values = doax::eval_motion(&pose.files[file], &motion, frame as f32)?;
                     let nodes = doax::solve_pose(&values, &pose.rows);
@@ -3058,6 +3087,13 @@ impl App {
                         spring.step(&nodes[0]);
                         let (shape, weight) = doax::chest_weight(spring.value * bounce);
                         states.extend(pose.chest_sets.iter().map(|_| (0, shape, weight)));
+                    }
+                    if !pose.chest_sways.is_empty() {
+                        let value = sway.step(&nodes[0]) * bounce;
+                        for _ in &pose.chest_sways {
+                            states.push(crate::formats::chest_sway::SwaySet::export_state(value.x));
+                            states.push(crate::formats::chest_sway::SwaySet::export_state(value.y));
+                        }
                     }
                     frames.push(nodes.to_vec());
                     hand_frames.push(states);
@@ -3673,6 +3709,7 @@ impl App {
                         // Holding the pose between 60 Hz frames, as for DOA3.
                         while pose.chest_frame < clock {
                             spring.step(&nodes[0]);
+                            pose.sway.step(&nodes[0]);
                             pose.chest_frame += 1;
                         }
                         let (shape, weight) = doax::chest_weight(spring.value * self.bg_panel.bounce_scale);
@@ -3682,6 +3719,10 @@ impl App {
                                 *piece,
                                 set.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))),
                             );
+                        }
+                        let value = pose.sway.value * self.bg_panel.bounce_scale;
+                        for (set, piece) in &pose.chest_sways {
+                            self.mesh.add_rest_offsets(*piece, set.offsets(value));
                         }
                     }
                     self.mesh.apply_pose(&self.ctx.queue, &nodes);

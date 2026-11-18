@@ -76,6 +76,13 @@ impl SwaySet {
     /// From a set whose shape 0 is the rest and the others are the vertical extremes: each
     /// group's mask is its largest move over those shapes, over the largest of all groups.
     pub fn from_set(set: &PoseHand) -> Option<Self> {
+        Self::from_set_in(set, glam::Mat3::IDENTITY)
+    }
+
+    /// The same for a set on a piece of another node: `chest_to_piece` turns the chest node's
+    /// axes into the piece's (from the rest pose), so a suit's chest piece or an upper arm's
+    /// flesh moves with the chest.
+    pub fn from_set_in(set: &PoseHand, chest_to_piece: glam::Mat3) -> Option<Self> {
         let rest = set.shapes.first()?;
         let moves: Vec<f32> = (0..rest.len())
             .map(|g| set.shapes.iter().skip(1).map(|s| (Vec3::from(s[g]) - Vec3::from(rest[g])).length()).fold(0.0, f32::max))
@@ -85,8 +92,9 @@ impl SwaySet {
             return None;
         }
         let reach = largest * REACH;
-        let side = moves.iter().map(|m| Vec3::X * (m / largest) * reach).collect();
-        let forward = moves.iter().map(|m| Vec3::Z * (m / largest) * reach).collect();
+        let (x, z) = (chest_to_piece * Vec3::X, chest_to_piece * Vec3::Z);
+        let side = moves.iter().map(|m| x * (m / largest) * reach).collect();
+        let forward = moves.iter().map(|m| z * (m / largest) * reach).collect();
         Some(Self { vertices: set.vertices.clone(), base: rest.iter().map(|&p| Vec3::from(p)).collect(), side, forward })
     }
 
