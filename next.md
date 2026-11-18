@@ -12,7 +12,10 @@ documentado lo que no se pueda hacer sin el juego) antes de pasar al siguiente.
    tu opinión (`humano.md`).
    **Sombreado anime** (`cel_shaded`, `vs_outline` en `src/renderer/mesh.rs`): trabajarlo más, en
    la línea de Fire Emblem que pidió el usuario.
-3. **DOA3, punto 2 del backlog**: el modo 1 de los tubos (`sub_00044620` y cuatro auxiliares; hay
+3. **En curso.** Modo 1 de los tubos: leído el contrato de `sub_00045080` y lo que hace cada parte
+   (`docs/doa3-internals.md`, "Tubes"); el código original compila aparte para comparar
+   (`tools/re/doa3_tube_ring_build.sh`). Falta el arnés y el port (unas 1300 líneas de x87).
+   **DOA3, punto 2 del backlog**: el modo 1 de los tubos (`sub_00044620` y cuatro auxiliares; hay
    una captura en `target/captures/doa3_hitomi_tubes.bin`), y después lo demás de ese punto:
    otros objetivos de la cara, viento real del escenario, normales de los vértices, secciones
    0xFA, defectos visuales (bandas del antebrazo de Tina, objeto de la barbilla de Zack).
