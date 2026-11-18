@@ -550,6 +550,7 @@ fn load_from_arguments(app: &mut App) {
         std::process::exit(0);
     }
     app.anim_panel.wind = args.iter().any(|a| a == "--wind");
+    app.anim_panel.physics = !args.iter().any(|a| a == "--no-physics");
     let float = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok());
     if let Some(yaw) = float(2) {
         app.camera.yaw = yaw.to_radians();

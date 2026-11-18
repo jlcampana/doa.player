@@ -231,6 +231,68 @@ impl Motion {
 mod tests {
     use super::*;
 
+    /// Runs the hair stand-in over a motion, printing how far the physical nodes stray.
+    /// `DOAX3_MOTION=14 cargo test spring_bones_over_a_motion -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn spring_bones_over_a_motion() {
+        use super::super::doax3::{self, Archives};
+        let archives = Archives::open(&doax3::game_dir()).unwrap();
+        let read = |tmc: &str| doax3::parse_model(&archives.read(tmc).unwrap(), &archives.read(&doax3::tmcl_path(tmc)).unwrap()).unwrap();
+        let names: Vec<String> = archives.names().map(str::to_string).collect();
+        let code = std::env::var("DOAX3_CHAR").unwrap_or("KAS".into());
+        let mut body = read(&doax3::costumes(&names, &code)[0]);
+        doax3::place_objects(&mut body, Mat4::IDENTITY, |_| Mat4::IDENTITY);
+        let mut hair = read(&doax3::hairstyles(&names, &code)[0]);
+        doax3::place_on(&body, &mut hair).unwrap();
+        let file = parse_mpm(&archives.read(&format!("00/character/{code}/animation/{code}_INGAME_MPM.mpm")).unwrap()).unwrap();
+        let index: usize = std::env::var("DOAX3_MOTION").ok().and_then(|v| v.parse().ok()).unwrap_or(14);
+        let motion = &file.motions[index];
+        let mut spring = SpringBones::new(&hair, true).unwrap();
+        let hold: Option<usize> = std::env::var("DOAX3_HOLD").ok().and_then(|v| v.parse().ok());
+        for step in 0..motion.frames.min(600) {
+            let frame = hold.unwrap_or(step);
+            let body_posed = pose_nodes(&body.nodes, |_| None, |i| body_bone(&body.nodes[i].name).map(|b| motion.local(b, frame as f32)));
+            let head = body.nodes.iter().position(|n| n.name == "MOT01_Head").unwrap();
+            let animated = pose_nodes(&hair.nodes, |i| (hair.nodes[i].name == "MOT01_Head").then(|| body_posed[head]), |_| None);
+            let at = |name: &str, offset: Vec3, r: f32| (body_posed[body.nodes.iter().position(|n| n.name == name).unwrap()].transform_point3(offset), r);
+            let colliders = [at("MOT01_Head", Vec3::new(0.0, 0.07, 0.0), 0.095), at("MOT15_Neck", Vec3::ZERO, 0.06), at("MOT02_Chest", Vec3::new(0.0, 0.08, 0.0), 0.12)];
+            let out = spring.step(&hair, &animated, &colliders);
+            let worst = out.iter().map(|(n, m)| (m.w_axis.truncate() - animated[*n].w_axis.truncate()).length()).fold(0.0f32, f32::max);
+            let turn = out
+                .iter()
+                .map(|(n, m)| {
+                    let a = animated[*n].to_scale_rotation_translation().1.normalize();
+                    let b = m.to_scale_rotation_translation().1.normalize();
+                    (a.angle_between(b).to_degrees(), *n)
+                })
+                .fold((0.0f32, 0), |x, y| if y.0 > x.0 { y } else { x });
+            if step % 40 == 0 {
+                let fin = pose_nodes(&hair.nodes, |i| out.iter().find(|(n, _)| *n == i).map(|(_, m)| *m).or_else(|| (hair.nodes[i].name == "MOT01_Head").then(|| body_posed[head])), |_| None);
+                let (dev, at) = fin.iter().zip(&animated).enumerate().map(|(i, (f, a))| ((f.w_axis - a.w_axis).truncate().length(), i)).fold((0.0f32, 0), |x, y| if y.0 > x.0 { y } else { x });
+                println!("  final: worst place {dev:.3} on {}", hair.nodes[at].name);
+                let change = |g: &[Mat4]| -> Vec<Mat4> { g.iter().zip(&hair.nodes).map(|(p, n)| *p * n.global.inverse()).collect() };
+                let (cf, ca) = (change(&fin), change(&animated));
+                let mut worst = (0.0f32, 0usize, 0usize);
+                for (pi, skins) in hair.skins.iter().enumerate() {
+                    if skins.is_empty() || !hair.drawn(pi) { continue; }
+                    let a = skin(&hair.pieces[pi].vertices, skins, &ca);
+                    let b = skin(&hair.pieces[pi].vertices, skins, &cf);
+                    for (v, ((pa, _), (pb, _))) in a.iter().zip(&b).enumerate() {
+                        let d = (*pa - *pb).length();
+                        if d > worst.0 { worst = (d, pi, v); }
+                    }
+                }
+                let s = &hair.skins[worst.1][worst.2];
+                println!("  vertices: worst {:.3} m, piece {} vertex {}, nodes {:?}", worst.0, worst.1, worst.2, s.iter().filter(|x| x.1 > 0.0).map(|(n, w)| (hair.nodes[*n as usize].name.clone(), *w)).collect::<Vec<_>>());
+                println!("  worst turn {:.1} degrees on {}", turn.0, hair.nodes[turn.1].name);
+            }
+            if step % 20 == 0 || worst > 0.5 {
+                println!("step {step} frame {frame}: worst {worst:.3} m over {} nodes", out.len());
+            }
+        }
+    }
+
     /// The stand-in spring lags a moving node, stays within its limit and settles.
     #[test]
     fn jiggle_lags_and_settles() {
@@ -388,5 +450,136 @@ impl Jiggle {
     pub fn reset(&mut self) {
         self.started = false;
         self.velocity = Vec3::ZERO;
+    }
+}
+
+/// The viewer's stand-in for DOAX3's hair and accessory physics (`ACSCLS`, whose parameters are
+/// not read): every node the file lists as physical becomes a particle that follows its
+/// animated place with some stiffness, keeps its rest distance to its parent, falls a little,
+/// and stays out of the colliders; parents with one physical child turn toward it. Stepped at
+/// 60 Hz. Not the game's model, and not exported.
+#[derive(Debug, Clone)]
+pub struct SpringBones {
+    /// Physical nodes, parents before children.
+    nodes: Vec<usize>,
+    current: Vec<Vec3>,
+    previous: Vec<Vec3>,
+    started: bool,
+    /// Whether colliders apply (hair) or not (a suit's strings).
+    pub collide: bool,
+}
+
+impl SpringBones {
+    const STIFFNESS: f32 = 0.08;
+    const DRAG: f32 = 0.2;
+    /// Metres a frame squared: real gravity at 60 Hz. Against the stiffness, a 3 cm segment
+    /// the animation holds level sags by about 48°; one that hangs is not moved.
+    const GRAVITY: f32 = 9.8 / 3600.0;
+    const MIN_AIM_LENGTH: f32 = 0.03;
+    const MAX_STRAY: f32 = 0.12;
+    const MAX_AIM: f32 = 40.0 * std::f32::consts::PI / 180.0;
+
+    pub fn new(model: &super::doax3::Model, collide: bool) -> Option<Self> {
+        if model.dynamic.is_empty() {
+            return None;
+        }
+        let depth = |mut i: usize| {
+            let mut d = 0;
+            while let Some(p) = model.nodes[i].parent.filter(|_| d < 512) {
+                i = p;
+                d += 1;
+            }
+            d
+        };
+        let mut nodes: Vec<usize> = model.dynamic.iter().copied().filter(|&n| model.nodes[n].parent.is_some()).collect();
+        nodes.sort_by_key(|&n| depth(n));
+        let n = nodes.len();
+        Some(Self { nodes, current: vec![Vec3::ZERO; n], previous: vec![Vec3::ZERO; n], started: false, collide })
+    }
+
+    pub fn reset(&mut self) {
+        self.started = false;
+    }
+
+    /// One frame. `animated` holds the model's posed globals without physics; colliders are
+    /// spheres (centre, radius). Gives the simulated globals of the physical nodes and of the
+    /// parents turned toward them.
+    pub fn step(&mut self, model: &super::doax3::Model, animated: &[Mat4], colliders: &[(Vec3, f32)]) -> Vec<(usize, Mat4)> {
+        let nodes = &model.nodes;
+        let mut result: Vec<Mat4> = animated.to_vec();
+        let index: std::collections::HashMap<usize, usize> = self.nodes.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+        let child_count = |p: usize| self.nodes.iter().filter(|&&n| nodes[n].parent == Some(p)).count();
+        let mut touched: Vec<usize> = Vec::new();
+        for (i, &n) in self.nodes.iter().enumerate() {
+            let Some(p) = nodes[n].parent else { continue };
+            let rest_local = nodes[p].global.inverse() * nodes[n].global;
+            let parent_now = result[p];
+            // The animated offset from the parent, from where the parent is now: the hair keeps
+            // its animated shape and only lags. (Taken through the parent's turned frame
+            // instead, the chain had nothing pulling it back and swung like a loose rope,
+            // tips 0.5 m off.)
+            let target = parent_now.w_axis.truncate() + (animated[n].w_axis.truncate() - animated[p].w_axis.truncate());
+            if !self.started {
+                self.current[i] = target;
+                self.previous[i] = target;
+            }
+            let x = self.current[i];
+            let velocity = (x - self.previous[i]) * (1.0 - Self::DRAG);
+            let mut next = x + velocity + (target - x) * Self::STIFFNESS - Vec3::Y * Self::GRAVITY;
+            // Never further than MAX_STRAY from the target, losing the speed past it: a jump
+            // in the motion (frame 0 to 200) otherwise left tips 0.8 m off for seconds.
+            let stray = next - target;
+            if stray.length() > Self::MAX_STRAY {
+                next = target + stray.normalize() * Self::MAX_STRAY;
+                self.previous[i] = next;
+            }
+            let anchor = parent_now.w_axis.truncate();
+            let length = rest_local.w_axis.truncate().length();
+            let keep = |point: Vec3| anchor + (point - anchor).normalize_or(target - anchor) * length;
+            next = keep(next);
+            if self.collide {
+                for &(centre, radius) in colliders {
+                    // Never wider than where the animated place puts the node: hair near the
+                    // scalp lies inside the spheres at rest and would otherwise be pushed out.
+                    let radius = radius.min((target - centre).length());
+                    let away = next - centre;
+                    if away.length() < radius {
+                        next = keep(centre + away.normalize_or(Vec3::Y) * radius);
+                    }
+                }
+            }
+            if (next - target).length() < Self::MAX_STRAY {
+                self.previous[i] = x;
+            }
+            self.current[i] = next;
+            // Turn a parent with this one physical child toward it; the child takes the
+            // parent's turned frame with its rest local rotation.
+            // Only over segments of 3 cm or more, and by 40° at most: on short ones a centimetre
+            // off turned the bone by over 100° and twisted the strands' vertices.
+            if child_count(p) == 1 && length > Self::MIN_AIM_LENGTH {
+                let (scale, rotation, translation) = parent_now.to_scale_rotation_translation();
+                // From where the parent's present frame puts the child (it already carries the
+                // turns of the nodes above), not from the animated place, which counted them twice.
+                let from = ((parent_now * rest_local).w_axis.truncate() - anchor).normalize_or_zero();
+                let to = (next - anchor).normalize_or_zero();
+                if from != Vec3::ZERO && to != Vec3::ZERO {
+                    let arc = Quat::from_rotation_arc(from, to);
+                    let (axis, angle) = arc.to_axis_angle();
+                    let arc = Quat::from_axis_angle(axis, angle.min(Self::MAX_AIM));
+                    let turned = arc * rotation;
+                    result[p] = Mat4::from_scale_rotation_translation(scale, turned, translation);
+                    if index.contains_key(&p) || !touched.contains(&p) {
+                        touched.push(p);
+                    }
+                }
+            }
+            let (scale, rotation, _) = (result[p] * rest_local).to_scale_rotation_translation();
+            result[n] = Mat4::from_scale_rotation_translation(scale, rotation, next);
+            touched.push(n);
+        }
+        self.started = true;
+        touched.sort_unstable();
+        touched.dedup();
+        touched.into_iter().map(|n| (n, result[n])).collect()
     }
 }

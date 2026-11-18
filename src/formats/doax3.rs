@@ -243,6 +243,9 @@ pub struct Model {
     pub skins: Vec<Vec<Skin>>,
     /// Per piece: left out by the chosen variant (`choose_variant`).
     pub hidden: Vec<bool>,
+    /// The nodes the game's physics moves: `ACSCLS` child 2, a sorted list of node numbers
+    /// (hair chains, ribbons, a suit's strings; Kasumi's first hairstyle: 157). Empty without one.
+    pub dynamic: Vec<usize>,
 }
 
 /// A vertex's influences: node numbers and weights; unused slots have weight 0.
@@ -745,7 +748,23 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
     }
     let texture_count = texture_files(tmc, tmcl).map_or(0, |t| t.len());
     let hidden = vec![false; pieces.len()];
-    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals, skins, hidden })
+    // `ACSCLS` (physics): child 0 holds groups (Kasumi's `hair_02`: 7, the first a set of 22
+    // points around the head with 7 variants, collision probably), child 2 the node list.
+    // Only the list is read.
+    let dynamic = match by_name.get("ACSCLS") {
+        Some(acs) => match acs.children.get(2).filter(|&&c| c != 0) {
+            Some(&list) => {
+                let count = u32_at(tmc, list + 0x14)? as usize;
+                let table = u32_at(tmc, list + 0x20)? as usize;
+                ensure!(count < 4096, "ACSCLS list of {count}");
+                let nodes_listed: Vec<usize> = (0..count).map(|i| u32_at(tmc, list + table + i * 4).map(|v| v as usize)).collect::<Result<_>>()?;
+                nodes_listed.into_iter().filter(|&n| n < nodes.len()).collect()
+            }
+            None => Vec::new(),
+        },
+        None => Vec::new(),
+    };
+    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals, skins, hidden, dynamic })
 }
 
 /// The node named after an object. Object names longer than 15 characters are cut from the

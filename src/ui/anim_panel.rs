@@ -8,6 +8,8 @@ pub struct AnimPanel {
     pub speed: f32,
     pub reset_requested: bool,
     pub wind: bool,
+    /// DOAX3: the viewer's stand-in physics for hair and accessories.
+    pub physics: bool,
     /// Multiplies the wind's force; 1 is what the game's stages use.
     pub wind_scale: f32,
     filter: String,
@@ -23,6 +25,7 @@ impl AnimPanel {
             speed: 1.0,
             reset_requested: false,
             wind: false,
+            physics: true,
             wind_scale: 1.0,
             filter: String::new(),
         }
@@ -59,6 +62,7 @@ impl AnimPanel {
                     }
                     ui.checkbox(&mut self.loop_anim, "Loop");
                     ui.checkbox(&mut self.wind, "Wind");
+                    ui.checkbox(&mut self.physics, "Physics").on_hover_text("DOAX3: the viewer's own stand-in for hair and accessory physics, not the game's");
                 });
 
                 ui.horizontal(|ui| {

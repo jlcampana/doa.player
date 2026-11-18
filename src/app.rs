@@ -592,21 +592,28 @@ struct Doax3Pose {
     /// The chest's stand-in springs and the game frame they last stepped on.
     jiggles: Vec<crate::formats::doax3_motion::Jiggle>,
     jiggle_frame: u64,
+    /// Hair and accessory stand-in physics per model, and what it last gave.
+    springs: Vec<Option<crate::formats::doax3_motion::SpringBones>>,
+    sprung: Vec<Vec<(usize, glam::Mat4)>>,
+    /// The motion frame the physics last stepped at.
+    sim_time: Option<f32>,
 }
 
 impl Doax3Pose {
     /// Every model's posed node globals: the body from `motion` at `frame` (or at rest),
     /// parts following the body's nodes of the same name, the face's bones from `expression`.
     fn posed(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>) -> Vec<Vec<glam::Mat4>> {
-        self.posed_with(motion, frame, expression, &[])
+        self.posed_with(motion, frame, expression, &[], &[])
     }
 
     /// The same, with body nodes moved by world offsets (the chest's springs).
-    fn posed_with(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>, offsets: &[(usize, glam::Vec3, glam::Mat4)]) -> Vec<Vec<glam::Mat4>> {
+    /// `fixed`, per model, holds globals that override the solve (the physics' results).
+    fn posed_with(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>, offsets: &[(usize, glam::Vec3, glam::Mat4)], fixed: &[Vec<(usize, glam::Mat4)>]) -> Vec<Vec<glam::Mat4>> {
         use crate::formats::doax3_motion as m;
         let body = &self.models[0];
         let bones = self.motions.bones;
-        let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| {
+        let fixed_of = |k: usize, i: usize| fixed.get(k).and_then(|list| list.iter().find(|(n, _)| *n == i)).map(|(_, m)| *m);
+        let body_posed = m::pose_nodes(&body.nodes, |i| fixed_of(0, i), |i| {
             if let Some(&(_, offset, parent_posed)) = offsets.iter().find(|o| o.0 == i) {
                 // The rest local, moved by the offset brought into the parent's frame.
                 let parent = body.nodes[i].parent?;
@@ -621,7 +628,7 @@ impl Doax3Pose {
             let face_bones = if k == 1 { self.face_bones.as_slice() } else { &[] };
             let posed = m::pose_nodes(
                 &model.nodes,
-                |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| out[0][b]),
+                |i| fixed_of(k, i).or_else(|| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| out[0][b])),
                 |i| expression.and_then(|e| face_bones.get(i).copied().flatten().map(|b| e.local(b, 0.0))),
             );
             out.push(posed);
@@ -1877,7 +1884,10 @@ impl App {
             .filter_map(|name| models[0].nodes.iter().position(|n| n.name == *name))
             .map(crate::formats::doax3_motion::Jiggle::new)
             .collect();
-        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None, faces, face_bones, lift: -lowest, shown: None, jiggles, jiggle_frame: 0 });
+        // Stand-in physics: hair collides with the head and chest, a suit's strings do not.
+        let springs: Vec<Option<crate::formats::doax3_motion::SpringBones>> = models.iter().enumerate().map(|(k, m)| crate::formats::doax3_motion::SpringBones::new(m, k >= 2)).collect();
+        let sprung = vec![Vec::new(); models.len()];
+        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None, faces, face_bones, lift: -lowest, shown: None, jiggles, jiggle_frame: 0, springs, sprung, sim_time: None });
         Ok(format!("DOAX3: {display_name} - {label}, {count} pieces, {} textures, {motion_count} motions", textures.len()))
     }
 
@@ -3366,17 +3376,18 @@ impl App {
             let clock = self.game_clock as u64;
             let bounce = self.bg_panel.bounce_scale;
             let springing = pose.playing.is_some() && bounce > 0.0 && !pose.jiggles.is_empty();
-            if pose.shown == Some(key) && (!springing || clock == pose.jiggle_frame) {
+            let physics = self.anim_panel.physics && pose.springs.iter().any(Option::is_some);
+            if pose.shown == Some(key) && (!(springing || physics) || clock == pose.jiggle_frame) {
                 return;
             }
             pose.shown = Some(key);
             let motion = pose.playing.and_then(|i| pose.motions.motions.get(i));
             let expression = face.checked_sub(1).and_then(|f| pose.faces.as_ref()?.motions.get(f));
             let mut offsets = Vec::new();
+            let steps = clock.saturating_sub(pose.jiggle_frame).clamp(1, MAX_CHAIN_CATCH_UP);
+            pose.jiggle_frame = clock;
             if springing {
                 let plain = pose.posed(motion, self.anim_time, expression);
-                let steps = clock.saturating_sub(pose.jiggle_frame).clamp(1, MAX_CHAIN_CATCH_UP);
-                pose.jiggle_frame = clock;
                 for jiggle in &mut pose.jiggles {
                     let target = plain[0][jiggle.node].w_axis.truncate();
                     let mut offset = jiggle.offset(target);
@@ -3389,8 +3400,43 @@ impl App {
             } else {
                 pose.jiggles.iter_mut().for_each(|j| j.reset());
             }
+            // A jump in the motion (a frame picked, a loop's wrap) starts the physics afresh.
+            if pose.sim_time.is_some_and(|t| (t - self.anim_time).abs() > 2.0) {
+                pose.springs.iter_mut().flatten().for_each(|s| s.reset());
+            }
+            pose.sim_time = Some(self.anim_time);
+            if physics {
+                let animated = pose.posed_with(motion, self.anim_time, expression, &offsets, &[]);
+                // Colliders on the body: the head and the chest, spheres in their nodes' space.
+                let body = &pose.models[0];
+                let at = |name: &str, offset: glam::Vec3, radius: f32| {
+                    body.nodes.iter().position(|n| n.name == name).map(|i| (animated[0][i].transform_point3(offset), radius))
+                };
+                let colliders: Vec<(glam::Vec3, f32)> = [
+                    at("MOT01_Head", glam::Vec3::new(0.0, 0.07, 0.0), 0.095),
+                    at("MOT15_Neck", glam::Vec3::ZERO, 0.06),
+                    at("MOT02_Chest", glam::Vec3::new(0.0, 0.08, 0.0), 0.12),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let mut sprung = Vec::new();
+                for (k, spring) in pose.springs.iter_mut().enumerate() {
+                    let mut out = Vec::new();
+                    if let Some(spring) = spring {
+                        for _ in 0..steps {
+                            out = spring.step(&pose.models[k], &animated[k], &colliders);
+                        }
+                    }
+                    sprung.push(out);
+                }
+                pose.sprung = sprung;
+            } else {
+                pose.springs.iter_mut().flatten().for_each(|s| s.reset());
+                pose.sprung.iter_mut().for_each(Vec::clear);
+            }
             let changes: Vec<Vec<glam::Mat4>> = pose
-                .posed_with(motion, self.anim_time, expression, &offsets)
+                .posed_with(motion, self.anim_time, expression, &offsets, &pose.sprung)
                 .iter()
                 .zip(&pose.models)
                 .map(|(posed, model)| posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect())
