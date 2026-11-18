@@ -508,7 +508,10 @@ fn load_from_arguments(app: &mut App) {
         app.bg_panel.bounce_scale = scale;
     }
     app.load_character(index, number(0));
-    app.select_motion(number(1));
+    // A `-` for the motion leaves the costume at rest (DOAX3 has no default motion).
+    if rest.get(1).map(String::as_str) != Some("-") {
+        app.select_motion(number(1));
+    }
     let value_of = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)?.parse::<usize>().ok());
     if let Some(id) = value_of("--motion-id") {
         if let Some(index) = app.current_animations.iter().position(|a| a.doa3_motion_id == id) {
