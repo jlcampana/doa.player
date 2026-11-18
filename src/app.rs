@@ -502,6 +502,7 @@ impl Doa4Pose {
             wind: self.wind.clone(),
             chain_frame: self.chain_frame,
             chest_spring: self.chest.as_ref().and_then(|c| c.2),
+            sway: self.sway,
         }
     }
 
@@ -510,12 +511,14 @@ impl Doa4Pose {
         if let Some(chest) = &mut self.chest {
             chest.2 = soft.chest_spring;
         }
+        self.sway = soft.sway;
     }
 }
 
 /// DOA4's soft bodies, as stepped each frame: kept as loaded for exporting a motion.
 #[derive(Clone)]
 struct Doa4Soft {
+    sway: crate::formats::chest_sway::ChestSway,
     chains: Vec<(SoftChain, Vec<Vec<(usize, usize)>>)>,
     springs: Vec<(SoftSprings, Vec<(usize, usize)>)>,
     cloth: Vec<(SoftCloth, Vec<(usize, usize)>)>,
@@ -545,6 +548,11 @@ struct Doa4Pose {
     /// The chest's shapes (`doa4::chest_shapes`) with the pieces that draw them, and DOA3's
     /// chest spring driving them, the viewer's stand-in.
     chest: Option<(Vec<(usize, usize)>, crate::formats::doa3_morphs::PoseHand, Option<ChestSpring>)>,
+    /// The chest's sideways and forward sway (the viewer's stand-in, `chest_sway`): per chest
+    /// piece its shapes, with axes brought from the chest bone into the piece's node on the
+    /// first frame, and the spring.
+    sways: Vec<(crate::formats::chest_sway::SwaySet, usize)>,
+    sway: crate::formats::chest_sway::ChestSway,
     /// Objects worn on bones (kinds 0 and 3): piece, node, the draw, the object's vertices.
     worn: Vec<(usize, usize, crate::formats::doa4::WornDraw, Vec<crate::formats::model::ModelVertex>)>,
     /// Points on springs, each with the mesh pieces that draw its object and their nodes.
@@ -1734,7 +1742,7 @@ impl App {
                     }
                 }
                 log::info!("DOA4 springs: {} in use, cloth sheets: {} ({} rooted on vertices)", springs.len(), cloth.len(), cloth.iter().filter(|(s, _)| s.has_vertex_roots()).count());
-                pose = Some(Doa4Pose { soft_at_load: Doa4Soft { chains: Vec::new(), springs: Vec::new(), cloth: Vec::new(), hands: Vec::new(), wind: Wind::new(), chain_frame: 0, chest_spring: None }, files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, face_shapes, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone(), chest });
+                pose = Some(Doa4Pose { soft_at_load: Doa4Soft { sway: Default::default(), chains: Vec::new(), springs: Vec::new(), cloth: Vec::new(), hands: Vec::new(), wind: Wind::new(), chain_frame: 0, chest_spring: None }, files, motions, playing: None, skeleton, pieces, chains, springs, cloth, hands, hand_events, face, face_shapes, motion_ids, wind: Wind::new(), chain_frame: 0, placed, worn: worn_pieces, rest_nodes: nodes.clone(), chest, sways: Vec::new(), sway: Default::default() });
                 if let Some(pose) = &mut pose {
                     pose.soft_at_load = pose.soft();
                 }
@@ -2919,6 +2927,9 @@ impl App {
             if let Some((drawn, shapes, _)) = &pose.chest {
                 hands.extend(drawn.iter().map(|&(piece, _)| ExportHand { piece, hand: shapes }));
             }
+            // The sway's sets, sideways then forward per piece, as built in the viewer.
+            let sway_sets: Vec<(crate::formats::doa3_morphs::PoseHand, usize)> = pose.sways.iter().flat_map(|(set, piece)| set.export_sets().into_iter().map(move |s| (s, *piece))).collect();
+            hands.extend(sway_sets.iter().map(|(set, piece)| ExportHand { piece: *piece, hand: set }));
             // The face's eyes and mouth as shape keys, driven per frame by the viewer's
             // stand-in (DOA3's blink and mouth timing from the motion's first frame): what
             // drives them in DOA4 is not read. Keys past the second shape stay at 0.
@@ -2938,6 +2949,7 @@ impl App {
                 let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
                 // The chest's spring starts at rest on the motion's first frame, as in the viewer.
                 let mut spring: Option<ChestSpring> = None;
+                let mut sway = crate::formats::chest_sway::ChestSway::new();
                 for frame in 0..=*length {
                     let values = crate::formats::doa4::eval_motion(&pose.files[*file], tracks, frame as f32)?;
                     let solved = doa3::solve_pose(&values, &pose.skeleton);
@@ -2957,6 +2969,13 @@ impl App {
                     }
                     let mut frame_states: Vec<(usize, usize, f32)> = pose.hands.iter().zip(&states).flat_map(|((_, drawn), state)| drawn.iter().map(move |_| state.state())).collect();
                     frame_states.extend(chest_state.into_iter().flat_map(|state| std::iter::repeat(state).take(chest_pieces)));
+                    if !sway_sets.is_empty() {
+                        let value = sway.step(&solved[0]) * bounce;
+                        for _ in &pose.sways {
+                            frame_states.push(crate::formats::chest_sway::SwaySet::export_state(value.x));
+                            frame_states.push(crate::formats::chest_sway::SwaySet::export_state(value.y));
+                        }
+                    }
                     let (blink, mouth) = FaceMorph::weights(frame as u64);
                     for _ in &face_drawn {
                         // `face_shapes` gives the eyes first, then the mouth.
@@ -3527,6 +3546,7 @@ impl App {
                         pose.wind.step(0.0);
                         if let Some((_, _, spring)) = &mut pose.chest {
                             spring.get_or_insert_with(|| ChestSpring::with_parameters(&solved[0], ChestSpring::DOA3)).step(&solved[0]);
+                            pose.sway.step(&solved[0]);
                         }
                         for (chain, _) in &mut pose.chains {
                             chain.step(&bones, glam::Vec3::ZERO);
@@ -3554,6 +3574,20 @@ impl App {
                         shapes.set_blend(0, if value >= 0.0 { 1 } else { 2 }, value.abs());
                         for &(piece, _) in drawn.iter() {
                             self.mesh.set_rest_positions(piece, shapes.positions().flat_map(|(vertices, value)| vertices.iter().map(move |&vertex| (vertex, glam::Vec3::from(value)))));
+                        }
+                        if pose.sways.is_empty() {
+                            pose.sways = drawn
+                                .iter()
+                                .filter_map(|&(piece, node)| {
+                                    let (bone, place) = *pose.pieces.get(node)?;
+                                    let turn = glam::Mat3::from_mat4((solved[bone] * place).inverse() * solved[0]);
+                                    Some((crate::formats::chest_sway::SwaySet::from_set_in(shapes, turn)?, piece))
+                                })
+                                .collect();
+                        }
+                        let value = pose.sway.value * self.bg_panel.bounce_scale;
+                        for (set, piece) in &pose.sways {
+                            self.mesh.add_rest_offsets(*piece, set.offsets(value));
                         }
                     }
                     for (chain, targets) in &pose.chains {
