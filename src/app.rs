@@ -2864,9 +2864,27 @@ impl App {
             let mut clips = Vec::new();
             for index in chosen {
                 let motion = &pose.motions.motions[index];
+                // The chest's springs (the viewer's stand-in, three axes) start at rest on the
+                // motion's first frame and step once a frame, scaled by Bounce, as in the viewer.
+                let mut jiggles = pose.jiggles.clone();
+                jiggles.iter_mut().for_each(|j| j.reset());
+                let bounce = self.bg_panel.bounce_scale;
                 let frames: Vec<Vec<glam::Mat4>> = (0..motion.frames)
                     .map(|frame| {
-                        let posed = pose.posed(Some(motion), frame as f32, expression);
+                        let plain = pose.posed(Some(motion), frame as f32, expression);
+                        let offsets: Vec<(usize, glam::Vec3, glam::Mat4)> = if bounce > 0.0 {
+                            jiggles
+                                .iter_mut()
+                                .map(|jiggle| {
+                                    let offset = jiggle.step(plain[0][jiggle.node].w_axis.truncate());
+                                    let parent = pose.models[0].nodes[jiggle.node].parent.map_or(glam::Mat4::IDENTITY, |p| plain[0][p]);
+                                    (jiggle.node, offset * bounce, parent)
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let posed = if offsets.is_empty() { plain } else { pose.posed_with(Some(motion), frame as f32, expression, &offsets, &[]) };
                         let mut all = bind.clone();
                         for (model, map) in posed.iter().zip(&maps) {
                             for (i, m) in model.iter().enumerate() {

@@ -3,7 +3,9 @@
 Decidido por el usuario el 2026-11-18. Se sigue en este orden; cada punto se cierra (o se deja
 documentado lo que no se pueda hacer sin el juego) antes de pasar al siguiente.
 
-1. **Rebote del pecho en tres ejes** (vertical, lateral y adelante-atrás), en el visor y en la
+1. ~~**Rebote del pecho en tres ejes**~~ Hecho el 2026-11-18 (ver punto 4 del backlog en
+   `CLAUDE.md`): los ejes lateral y frontal son un sustituto del visor salvo en DOAX2.
+   **Rebote del pecho en tres ejes** (vertical, lateral y adelante-atrás), en el visor y en la
    exportación a Blender, para todos los juegos. Hoy solo DOAX2 tiene los tres ejes (leídos de su
    código); DOA2U, DOA3, DOAX, DOA4 y DOAX3 tienen solo el vertical o un sustituto.
 2. **Sombreado anime** (`cel_shaded`, `vs_outline` en `src/renderer/mesh.rs`): trabajarlo más, en
