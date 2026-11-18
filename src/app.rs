@@ -1662,7 +1662,7 @@ impl App {
 
     /// A DOAX costume: the character's body with a suit, standing in the rest pose.
     /// DOAX3 Fortune at rest: the costume, the face and a hairstyle placed on its head, with
-    /// no textures, materials, skinning or motions yet (see `docs/doax3-notes.md`).
+    /// colour textures but no materials, skinning or motions yet (see `docs/doax3-notes.md`).
     fn try_load_doax3_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
         use crate::formats::doax3;
         use anyhow::Context;
@@ -1676,29 +1676,55 @@ impl App {
         let costume = costumes.get(costume_idx).context("unknown costume")?;
         let hair = hairs.get(self.char_panel.selected_hair_idx.unwrap_or(0)).or(hairs.first()).cloned();
         let archives = self.doax3_archives.as_ref().context("no DOAX3 archives")?;
-        let read = |tmc: &str| -> anyhow::Result<doax3::Model> {
-            doax3::parse_model(&archives.read(tmc)?, &archives.read(&doax3::tmcl_path(tmc))?).with_context(|| tmc.to_string())
+        let files = |tmc: &str| -> anyhow::Result<(Vec<u8>, Vec<u8>)> { Ok((archives.read(tmc)?, archives.read(&doax3::tmcl_path(tmc))?)) };
+        let read = |tmc: &str| -> anyhow::Result<(doax3::Model, (Vec<u8>, Vec<u8>))> {
+            let (a, b) = files(tmc)?;
+            Ok((doax3::parse_model(&a, &b).with_context(|| tmc.to_string())?, (a, b)))
         };
-        let body = read(costume)?;
-        let mut models = vec![body.clone()];
-        let mut face = read(&doax3::face(&code))?;
+        let (body, body_files) = read(costume)?;
+        let mut models = vec![(body.clone(), body_files)];
+        let (mut face, face_files) = read(&doax3::face(&code))?;
         doax3::place_on(&body, &mut face)?;
-        models.push(face);
+        models.push((face, face_files));
         if let Some(hair) = &hair {
-            let mut model = read(hair)?;
+            let (mut model, hair_files) = read(hair)?;
             doax3::place_on(&body, &mut model)?;
-            models.push(model);
+            models.push((model, hair_files));
         }
-        let pieces: Vec<&crate::formats::model::ModelPiece> = models
+        // Each model's colour textures, those its drawn objects use, one list after another.
+        let mut textures: Vec<crate::formats::model::ModelTexture> = Vec::new();
+        let mut first_texture = Vec::new();
+        for (model, (tmc, tmcl)) in &models {
+            let mut wanted = vec![false; model.texture_count];
+            let mut coverage = vec![false; model.texture_count];
+            for (piece, object) in model.pieces.iter().zip(&model.objects).filter(|(_, o)| doax3::drawn_at_rest(o)) {
+                for &t in piece.materials.iter().flat_map(|m| &m.textures) {
+                    if let Some(w) = wanted.get_mut(t) {
+                        *w = true;
+                        coverage[t] |= doax3::alpha_is_coverage(object);
+                    }
+                }
+            }
+            first_texture.push(textures.len());
+            let decoded = doax3::decode_textures(tmc, tmcl, &wanted, &coverage).unwrap_or_else(|e| {
+                log::warn!("DOAX3 {}: textures: {e:#}", model.name);
+                Vec::new()
+            });
+            // Indices past the list fall back to no texture in `base_texture`.
+            textures.extend(decoded.into_iter().chain(std::iter::repeat_with(|| crate::formats::model::ModelTexture { width: 1, height: 1, rgba: vec![255; 4] })).take(model.texture_count));
+        }
+        let models: Vec<doax3::Model> = models.into_iter().map(|(m, _)| m).collect();
+        let pieces: Vec<(&crate::formats::model::ModelPiece, usize)> = models
             .iter()
-            .flat_map(|m| m.pieces.iter().zip(&m.objects).filter(|(_, o)| doax3::drawn_at_rest(o)).map(|(p, _)| p))
+            .zip(&first_texture)
+            .flat_map(|(m, &first)| m.pieces.iter().zip(&m.objects).filter(|(_, o)| doax3::drawn_at_rest(o)).map(move |(p, _)| (p, first)))
             .collect();
         let inputs: Vec<PieceInput> = pieces
             .iter()
-            .map(|piece| PieceInput {
+            .map(|&(piece, first)| PieceInput {
                 node: 0,
                 vertices: &piece.vertices,
-                draws: piece.materials.iter().map(|m| (m.indices.as_slice(), None, m.cull_back, None)).collect(),
+                draws: piece.materials.iter().map(|m| (m.indices.as_slice(), m.textures.first().map(|t| t + first), m.cull_back, None)).collect(),
                 parent: 0,
                 skin: None,
                 bend: None,
@@ -1707,7 +1733,6 @@ impl App {
                 translucent: false,
             })
             .collect();
-        let textures: Vec<crate::formats::model::ModelTexture> = Vec::new();
         self.doa3_pose = None;
         self.current_animations = Vec::new();
         self.anim_panel.selected_anim_idx = None;
@@ -1722,7 +1747,7 @@ impl App {
         // the ground, as there is no motion to place it.
         let lowest = models[0].pieces.iter().zip(&models[0].objects).filter(|(_, o)| doax3::drawn_at_rest(o)).flat_map(|(p, _)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
         self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * -lowest)]);
-        Ok(format!("DOAX3: {display_name} - {label}, {count} pieces at rest, no textures yet"))
+        Ok(format!("DOAX3: {display_name} - {label}, {count} pieces at rest, {} textures", textures.len()))
     }
 
     fn try_load_doax_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {

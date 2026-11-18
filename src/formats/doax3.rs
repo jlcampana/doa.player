@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, ensure, Context, Result};
 use glam::{Mat4, Vec3};
 
-use super::model::{ModelMaterial, ModelPiece, ModelVertex};
+use super::model::{ModelMaterial, ModelPiece, ModelTexture, ModelVertex};
 
 /// The extracted game, `uroot` of CUSA04555 1.00 (see the notes for how it was extracted).
 const DEFAULT_GAME_DIR: &str = "/home/pandi/Ports/Apps/DeadOrAliveXtreme3Fortune-Doax3FortunePc/game/base-clean/uroot";
@@ -229,6 +229,8 @@ pub struct Model {
     pub pieces: Vec<ModelPiece>,
     /// The name of the object each piece belongs to (`ObjGeo` +0x60), such as `WGT_body`.
     pub objects: Vec<String>,
+    /// How many textures the TMCL holds; materials' `textures` index them.
+    pub texture_count: usize,
 }
 
 /// Whether an object is drawn in the rest view. Read from names and bounds only, nothing from
@@ -335,6 +337,202 @@ fn element(d: &[u8], at: usize, kind: u8) -> Result<[f32; 3]> {
     })
 }
 
+const LUMP_TEXTURES: u32 = 0xC000_0002;
+
+/// A texture's description, from the GNF header's T# (GCN's `SQ_IMG_RSRC_WORD0..7`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextureInfo {
+    /// Data format (`WORD1` bits 20 to 25): 41 BC7, 35 BC1, 10 RGBA8.
+    pub format: u32,
+    /// Number format (`WORD1` bits 26 to 29): 9 sRGB, 0 unorm.
+    pub number: u32,
+    pub width: usize,
+    pub height: usize,
+    /// Row pitch in texels (`WORD4` bits 13 to 26), padded past the width on small textures.
+    pub pitch: usize,
+    /// Tile mode index (`WORD3` bits 20 to 24): 13, `Thin_1dThin`, on every texture read.
+    pub tile: u32,
+    /// Resource type (`WORD3` bits 28 to 31): 9 a 2D texture; 10 (2175 in the game, one level,
+    /// twice a 2D level's data: a 3D texture of depth 2, probably) is not read. Kasumi's face
+    /// uses one as a kind-1 map.
+    pub kind: u32,
+    pub last_level: u32,
+}
+
+/// The GNFs in a model's TMCL, from the TTGL table (TTGM's +0x28 points at it; TTGH follows
+/// TTGM's header): offsets from the TMCL's texture block and sizes.
+pub fn texture_files<'a>(tmc: &[u8], tmcl: &'a [u8]) -> Result<Vec<&'a [u8]>> {
+    let top = chunk(tmc, 0)?;
+    let find = |name: &str| -> Result<Chunk> {
+        for &child in top.children.iter().filter(|&&c| c != 0) {
+            let c = chunk(tmc, child)?;
+            if c.name == name {
+                return Ok(c);
+            }
+        }
+        bail!("no {name} chunk")
+    };
+    let lumps = find("LHeader")?;
+    let lump_tables = tables(tmc, &lumps)?;
+    let Some(block) = (0..lump_tables.len()).find(|&i| u32_at(tmc, lumps.at + 0x70 + i * 4).ok() == Some(LUMP_TEXTURES)).map(|i| lump_tables[i].0) else {
+        return Ok(Vec::new());
+    };
+    let group = find("TTGM")?;
+    let list = group.at + u32_at(tmc, group.at + 0x28)? as usize;
+    ensure!(tmc.get(list..list + 4) == Some(b"TTGL".as_slice()), "no TTGL at {list:#x}");
+    let count = u32_at(tmc, list + 0x14)? as usize;
+    let (offsets, sizes) = (u32_at(tmc, list + 0x20)? as usize, u32_at(tmc, list + 0x24)? as usize);
+    (0..count)
+        .map(|k| {
+            let at = block + u32_at(tmc, list + offsets + k * 4)? as usize;
+            let size = u32_at(tmc, list + sizes + k * 4)? as usize;
+            tmcl.get(at..at + size).with_context(|| format!("texture {k} past the TMCL"))
+        })
+        .collect()
+}
+
+/// A GNF's header: "GNF ", the header's size after 8 bytes (0x28), version 2 and one texture,
+/// the file's size, then the T#. The data follows the header, level 0 first.
+pub fn texture_info(gnf: &[u8]) -> Result<(TextureInfo, &[u8])> {
+    ensure!(gnf.get(..4) == Some(b"GNF ".as_slice()), "not a GNF");
+    let header = 8 + u32_at(gnf, 4)? as usize;
+    let w: Vec<u32> = (0..8).map(|i| u32_at(gnf, 0x10 + i * 4)).collect::<Result<_>>()?;
+    let info = TextureInfo {
+        format: (w[1] >> 20) & 0x3F,
+        number: (w[1] >> 26) & 0xF,
+        width: (w[2] & 0x3FFF) as usize + 1,
+        height: ((w[2] >> 14) & 0x3FFF) as usize + 1,
+        pitch: ((w[4] >> 13) & 0x3FFF) as usize + 1,
+        tile: (w[3] >> 20) & 0x1F,
+        kind: (w[3] >> 28) & 0xF,
+        last_level: (w[3] >> 16) & 0xF,
+    };
+    Ok((info, gnf.get(header..).context("GNF shorter than its header")?))
+}
+
+/// Level 0 of a GNF as RGBA. Read: BC7 (format 41), BC1 (35) and RGBA8 (10), in tile mode 13
+/// (`Thin_1dThin`), which covers every 2D texture of the game (2224 models: 26016 BC7, 21
+/// RGBA8, 1 BC1). Elements (4x4 blocks, or texels for RGBA8) are kept in micro tiles of 8x8
+/// elements, in rows over the padded pitch, and inside a tile in Morton order, x in bit 0
+/// (AddrLib's non-displayable thin order: x0 y0 x1 y1 x2 y2, the same for every element size).
+/// Checked by eye on BC7 only.
+pub fn decode_texture(gnf: &[u8]) -> Result<ModelTexture> {
+    let (info, data) = texture_info(gnf)?;
+    let (block, bytes) = match info.format {
+        41 => (4, 16),
+        35 => (4, 8),
+        10 => (1, 4),
+        other => bail!("texture format {other} is not read"),
+    };
+    ensure!(info.tile == 13, "tile mode {} is not read", info.tile);
+    ensure!(info.kind == 9, "resource type {} is not read", info.kind);
+    let (blocks_x, blocks_y) = (info.width.div_ceil(block), info.height.div_ceil(block));
+    let tiles_x = info.pitch.div_ceil(block).div_ceil(8);
+    let tiles_y = blocks_y.div_ceil(8);
+    let tile_bytes = 64 * bytes;
+    ensure!(data.len() >= tiles_x * tiles_y * tile_bytes, "GNF data short of level 0");
+    let (width, height) = (info.width, info.height);
+    let mut rgba = vec![0u8; width * height * 4];
+    let mut texels = [0u8; 64];
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let tile = (by / 8) * tiles_x + bx / 8;
+            let (x, y) = (bx % 8, by % 8);
+            let morton = (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3);
+            let at = tile * tile_bytes + morton * bytes;
+            let source = &data[at..at + bytes];
+            match info.format {
+                41 => bcdec_rs::bc7(source, &mut texels, 16),
+                35 => bcdec_rs::bc1(source, &mut texels, 16),
+                _ => texels[..4].copy_from_slice(source),
+            }
+            for row in 0..block {
+                let py = by * block + row;
+                if py >= height {
+                    break;
+                }
+                for col in 0..block {
+                    let px = bx * block + col;
+                    if px < width {
+                        let out = (py * width + px) * 4;
+                        rgba[out..out + 4].copy_from_slice(&texels[row * 16 + col * 4..row * 16 + col * 4 + 4]);
+                    }
+                }
+            }
+        }
+    }
+    Ok(ModelTexture { width: width as u32, height: height as u32, rgba })
+}
+
+/// A sub-mesh, one of an `ObjGeo`'s children: +4 its `MtrCol` entry, +0x10 the number of
+/// texture entries and from +0x14 their offsets from the sub-mesh, +0x3C the declaration it
+/// draws from (within the object), +0x80 its first index, index count, first vertex and vertex
+/// count. A texture entry is slot, kind and texture: kind 0 colour (a second kind-0 entry, as on
+/// Kasumi's face and body, is a detail layer not drawn here), 1 and 2 maps whose use is not
+/// read (pink and blue: normals, probably), 3 a second colour on the eyes.
+struct SubMesh {
+    declaration: usize,
+    first_index: usize,
+    index_count: usize,
+    /// The first kind-0 texture.
+    base: Option<usize>,
+}
+
+fn sub_meshes(d: &[u8], geo: usize) -> Result<Vec<SubMesh>> {
+    chunk(d, geo)?
+        .children
+        .iter()
+        .filter(|&&e| e != 0)
+        .map(|&e| {
+            let count = u32_at(d, e + 0x10)? as usize;
+            ensure!(count < 64, "sub-mesh at {e:#x}: {count} textures");
+            let mut base = None;
+            for j in 0..count {
+                let entry = e + u32_at(d, e + 0x14 + j * 4)? as usize;
+                if u32_at(d, entry + 4)? == 0 && base.is_none() {
+                    base = Some(u32_at(d, entry + 8)? as usize);
+                }
+            }
+            Ok(SubMesh { declaration: u32_at(d, e + 0x3C)? as usize, first_index: u32_at(d, e + 0x80)? as usize, index_count: u32_at(d, e + 0x84)? as usize, base })
+        })
+        .collect()
+}
+
+/// Whether an object's colour textures carry coverage in their alpha. Hair's do (strands);
+/// the skin's alpha is a mask of some other use (Kasumi's face and body: mean 0.22 and 0.33 on
+/// opaque surfaces) and suits read are opaque. No flag for this was found in `MtrCol` or the
+/// sub-meshes: a stand-in from names.
+pub fn alpha_is_coverage(object: &str) -> bool {
+    object.contains("hair")
+}
+
+/// The model's textures, decoded only where `wanted` says so (a 1x1 white stands in for the
+/// others, and for any that fail to decode), with alpha made opaque where `coverage` is false.
+pub fn decode_textures(tmc: &[u8], tmcl: &[u8], wanted: &[bool], coverage: &[bool]) -> Result<Vec<ModelTexture>> {
+    let white = || ModelTexture { width: 1, height: 1, rgba: vec![255; 4] };
+    Ok(texture_files(tmc, tmcl)?
+        .iter()
+        .enumerate()
+        .map(|(k, gnf)| {
+            if !wanted.get(k).copied().unwrap_or(false) {
+                return white();
+            }
+            match decode_texture(gnf) {
+                Ok(mut t) => {
+                    if !coverage.get(k).copied().unwrap_or(false) {
+                        t.rgba.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+                    }
+                    t
+                }
+                Err(e) => {
+                    log::warn!("DOAX3 texture {k}: {e:#}");
+                    white()
+                }
+            }
+        })
+        .collect())
+}
+
 /// Reads a model from its TMC and TMCL.
 pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
     ensure!(tmc.get(..4) == Some(b"TMC\0".as_slice()), "not a TMC");
@@ -372,14 +570,16 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
     let vertex_buffers = tables(tmc, get("VtxLay")?)?;
     let index_buffers = tables(tmc, get("IdxLay")?)?;
 
-    // One piece per declaration; the k-th declaration in file order uses index buffer k.
+    // One piece per declaration; the k-th declaration in file order uses index buffer k. Its
+    // sub-meshes (the ObjGeo's children) become the piece's materials.
     let mut pieces = Vec::new();
     let mut objects = Vec::new();
     let mut k = 0;
     for &geo in get("MdlGeo")?.children.iter().filter(|&&g| g != 0) {
         let raw = tmc.get(geo + 0x60..geo + 0x80).context("object name")?;
         let object = String::from_utf8_lossy(raw.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
-        for decl in declarations(tmc, geo)? {
+        let subs = sub_meshes(tmc, geo)?;
+        for (d, decl) in declarations(tmc, geo)?.into_iter().enumerate() {
             let (index_at, _) = *index_buffers.get(k).context("fewer index buffers than declarations")?;
             k += 1;
             let (vertex_at, vertex_size) = *vertex_buffers.get(decl.buffer).context("vertex buffer out of range")?;
@@ -399,11 +599,26 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
                     Ok(ModelVertex { position: p, normal: n, uv: [t[0], t[1]] })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            pieces.push(ModelPiece { vertices, materials: vec![ModelMaterial { indices, textures: Vec::new(), cull_back: true, look: None }] });
+            let mut materials: Vec<ModelMaterial> = subs
+                .iter()
+                .filter(|sub| sub.declaration == d && sub.first_index + sub.index_count <= indices.len())
+                .map(|sub| ModelMaterial {
+                    indices: indices[sub.first_index..sub.first_index + sub.index_count].to_vec(),
+                    textures: sub.base.into_iter().collect(),
+                    cull_back: true,
+                    look: None,
+                })
+                .collect();
+            // A declaration no sub-mesh names is drawn whole, untextured.
+            if materials.is_empty() {
+                materials.push(ModelMaterial { indices, textures: Vec::new(), cull_back: true, look: None });
+            }
+            pieces.push(ModelPiece { vertices, materials });
             objects.push(object.clone());
         }
     }
-    Ok(Model { name, nodes, pieces, objects })
+    let texture_count = texture_files(tmc, tmcl).map_or(0, |t| t.len());
+    Ok(Model { name, nodes, pieces, objects, texture_count })
 }
 
 /// Moves a part (face, hairstyle) onto a body, object by object. Some objects are modelled
@@ -482,7 +697,10 @@ mod tests {
         let mut hair = model(&archives, "00/character/KAS/hair/hair_00/KAS_HAIR_00_TMC.tmc");
         assert_eq!(face.name, "KAS_face_00");
         assert_eq!(face.pieces[0].vertices.len(), 3028);
-        assert_eq!(face.pieces[0].materials[0].indices.len(), 15348);
+        // Two sub-meshes over the face's declaration, both on texture 4, the face's colour.
+        assert_eq!(face.pieces[0].materials.iter().map(|m| m.indices.len()).sum::<usize>(), 15348);
+        assert_eq!(face.pieces[0].materials.iter().map(|m| m.textures.clone()).collect::<Vec<_>>(), [vec![4], vec![4]]);
+        assert_eq!(face.texture_count, 12);
         assert_eq!(body.nodes[0].name, "MOT00_Hips");
         assert_eq!(body.nodes[1].parent, Some(15));
         let head = body.nodes.iter().find(|n| n.name == "MOT01_Head").unwrap().global.w_axis;
@@ -498,7 +716,7 @@ mod tests {
         assert!(top(&hair) > 0.6 && top(&hair) < 0.8, "hair {}", top(&hair));
         for m in [&body, &face, &hair] {
             for p in &m.pieces {
-                assert!(p.materials[0].indices.iter().all(|&i| (i as usize) < p.vertices.len()));
+                assert!(p.materials.iter().flat_map(|m| &m.indices).all(|&i| (i as usize) < p.vertices.len()));
                 assert!(p.vertices.iter().all(|v| v.position.iter().all(|x| x.is_finite() && x.abs() < 3.0)));
             }
         }
@@ -537,5 +755,61 @@ mod tests {
             }
         }
         assert!(failed.is_empty(), "{} failed: {:?}", failed.len(), &failed[..failed.len().min(10)]);
+    }
+}
+
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+
+    /// Counts texture formats, tile modes and resource types over every model in the archives.
+    #[test]
+    #[ignore]
+    fn texture_formats() {
+        let archives = Archives::open(&game_dir()).unwrap();
+        let names: Vec<String> = archives.names().filter(|n| n.ends_with("_TMC.tmc")).map(str::to_string).collect();
+        let mut counts: std::collections::BTreeMap<(u32, u32, u32), usize> = Default::default();
+        let mut failed = 0;
+        for name in &names {
+            let (Ok(tmc), Ok(tmcl)) = (archives.read(name), archives.read(&tmcl_path(name))) else { failed += 1; continue };
+            match texture_files(&tmc, &tmcl) {
+                Ok(files) => {
+                    for gnf in files {
+                        let (info, _) = texture_info(gnf).unwrap();
+                        *counts.entry((info.format, info.tile, info.kind)).or_default() += 1;
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    println!("{name}: {e:#}");
+                }
+            }
+        }
+        println!("{} models, {failed} failed; (format, tile, type): count {counts:?}", names.len());
+    }
+
+    /// Writes level 0 of every texture of a model as PNG, to look at the detiling.
+    /// `DOAX3_TMC=path/to/X_TMC.tmc DOAX3_PNG=dir cargo test dump_textures -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_textures() {
+        let path = std::env::var("DOAX3_TMC").unwrap_or("assets/doax3/00/character/KAS/face/face_00/KAS_FACE_00_TMC.tmc".into());
+        let out = std::env::var("DOAX3_PNG").unwrap_or("target/doax3_textures".into());
+        std::fs::create_dir_all(&out).unwrap();
+        let tmc = std::fs::read(&path).unwrap();
+        let tmcl = std::fs::read(path.replace("_TMC.tmc", "_TMCL.tmcl")).unwrap();
+        for (k, gnf) in texture_files(&tmc, &tmcl).unwrap().iter().enumerate() {
+            let (info, _) = texture_info(gnf).unwrap();
+            match decode_texture(gnf) {
+                Ok(t) => {
+                    let file = std::fs::File::create(format!("{out}/{k:02}.png")).unwrap();
+                    let mut e = png::Encoder::new(file, t.width, t.height);
+                    e.set_color(png::ColorType::Rgba);
+                    e.write_header().unwrap().write_image_data(&t.rgba).unwrap();
+                    println!("{k}: {info:?}");
+                }
+                Err(e) => println!("{k}: {info:?}: {e}"),
+            }
+        }
     }
 }

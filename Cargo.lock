@@ -187,6 +187,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "bcdec_rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d521509f38a9ab0fce76656a0416161ee5d42c1eab6672b958391e2ac7a0e31"
+
+[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -565,6 +571,7 @@ name = "doa_player"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bcdec_rs",
  "bytemuck",
  "byteorder",
  "egui",
