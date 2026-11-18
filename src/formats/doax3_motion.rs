@@ -231,6 +231,23 @@ impl Motion {
 mod tests {
     use super::*;
 
+    /// The stand-in spring lags a moving node, stays within its limit and settles.
+    #[test]
+    fn jiggle_lags_and_settles() {
+        let mut j = Jiggle::new(0);
+        let mut most: f32 = 0.0;
+        for f in 0..120 {
+            let target = Vec3::new(0.0, 1.0 + 0.1 * (f as f32 * 0.3).sin(), 0.0);
+            most = most.max(j.step(target).length());
+        }
+        assert!(most > 0.005 && most <= Jiggle::MAX_OFFSET + 1e-6, "{most}");
+        let still = Vec3::new(0.0, 1.0, 0.0);
+        for _ in 0..300 {
+            j.step(still);
+        }
+        assert!(j.step(still).length() < 1e-4);
+    }
+
     /// Every channel of a motion has the same length, which checks the stepper end to end.
     #[test]
     fn kasumi_ingame_motions_decode() {
@@ -328,4 +345,48 @@ pub fn skin(rest: &[super::model::ModelVertex], skins: &[super::doax3::Skin], ch
             }
         })
         .collect()
+}
+
+/// The viewer's stand-in for the chest's soft body (DOAX3's `YWRK`, not read): a damped point
+/// per breast that follows its base node (`OPT_Breast_Left_base`, `OPT_Breast_Right_base`, under
+/// which hang the 18 `OPT_ywrk_*` points of each side) with a lag, once per 60 Hz frame. Its
+/// lag moves the base, and with it the points, by up to `MAX_OFFSET`. Not the game's model.
+#[derive(Debug, Clone)]
+pub struct Jiggle {
+    pub node: usize,
+    position: Vec3,
+    velocity: Vec3,
+    started: bool,
+}
+
+impl Jiggle {
+    const STIFFNESS: f32 = 0.12;
+    const DAMPING: f32 = 0.82;
+    const MAX_OFFSET: f32 = 0.03;
+
+    pub fn new(node: usize) -> Self {
+        Self { node, position: Vec3::ZERO, velocity: Vec3::ZERO, started: false }
+    }
+
+    /// One frame toward `target` (the node's posed place); gives the offset to add, scaled.
+    pub fn step(&mut self, target: Vec3) -> Vec3 {
+        if !self.started {
+            self.position = target;
+            self.started = true;
+        }
+        self.velocity = self.velocity * Self::DAMPING + (target - self.position) * Self::STIFFNESS;
+        self.position += self.velocity;
+        let offset = (self.position - target).clamp_length_max(Self::MAX_OFFSET);
+        self.position = target + offset;
+        offset
+    }
+
+    pub fn offset(&self, target: Vec3) -> Vec3 {
+        if self.started { (self.position - target).clamp_length_max(Self::MAX_OFFSET) } else { Vec3::ZERO }
+    }
+
+    pub fn reset(&mut self) {
+        self.started = false;
+        self.velocity = Vec3::ZERO;
+    }
 }

@@ -589,16 +589,33 @@ struct Doax3Pose {
     lift: f32,
     /// What the vertices were last skinned for: motion, frame, expression.
     shown: Option<(Option<usize>, f32, usize)>,
+    /// The chest's stand-in springs and the game frame they last stepped on.
+    jiggles: Vec<crate::formats::doax3_motion::Jiggle>,
+    jiggle_frame: u64,
 }
 
 impl Doax3Pose {
     /// Every model's posed node globals: the body from `motion` at `frame` (or at rest),
     /// parts following the body's nodes of the same name, the face's bones from `expression`.
     fn posed(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>) -> Vec<Vec<glam::Mat4>> {
+        self.posed_with(motion, frame, expression, &[])
+    }
+
+    /// The same, with body nodes moved by world offsets (the chest's springs).
+    fn posed_with(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>, offsets: &[(usize, glam::Vec3, glam::Mat4)]) -> Vec<Vec<glam::Mat4>> {
         use crate::formats::doax3_motion as m;
         let body = &self.models[0];
         let bones = self.motions.bones;
-        let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| motion.and_then(|mo| m::body_bone(&body.nodes[i].name).filter(|&b| b < bones).map(|b| mo.local(b, frame))));
+        let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| {
+            if let Some(&(_, offset, parent_posed)) = offsets.iter().find(|o| o.0 == i) {
+                // The rest local, moved by the offset brought into the parent's frame.
+                let parent = body.nodes[i].parent?;
+                let rest_local = body.nodes[parent].global.inverse() * body.nodes[i].global;
+                let in_parent = parent_posed.inverse().transform_vector3(offset);
+                return Some(glam::Mat4::from_translation(in_parent) * rest_local);
+            }
+            motion.and_then(|mo| m::body_bone(&body.nodes[i].name).filter(|&b| b < bones).map(|b| mo.local(b, frame)))
+        });
         let mut out = vec![body_posed];
         for (k, model) in self.models.iter().enumerate().skip(1) {
             let face_bones = if k == 1 { self.face_bones.as_slice() } else { &[] };
@@ -1851,7 +1868,12 @@ impl App {
         let faces = faces.filter(|f| face_bones.iter().flatten().count() == f.bones);
         self.char_panel.face_count = faces.as_ref().map_or(0, |f| f.motions.len());
         self.char_panel.selected_face = self.char_panel.selected_face.min(self.char_panel.face_count);
-        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None, faces, face_bones, lift: -lowest, shown: None });
+        let jiggles = ["OPT_Breast_Left_base", "OPT_Breast_Right_base"]
+            .iter()
+            .filter_map(|name| models[0].nodes.iter().position(|n| n.name == *name))
+            .map(crate::formats::doax3_motion::Jiggle::new)
+            .collect();
+        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None, faces, face_bones, lift: -lowest, shown: None, jiggles, jiggle_frame: 0 });
         Ok(format!("DOAX3: {display_name} - {label}, {count} pieces, {} textures, {motion_count} motions", textures.len()))
     }
 
@@ -3335,14 +3357,36 @@ impl App {
             use crate::formats::doax3_motion as m;
             let face = self.char_panel.selected_face;
             let key = (pose.playing, self.anim_time, face);
-            if pose.shown == Some(key) {
+            // The chest's springs step once per game frame, while a motion plays, and keep the
+            // vertices updating until they settle.
+            let clock = self.game_clock as u64;
+            let bounce = self.bg_panel.bounce_scale;
+            let springing = pose.playing.is_some() && bounce > 0.0 && !pose.jiggles.is_empty();
+            if pose.shown == Some(key) && (!springing || clock == pose.jiggle_frame) {
                 return;
             }
             pose.shown = Some(key);
             let motion = pose.playing.and_then(|i| pose.motions.motions.get(i));
             let expression = face.checked_sub(1).and_then(|f| pose.faces.as_ref()?.motions.get(f));
+            let mut offsets = Vec::new();
+            if springing {
+                let plain = pose.posed(motion, self.anim_time, expression);
+                let steps = clock.saturating_sub(pose.jiggle_frame).clamp(1, MAX_CHAIN_CATCH_UP);
+                pose.jiggle_frame = clock;
+                for jiggle in &mut pose.jiggles {
+                    let target = plain[0][jiggle.node].w_axis.truncate();
+                    let mut offset = jiggle.offset(target);
+                    for _ in 0..steps {
+                        offset = jiggle.step(target);
+                    }
+                    let parent = pose.models[0].nodes[jiggle.node].parent.map_or(glam::Mat4::IDENTITY, |p| plain[0][p]);
+                    offsets.push((jiggle.node, offset * bounce, parent));
+                }
+            } else {
+                pose.jiggles.iter_mut().for_each(|j| j.reset());
+            }
             let changes: Vec<Vec<glam::Mat4>> = pose
-                .posed(motion, self.anim_time, expression)
+                .posed_with(motion, self.anim_time, expression, &offsets)
                 .iter()
                 .zip(&pose.models)
                 .map(|(posed, model)| posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect())
@@ -3821,6 +3865,7 @@ impl App {
             || self.doax2_pose.as_ref().is_some_and(|pose| !pose.chest.is_empty())
             || self.doa3_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
             || self.doa4_pose.as_ref().is_some_and(|pose| pose.chest.is_some())
+            || self.doax3_pose.as_ref().is_some_and(|pose| !pose.jiggles.is_empty())
     }
 
     pub fn reset_animation(&mut self) {
