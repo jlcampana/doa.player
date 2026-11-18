@@ -1681,7 +1681,8 @@ impl App {
             let (a, b) = files(tmc)?;
             Ok((doax3::parse_model(&a, &b).with_context(|| tmc.to_string())?, (a, b)))
         };
-        let (body, body_files) = read(costume)?;
+        let (mut body, body_files) = read(costume)?;
+        doax3::place_objects(&mut body, glam::Mat4::IDENTITY, |_| glam::Mat4::IDENTITY);
         let mut models = vec![(body.clone(), body_files)];
         let (mut face, face_files) = read(&doax3::face(&code))?;
         doax3::place_on(&body, &mut face)?;
@@ -1696,15 +1697,19 @@ impl App {
         let mut first_texture = Vec::new();
         for (model, (tmc, tmcl)) in &models {
             let mut wanted = vec![false; model.texture_count];
-            let mut coverage = vec![false; model.texture_count];
-            for (piece, object) in model.pieces.iter().zip(&model.objects).filter(|(_, o)| doax3::drawn_at_rest(o)) {
-                for &t in piece.materials.iter().flat_map(|m| &m.textures) {
-                    if let Some(w) = wanted.get_mut(t) {
-                        *w = true;
-                        coverage[t] |= doax3::alpha_is_coverage(object);
+            let mut opaque = vec![false; model.texture_count];
+            for (i, piece) in model.drawn_pieces() {
+                let (object, only) = (&model.objects[i], &model.colour_only[i]);
+                for (material, &only) in piece.materials.iter().zip(only) {
+                    for &t in &material.textures {
+                        if let Some(w) = wanted.get_mut(t) {
+                            *w = true;
+                            opaque[t] |= !doax3::alpha_is_coverage(object, only);
+                        }
                     }
                 }
             }
+            let coverage: Vec<bool> = wanted.iter().zip(&opaque).map(|(w, o)| *w && !o).collect();
             first_texture.push(textures.len());
             let decoded = doax3::decode_textures(tmc, tmcl, &wanted, &coverage).unwrap_or_else(|e| {
                 log::warn!("DOAX3 {}: textures: {e:#}", model.name);
@@ -1717,7 +1722,7 @@ impl App {
         let pieces: Vec<(&crate::formats::model::ModelPiece, usize)> = models
             .iter()
             .zip(&first_texture)
-            .flat_map(|(m, &first)| m.pieces.iter().zip(&m.objects).filter(|(_, o)| doax3::drawn_at_rest(o)).map(move |(p, _)| (p, first)))
+            .flat_map(|(m, &first)| m.drawn_pieces().map(move |(_, p)| (p, first)))
             .collect();
         let inputs: Vec<PieceInput> = pieces
             .iter()
@@ -1745,7 +1750,7 @@ impl App {
         drop(inputs);
         // The model's origin is at the hips; lifted so the lowest point of the body stands on
         // the ground, as there is no motion to place it.
-        let lowest = models[0].pieces.iter().zip(&models[0].objects).filter(|(_, o)| doax3::drawn_at_rest(o)).flat_map(|(p, _)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
+        let lowest = models[0].drawn_pieces().flat_map(|(_, p)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
         self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * -lowest)]);
         Ok(format!("DOAX3: {display_name} - {label}, {count} pieces at rest, {} textures", textures.len()))
     }

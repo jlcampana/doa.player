@@ -231,19 +231,39 @@ pub struct Model {
     pub objects: Vec<String>,
     /// How many textures the TMCL holds; materials' `textures` index them.
     pub texture_count: usize,
+    /// Per piece, per material: whether its sub-mesh lists a colour texture alone, with no
+    /// maps (lashes and lid shadows; skin, suits and hair list their maps too).
+    pub colour_only: Vec<Vec<bool>>,
+    /// Per piece: whether its declaration has normals. Those without (`WGT_zdmodel`, the shadow
+    /// models, Nyotengu's `WGT_face1`, which also has no texture coordinates) are depth or
+    /// shadow passes, probably.
+    pub has_normals: Vec<bool>,
+}
+
+impl Model {
+    /// Whether piece `i` is drawn in the rest view: by its object's name and its normals.
+    pub fn drawn(&self, i: usize) -> bool {
+        self.objects.get(i).is_some_and(|o| drawn_at_rest(o)) && self.has_normals.get(i).copied().unwrap_or(false)
+    }
+
+    /// The drawn pieces with their index.
+    pub fn drawn_pieces(&self) -> impl Iterator<Item = (usize, &ModelPiece)> {
+        self.pieces.iter().enumerate().filter(|(i, _)| self.drawn(*i))
+    }
 }
 
 /// Whether an object is drawn in the rest view. Read from names and bounds only, nothing from
 /// the game's code: `WGT_zdmodel` and `*T_SHADOW_MODEL` have no normals (depth and shadow
 /// passes, probably); `WGT_body_zbreak` and `WGT_mizugi_z` repeat the body and suit in the same
-/// place, for a purpose not read; `WGT_faceparts` and the `*_sweat_*` objects are modelled
-/// around their own node (Y 0.04 on Kasumi's eyes) and need the node bindings, not read yet.
+/// place, for a purpose not read; the `*_sweat_*` objects are sweat, shown in some scenes only.
+/// `WGT_faceparts` (eyes, lashes, teeth) is drawn, placed on its own node by `place_on`.
 pub fn drawn_at_rest(object: &str) -> bool {
+    let lower = object.to_ascii_lowercase();
     object.starts_with("WGT_")
+        && !lower.contains("shadow")
         && !object.contains("zdmodel")
         && !object.contains("zbreak")
         && !object.ends_with("_z")
-        && !object.contains("faceparts")
         && !object.contains("sweat")
 }
 
@@ -476,6 +496,8 @@ struct SubMesh {
     index_count: usize,
     /// The first kind-0 texture.
     base: Option<usize>,
+    /// How many texture entries it lists.
+    entries: usize,
 }
 
 fn sub_meshes(d: &[u8], geo: usize) -> Result<Vec<SubMesh>> {
@@ -493,17 +515,20 @@ fn sub_meshes(d: &[u8], geo: usize) -> Result<Vec<SubMesh>> {
                     base = Some(u32_at(d, entry + 8)? as usize);
                 }
             }
-            Ok(SubMesh { declaration: u32_at(d, e + 0x3C)? as usize, first_index: u32_at(d, e + 0x80)? as usize, index_count: u32_at(d, e + 0x84)? as usize, base })
+            Ok(SubMesh { declaration: u32_at(d, e + 0x3C)? as usize, first_index: u32_at(d, e + 0x80)? as usize, index_count: u32_at(d, e + 0x84)? as usize, base, entries: count })
         })
         .collect()
 }
 
-/// Whether an object's colour textures carry coverage in their alpha. Hair's do (strands);
-/// the skin's alpha is a mask of some other use (Kasumi's face and body: mean 0.22 and 0.33 on
-/// opaque surfaces) and suits read are opaque. No flag for this was found in `MtrCol` or the
-/// sub-meshes: a stand-in from names.
-pub fn alpha_is_coverage(object: &str) -> bool {
-    object.contains("hair")
+/// Whether a material's colour texture carries coverage in its alpha. Hair's do (strands), and
+/// so do the lashes and lid shadows (Kasumi's texture 3, black with mean alpha 0.41), whose
+/// sub-meshes list the colour texture alone; the skin's alpha is a mask of some other use
+/// (Kasumi's face and body: mean 0.22 and 0.33 on opaque surfaces) and suits read are opaque.
+/// No flag for this was found in `MtrCol`: a stand-in from the object's name and the sub-mesh's
+/// entries. A texture also used by an opaque material stays opaque (the face's atlas, which
+/// the eyeballs use too).
+pub fn alpha_is_coverage(object: &str, colour_only: bool) -> bool {
+    object.contains("hair") || colour_only
 }
 
 /// The model's textures, decoded only where `wanted` says so (a 1x1 white stands in for the
@@ -574,6 +599,8 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
     // sub-meshes (the ObjGeo's children) become the piece's materials.
     let mut pieces = Vec::new();
     let mut objects = Vec::new();
+    let mut colour_only = Vec::new();
+    let mut has_normals = Vec::new();
     let mut k = 0;
     for &geo in get("MdlGeo")?.children.iter().filter(|&&g| g != 0) {
         let raw = tmc.get(geo + 0x60..geo + 0x80).context("object name")?;
@@ -589,6 +616,7 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
             let find = |usage: u8| decl.elements.iter().find(|e| e.2 == usage && e.3 == 0).map(|e| (e.0, e.1));
             let position = find(0).context("no positions")?;
             let normal = find(3);
+            has_normals.push(normal.is_some());
             let uv = find(5);
             let vertices = (0..used)
                 .map(|v| {
@@ -599,9 +627,10 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
                     Ok(ModelVertex { position: p, normal: n, uv: [t[0], t[1]] })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let mut materials: Vec<ModelMaterial> = subs
+            let drawn: Vec<&SubMesh> = subs.iter().filter(|sub| sub.declaration == d && sub.first_index + sub.index_count <= indices.len()).collect();
+            colour_only.push(if drawn.is_empty() { vec![false] } else { drawn.iter().map(|sub| sub.entries == 1).collect() });
+            let mut materials: Vec<ModelMaterial> = drawn
                 .iter()
-                .filter(|sub| sub.declaration == d && sub.first_index + sub.index_count <= indices.len())
                 .map(|sub| ModelMaterial {
                     indices: indices[sub.first_index..sub.first_index + sub.index_count].to_vec(),
                     textures: sub.base.into_iter().collect(),
@@ -618,46 +647,64 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
         }
     }
     let texture_count = texture_files(tmc, tmcl).map_or(0, |t| t.len());
-    Ok(Model { name, nodes, pieces, objects, texture_count })
+    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals })
 }
 
-/// Moves a part (face, hairstyle) onto a body, object by object. Some objects are modelled
-/// around the head (every hairstyle read, and Honoka's face: Y -0.02 to 0.18), others in the
-/// body's space (the other eight faces: Y 0.46 to 0.74), and nothing in the files read so far
-/// tells them apart: headers, sub-meshes and `BnOfsMtx` (always `GlblMtx`'s inverse) are the
-/// same, and a part's own `MOT01_Head` sits at the body's head or at the origin in either case.
-/// So an object whose centre lies nearer the origin than the body's head height is taken as
-/// around the head and goes on the body's `MOT01_Head`; the others stay in the body's space
-/// (moved by the body's head times the inverse of the part's, which is the identity for every
-/// face read). A rule from bounds, not from the game: measured on all nine characters' face and
-/// first hairstyle.
+/// The node named after an object. Object names longer than 15 characters are cut from the
+/// front and start with `*`: `*_sweat_cheek_l` is node `WGT_sweat_cheek_l`, `*T_SHADOW_MODEL`
+/// is `WGT_SHADOW_MODEL`.
+pub fn object_node(model: &Model, object: &str) -> Option<usize> {
+    match object.strip_prefix('*') {
+        Some(tail) => model.nodes.iter().position(|n| n.name.ends_with(tail) && n.name.starts_with("WGT")),
+        None => model.nodes.iter().position(|n| n.name == object),
+    }
+}
+
+/// Moves a part (face, hairstyle) onto a body: the part's `MOT01_Head` onto the body's, and each
+/// object by the node named after it (`object_node`), whose rest place says where the object's
+/// vertices go: Kasumi's `WGT_face` at Y -0.046 brings her face's chin (0.507 in the file) under
+/// her lip nodes (0.50); `WGT_faceparts` on her head puts the eyes (Y 0.04 to 0.07 in the file)
+/// at her eye nodes' height (0.56) and the teeth at the lips'; every hairstyle's `WGT_hair` is
+/// its head. Read from the nodes and checked against the part's own face nodes, not against
+/// the game. Objects without such a node fall back to a rule from bounds: around the head (centre
+/// nearer the origin than the head's height) on the head, otherwise where they are.
 pub fn place_on(body: &Model, part: &mut Model) -> Result<()> {
     let root = part.nodes.first().context("the part has no nodes")?;
     let target = body.nodes.iter().find(|n| n.name == root.name).with_context(|| format!("the body has no {}", root.name))?;
     let in_body = target.global * root.global.inverse();
-    let on_head = target.global;
     let head_height = target.global.w_axis.y;
-    let objects: Vec<String> = part.objects.clone();
+    let on_head = target.global;
+    place_objects(part, in_body, |centre| if centre.abs() < (centre - head_height).abs() { on_head } else { in_body });
+    for node in &mut part.nodes {
+        node.global = in_body * node.global;
+    }
+    Ok(())
+}
+
+/// Puts each object of a model on its node, times `base`; objects without a node get
+/// `fallback` of the centre of their height.
+pub fn place_objects(model: &mut Model, base: Mat4, fallback: impl Fn(f32) -> Mat4) {
+    let objects: Vec<String> = model.objects.clone();
     for name in objects.iter().collect::<std::collections::BTreeSet<_>>() {
-        let pieces: Vec<usize> = (0..part.pieces.len()).filter(|&i| &part.objects[i] == name).collect();
-        let (low, high) = pieces
-            .iter()
-            .flat_map(|&i| &part.pieces[i].vertices)
-            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.position[1]), hi.max(v.position[1])));
-        let centre = (low + high) / 2.0;
-        let place = if centre.abs() < (centre - head_height).abs() { on_head } else { in_body };
+        let pieces: Vec<usize> = (0..model.pieces.len()).filter(|&i| &model.objects[i] == name).collect();
+        let place = match object_node(model, name) {
+            Some(node) => base * model.nodes[node].global,
+            None => {
+                let (low, high) = pieces
+                    .iter()
+                    .flat_map(|&i| &model.pieces[i].vertices)
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.position[1]), hi.max(v.position[1])));
+                fallback((low + high) / 2.0)
+            }
+        };
         let turn = glam::Mat3::from_mat4(place);
         for &i in &pieces {
-            for v in &mut part.pieces[i].vertices {
+            for v in &mut model.pieces[i].vertices {
                 v.position = place.transform_point3(Vec3::from(v.position)).into();
                 v.normal = (turn * Vec3::from(v.normal)).normalize_or_zero().into();
             }
         }
     }
-    for node in &mut part.nodes {
-        node.global = in_body * node.global;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -712,7 +759,13 @@ mod tests {
         };
         assert_eq!(face.objects[0], "WGT_face");
         assert_eq!(hair.objects.iter().filter(|o| drawn_at_rest(o)).count(), 3);
-        assert!((top(&face) - 0.718).abs() < 0.01, "face {}", top(&face));
+        // 0.718 in the file, moved down by `WGT_face`'s node (-0.046).
+        assert!((top(&face) - 0.672).abs() < 0.01, "face {}", top(&face));
+        // The eyes on their node: at the eye nodes' height (0.56).
+        let eyes = face.objects.iter().position(|o| o == "WGT_faceparts").unwrap();
+        let ys: Vec<f32> = face.pieces[eyes].materials[0].indices.iter().map(|&i| face.pieces[eyes].vertices[i as usize].position[1]).collect();
+        let mid = ys.iter().sum::<f32>() / ys.len() as f32;
+        assert!((mid - 0.56).abs() < 0.01, "eyes {mid}");
         assert!(top(&hair) > 0.6 && top(&hair) < 0.8, "hair {}", top(&hair));
         for m in [&body, &face, &hair] {
             for p in &m.pieces {
@@ -761,6 +814,23 @@ mod tests {
 #[cfg(test)]
 mod texture_tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn faceparts_bounds() {
+        let archives = Archives::open(&game_dir()).unwrap();
+        for code in ["KAS", "AYA", "HEL", "MAR", "NYO", "HON"] {
+            let tmc = face(code);
+            let m = parse_model(&archives.read(&tmc).unwrap(), &archives.read(&tmcl_path(&tmc)).unwrap()).unwrap();
+            for (piece, object) in m.pieces.iter().zip(&m.objects) {
+                for (k, mat) in piece.materials.iter().enumerate() {
+                    let (mut lo, mut hi) = (Vec3::splat(9.0), Vec3::splat(-9.0));
+                    for &i in &mat.indices { let p = Vec3::from(piece.vertices[i as usize].position); lo = lo.min(p); hi = hi.max(p); }
+                    println!("{code} {object} m{k} tex {:?} {} tris lo {lo:.3} hi {hi:.3}", mat.textures, mat.indices.len() / 3);
+                }
+            }
+        }
+    }
 
     /// Counts texture formats, tile modes and resource types over every model in the archives.
     #[test]
