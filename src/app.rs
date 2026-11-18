@@ -591,6 +591,61 @@ struct Doax3Pose {
     shown: Option<(Option<usize>, f32, usize)>,
 }
 
+impl Doax3Pose {
+    /// Every model's posed node globals: the body from `motion` at `frame` (or at rest),
+    /// parts following the body's nodes of the same name, the face's bones from `expression`.
+    fn posed(&self, motion: Option<&crate::formats::doax3_motion::Motion>, frame: f32, expression: Option<&crate::formats::doax3_motion::Motion>) -> Vec<Vec<glam::Mat4>> {
+        use crate::formats::doax3_motion as m;
+        let body = &self.models[0];
+        let bones = self.motions.bones;
+        let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| motion.and_then(|mo| m::body_bone(&body.nodes[i].name).filter(|&b| b < bones).map(|b| mo.local(b, frame))));
+        let mut out = vec![body_posed];
+        for (k, model) in self.models.iter().enumerate().skip(1) {
+            let face_bones = if k == 1 { self.face_bones.as_slice() } else { &[] };
+            let posed = m::pose_nodes(
+                &model.nodes,
+                |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| out[0][b]),
+                |i| expression.and_then(|e| face_bones.get(i).copied().flatten().map(|b| e.local(b, 0.0))),
+            );
+            out.push(posed);
+        }
+        out
+    }
+
+    /// One skeleton for all models: the body's nodes, then each part's nodes the body does not
+    /// have. Per model, its node's index there.
+    fn combined_skeleton(&self) -> (Vec<Vec<usize>>, Vec<Option<usize>>, Vec<String>, Vec<glam::Mat4>) {
+        let mut names: Vec<String> = Vec::new();
+        let mut binds = Vec::new();
+        let mut maps: Vec<Vec<usize>> = Vec::new();
+        for model in &self.models {
+            let map: Vec<usize> = model
+                .nodes
+                .iter()
+                .map(|node| {
+                    if let Some(at) = maps.first().and_then(|_| names.iter().position(|n| *n == node.name).filter(|&at| at < self.models[0].nodes.len())) {
+                        return at;
+                    }
+                    names.push(node.name.clone());
+                    binds.push(node.global);
+                    names.len() - 1
+                })
+                .collect();
+            maps.push(map);
+        }
+        let mut parents = vec![None; names.len()];
+        for (model, map) in self.models.iter().zip(&maps) {
+            for (i, node) in model.nodes.iter().enumerate() {
+                if map[i] >= parents.len() || (parents[map[i]].is_some()) {
+                    continue;
+                }
+                parents[map[i]] = node.parent.map(|p| map[p]).filter(|&p| p != map[i]);
+            }
+        }
+        (maps, parents, names, binds)
+    }
+}
+
 struct Doax2Pose {
     files: Vec<Vec<u8>>,
     motions: Vec<(usize, doax::Motion)>,
@@ -2705,6 +2760,55 @@ impl App {
         use anyhow::Context;
         use crate::export::{safe_name, write_glb, Export, ExportClip, ExportHand};
 
+        if let Some(pose) = &self.doax3_pose {
+            // One armature for body, face and hair; each vertex keeps its four heaviest nodes.
+            // Motions are baked a frame at a time with the expression on screen.
+            let (maps, parents, names, bind) = pose.combined_skeleton();
+            let mut model = self.export_source.clone();
+            for (input, &(k, i)) in pose.drawn.iter().enumerate() {
+                let (Some(out), Some(skins)) = (model.pieces.get_mut(input), pose.models[k].skins.get(i).filter(|s| !s.is_empty())) else { continue };
+                out.vertices = pose.models[k].pieces[i].vertices.clone();
+                out.vertex_skin = Some(
+                    skins
+                        .iter()
+                        .map(|skin| {
+                            let mut heaviest: Vec<(u16, f32)> = skin.iter().filter(|(_, w)| *w > 0.0).map(|&(n, w)| (maps[k][n as usize] as u16, w)).collect();
+                            heaviest.sort_by(|a, b| b.1.total_cmp(&a.1));
+                            heaviest.truncate(4);
+                            let total: f32 = heaviest.iter().map(|(_, w)| w).sum::<f32>().max(1e-6);
+                            let mut four = [(0u16, 0f32); 4];
+                            for (slot, (n, w)) in four.iter_mut().zip(heaviest) {
+                                *slot = (n, w / total);
+                            }
+                            four
+                        })
+                        .collect(),
+                );
+            }
+            let expression = self.char_panel.selected_face.checked_sub(1).and_then(|f| pose.faces.as_ref()?.motions.get(f));
+            let chosen: Vec<usize> = if all_motions { (0..pose.motions.motions.len()).collect() } else { pose.playing.into_iter().collect() };
+            let mut clips = Vec::new();
+            for index in chosen {
+                let motion = &pose.motions.motions[index];
+                let frames: Vec<Vec<glam::Mat4>> = (0..motion.frames)
+                    .map(|frame| {
+                        let posed = pose.posed(Some(motion), frame as f32, expression);
+                        let mut all = bind.clone();
+                        for (model, map) in posed.iter().zip(&maps) {
+                            for (i, m) in model.iter().enumerate() {
+                                all[map[i]] = *m;
+                            }
+                        }
+                        all
+                    })
+                    .collect();
+                clips.push(ExportClip { name: self.current_animations[index].name.clone(), frames, hands: Vec::new() });
+            }
+            let (game, character, costume) = &self.loaded_name;
+            let path = PathBuf::from("exports").join(game).join(safe_name(character)).join(format!("{}.glb", safe_name(costume)));
+            write_glb(&Export { model: &model, bind, parents, names, clips: &clips, hands: &[] }, &path)?;
+            return Ok(path);
+        }
         if self.doa4_pose.is_some() {
             // Soft bodies of a single motion, a shape key per frame, as for DOA3. Hands, the
             // chest and the placed objects have their own keys or places.
@@ -3237,29 +3341,11 @@ impl App {
             pose.shown = Some(key);
             let motion = pose.playing.and_then(|i| pose.motions.motions.get(i));
             let expression = face.checked_sub(1).and_then(|f| pose.faces.as_ref()?.motions.get(f));
-            let frame = self.anim_time;
-            // The body from the motion, or at rest; parts follow the body's nodes of the same
-            // name; the face's bones take the expression.
-            let body = &pose.models[0];
-            let bones = pose.motions.bones;
-            let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| motion.and_then(|mo| m::body_bone(&body.nodes[i].name).filter(|&b| b < bones).map(|b| mo.local(b, frame))));
             let changes: Vec<Vec<glam::Mat4>> = pose
-                .models
+                .posed(motion, self.anim_time, expression)
                 .iter()
-                .enumerate()
-                .map(|(k, model)| {
-                    let posed = if k == 0 {
-                        body_posed.clone()
-                    } else {
-                        let face_bones = if k == 1 { pose.face_bones.as_slice() } else { &[] };
-                        m::pose_nodes(
-                            &model.nodes,
-                            |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| body_posed[b]),
-                            |i| expression.and_then(|e| face_bones.get(i).copied().flatten().map(|b| e.local(b, 0.0))),
-                        )
-                    };
-                    posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect()
-                })
+                .zip(&pose.models)
+                .map(|(posed, model)| posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect())
                 .collect();
             for (input, &(k, i)) in pose.drawn.iter().enumerate() {
                 let model = &pose.models[k];

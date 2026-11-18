@@ -28,7 +28,7 @@ BIN=target/fast/doa_player EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|0|200|3|
 EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"                 # a DOAX suit and motion
 EXTRA="--doax2" tools/re/shot.sh out "Tina Armstrong|2|0|200|2.2|1.1"              # a DOAX2 suit and motion
 EXTRA="--doa4 --hair 2" tools/re/shot.sh out "Kasumi|0|1|200|3.6|0.9"              # a DOA4 costume and motion, with her third head file
-EXTRA="--doax3" tools/re/shot.sh out "Kasumi|0|0|20|1.3|1.3"                      # DOAX3 at rest, from the front (yaw 20); no export yet
+EXTRA="--doax3" tools/re/shot.sh out "Kasumi|0|0|20|1.3|1.3"                      # DOAX3 from the front (yaw 20); add --face N for an expression
 EXTRA="--doa2u --variant 1" tools/re/shot.sh out "Kasumi|0|0|200|3|1"           # records' variant 1 (0xFE), e.g. the sword in the hand
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
@@ -105,6 +105,8 @@ Needs the game: DOA2U `ryu00` in a match (kind 14; the first costume in the menu
 DOAX exports its 32 bones from the rest pose, arms out, with hands as shape keys and blended pieces by their weights. Checked in `blender -b` on two costumes, and one frame of `tina 0077` by eye against the viewer. Bulk export over DOAX was measured for 97 s only: 227 costumes, memory flat.
 
 Soft bodies of DOA3 and DOA2U are exported since 2026-11-12 when one motion is exported (the Costume button, or `--export` without `--all-motions`): the viewer runs the motion from the state the costume loads in, a game frame at a time, and every piece whose rest positions change (chains, cloth, tubes, springs, vertex copies, and also DOA3's hands and both games' faces) gets one shape key per frame, weighted 1 on its frame (`bake_soft_frames` in `app.rs`). Checked in `blender -b` on `hel00` (3 pieces) and DOA3 Kasumi 0 (15 pieces, rendered at two frames): nothing flies off. Normals stay the file's. With all motions they stay rigid, as before: a key per frame of hundreds of motions would be too large. Bulk exports (All costumes, `--export-all`) never bake, as baking steps the viewer and writes to the GPU every frame. DOA4's chains, cloth and springs are baked the same way (checked on `kas00`: 4 pieces), and so are DOAX2's hair and suit cloths, hands and blinks (checked on Kasumi's `ch_d_m_1`: the hair's two pieces, moving up to 23 cm over 117 frames).
+
+DOAX3 exports since 2026-11-18: one armature for body, face and hair (the body's nodes, then each part's nodes the body lacks: 510 on Kasumi, so joints are written as shorts past 256 nodes), each vertex with its four heaviest of up to twelve nodes, renormalised, and the playing motion (or all) baked per frame with the expression on screen. Checked in `blender -b` on Kasumi's `AYA_bi_02_a` with motion 10: 10 pieces moving together, feet on the ground, head at 1.4 to 1.6 m. No soft bodies, as the viewer has none for DOAX3.
 
 Objects that chains draw whole are exported where they hang (placed at load in DOA3 and DOA2U, at export in DOA4).
 

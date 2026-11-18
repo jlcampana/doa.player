@@ -94,6 +94,9 @@ pub struct ExportPiece {
     pub multi: Option<MultiBend>,
     pub welds: Vec<(usize, usize, usize)>,
     pub translucent: bool,
+    /// Vertices already in the rest pose with their own joints and weights (DOAX3's skinned
+    /// pieces, up to four of the heaviest influences each), which then override the above.
+    pub vertex_skin: Option<Vec<[(u16, f32); 4]>>,
 }
 
 /// What the loaders gave the renderer, kept for exporting.
@@ -126,6 +129,7 @@ impl ExportModel {
                 multi: input.multi.clone(),
                 welds: input.welds.clone(),
                 translucent: input.translucent,
+                vertex_skin: None,
             })
             .collect();
         Self { pieces, textures: textures.to_vec() }
@@ -170,7 +174,7 @@ fn joint(node: &Mat4) -> Mat4 {
 struct BoundVertex {
     position: Vec3,
     normal: Vec3,
-    joints: [u8; 4],
+    joints: [u16; 4],
     weights: [f32; 4],
 }
 
@@ -201,7 +205,7 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<Bo
         .map(|vertex| BoundVertex {
             position: matrix.transform_point3(vertex.position.into()),
             normal: normals * Vec3::from(vertex.normal),
-            joints: [node as u8, 0, 0, 0],
+            joints: [node as u16, 0, 0, 0],
             weights: [1.0, 0.0, 0.0, 0.0],
         })
         .collect();
@@ -211,7 +215,7 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<Bo
             for ((out, vertex), &weight) in bound.iter_mut().zip(&piece.vertices).zip(&bend.weights) {
                 let position = Vec3::from(vertex.position);
                 out.position = matrix.transform_point3(position).lerp(moved.transform_point3(position), 1.0 - weight);
-                out.joints = [node as u8, bend.parent as u8, 0, 0];
+                out.joints = [node as u16, bend.parent as u16, 0, 0];
                 out.weights = [weight, 1.0 - weight, 0.0, 0.0];
             }
         }
@@ -224,13 +228,13 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<Bo
             .collect();
         for ((out, vertex), weights) in bound.iter_mut().zip(&piece.vertices).zip(&multi.weights) {
             let (position, normal) = (Vec3::from(vertex.position), Vec3::from(vertex.normal));
-            let (mut joints, mut shares) = ([0u8; 4], [0f32; 4]);
+            let (mut joints, mut shares) = ([0u16; 4], [0f32; 4]);
             let mut left = 1.0;
             let (mut blended, mut blended_normal) = (Vec3::ZERO, Vec3::ZERO);
             for (k, matrix) in matrices.iter().enumerate().take(4) {
                 let share = weights.get(k).copied().unwrap_or(left);
                 left -= share;
-                joints[k] = multi.groups[k].0 as u8;
+                joints[k] = multi.groups[k].0 as u16;
                 shares[k] = share;
                 blended += matrix.transform_point3(position) * share;
                 blended_normal += matrix.transform_vector3(normal) * share;
@@ -249,13 +253,13 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<Bo
             if vertex.weight >= 1.0 {
                 out.position = parent.transform_point3(vertex.position);
                 out.normal = parent.transform_vector3(vertex.normal);
-                out.joints = [parent_node as u8, 0, 0, 0];
+                out.joints = [parent_node as u16, 0, 0, 0];
                 out.weights = [1.0, 0.0, 0.0, 0.0];
             } else {
                 let (rotation, origin) = blend.frame(&matrix, parent, vertex.weight);
                 out.position = rotation * vertex.position + origin;
                 out.normal = rotation * vertex.normal;
-                out.joints = [node as u8, parent_node as u8, 0, 0];
+                out.joints = [node as u16, parent_node as u16, 0, 0];
                 out.weights = [1.0 - vertex.weight, vertex.weight, 0.0, 0.0];
             }
         }
@@ -266,8 +270,16 @@ fn bound_vertices(pieces: &[ExportPiece], index: usize, bind: &[Mat4]) -> Vec<Bo
         let source_node = from.node.min(bind.len() - 1);
         out.position = bind[source_node].transform_point3(rest.position.into());
         out.normal = bind[source_node].transform_vector3(rest.normal.into());
-        out.joints = [source_node as u8, 0, 0, 0];
+        out.joints = [source_node as u16, 0, 0, 0];
         out.weights = [1.0, 0.0, 0.0, 0.0];
+    }
+    if let Some(skin) = &piece.vertex_skin {
+        for ((out, vertex), influences) in bound.iter_mut().zip(&piece.vertices).zip(skin) {
+            out.position = vertex.position.into();
+            out.normal = vertex.normal.into();
+            out.joints = influences.map(|(j, _)| j);
+            out.weights = influences.map(|(_, w)| w);
+        }
     }
     bound
 }
@@ -314,6 +326,7 @@ impl Writer {
 
 const FLOAT: u32 = 5126;
 const UNSIGNED_BYTE: u32 = 5121;
+const UNSIGNED_SHORT: u32 = 5123;
 const UNSIGNED_INT: u32 = 5125;
 
 fn png_bytes(texture: &ModelTexture) -> Result<Vec<u8>> {
@@ -405,12 +418,19 @@ pub fn glb_bytes(export: &Export) -> Result<Vec<u8>> {
         let positions: Vec<Vec3> = bound.iter().map(|v| v.position).collect();
         let normals: Vec<Vec3> = bound.iter().map(|v| v.normal.try_normalize().unwrap_or(Vec3::Y)).collect();
         let uvs: Vec<[f32; 2]> = piece.vertices.iter().map(|v| v.uv).collect();
-        let vertex_joints: Vec<[u8; 4]> = bound.iter().map(|v| v.joints).collect();
+        // Bytes while every node fits in one, as glTF prefers; shorts past 256 nodes (DOAX3).
+        let short_joints = bone_count > 256;
+        let byte_joints: Vec<[u8; 4]> = bound.iter().map(|v| v.joints.map(|j| j as u8)).collect();
+        let short_list: Vec<[u16; 4]> = bound.iter().map(|v| v.joints).collect();
         let weights: Vec<[f32; 4]> = bound.iter().map(|v| v.weights).collect();
         let position = writer.vec3s(&positions, true);
         let normal = writer.vec3s(&normals, false);
         let uv = writer.accessor(bytemuck::cast_slice(&uvs), FLOAT, "VEC2", uvs.len(), None);
-        let joint_list = writer.accessor(bytemuck::cast_slice(&vertex_joints), UNSIGNED_BYTE, "VEC4", vertex_joints.len(), None);
+        let joint_list = if short_joints {
+            writer.accessor(bytemuck::cast_slice(&short_list), UNSIGNED_SHORT, "VEC4", short_list.len(), None)
+        } else {
+            writer.accessor(bytemuck::cast_slice(&byte_joints), UNSIGNED_BYTE, "VEC4", byte_joints.len(), None)
+        };
         let weight_list = writer.accessor(bytemuck::cast_slice(&weights), FLOAT, "VEC4", weights.len(), None);
 
         // Hands and other morph sets on this piece: their shapes are absolute, in the
@@ -635,6 +655,7 @@ mod tests {
             multi: None,
             welds: Vec::new(),
             translucent: false,
+            vertex_skin: None,
         }
     }
 
