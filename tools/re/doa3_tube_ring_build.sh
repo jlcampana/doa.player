@@ -50,6 +50,44 @@ cat > "$H/stubs.c" <<'C'
 /* _CIacos: st(0) = acos(st(0)), returning to the caller. */
 void sub_0018E9D8(void) { g_fp_stack[g_fp_top] = acos(g_fp_stack[g_fp_top]); g_esp += 4; }
 C
+cat > "$H/harness.c" <<'C'
+/* Calls the ring functions on a guest memory block, for tools/re/doa3_tube_ring.py. */
+#define RECOMP_GENERATED_CODE
+#include "recomp_funcs.h"
+#include <stdlib.h>
+#include <string.h>
+#define GUEST_SIZE (64u << 20)
+static uint8_t *memory;
+uint8_t *h_init(void) {
+    if (!memory) memory = calloc(GUEST_SIZE, 1);
+    g_xbox_mem_offset = (ptrdiff_t)memory;
+    return memory;
+}
+void h_set_esp(uint32_t value) { g_esp = value; }
+uint32_t h_esp(void) { return g_esp; }
+uint32_t h_eax(void) { return g_eax; }
+void h_fp_clear(void) { g_fp_top = 0; for (int i = 0; i < 8; i++) g_fp_stack[i] = 0; }
+double h_fp(int i) { return g_fp_stack[(g_fp_top + i) & 7]; }
+int h_fp_top(void) { return g_fp_top; }
+void sub_00043D80(void); void sub_00043DE0(void); void sub_00043E40(void); void sub_00043E80(void);
+void sub_00044110(void); void sub_00044190(void); void sub_00044270(void); void sub_00044620(void);
+void sub_00044AE0(void); void sub_00044C00(void); void sub_00044ED0(void); void sub_00045080(void);
+/* Pushes a return address and calls; the callee pops it. */
+int h_call(uint32_t address) {
+    g_esp -= 4; MEM32(g_esp) = 0xDEAD0000u;
+    switch (address) {
+    case 0x43D80: sub_00043D80(); break; case 0x43DE0: sub_00043DE0(); break;
+    case 0x43E40: sub_00043E40(); break; case 0x43E80: sub_00043E80(); break;
+    case 0x44110: sub_00044110(); break; case 0x44190: sub_00044190(); break;
+    case 0x44270: sub_00044270(); break; case 0x44620: sub_00044620(); break;
+    case 0x44AE0: sub_00044AE0(); break; case 0x44C00: sub_00044C00(); break;
+    case 0x44ED0: sub_00044ED0(); break; case 0x45080: sub_00045080(); break;
+    default: return -1;
+    }
+    return 0;
+}
+C
 cd "$H"
-for f in ring_funcs runtime stubs recomp_math; do gcc -c -O1 -w $f.c -o $f.o; done
-echo "Built objects in $H: link them with a harness that lays out guest memory and calls sub_00045080."
+for f in ring_funcs runtime stubs recomp_math harness; do gcc -c -O1 -fPIC -w $f.c -o $f.o; done
+gcc -shared -o libring.so ring_funcs.o runtime.o stubs.o recomp_math.o harness.o -lm
+echo "Built $H/libring.so: tools/re/doa3_tube_ring.py calls it."

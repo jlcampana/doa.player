@@ -14,7 +14,7 @@ documentado lo que no se pueda hacer sin el juego) antes de pasar al siguiente.
    la línea de Fire Emblem que pidió el usuario.
 3. **En curso.** Modo 1 de los tubos: leído el contrato de `sub_00045080` y lo que hace cada parte
    (`docs/doa3-internals.md`, "Tubes"); el código original compila aparte para comparar
-   (`tools/re/doa3_tube_ring_build.sh`). Falta el arnés y el port (unas 1300 líneas de x87).
+   (`tools/re/doa3_tube_ring_build.sh`). El arnés está hecho: `tools/re/doa3_tube_ring.py` saca vectores de prueba del código original. Falta el port (unas 1300 líneas de x87) y comprobarlo con esos vectores.
    **DOA3, punto 2 del backlog**: el modo 1 de los tubos (`sub_00044620` y cuatro auxiliares; hay
    una captura en `target/captures/doa3_hitomi_tubes.bin`), y después lo demás de ese punto:
    otros objetivos de la cara, viento real del escenario, normales de los vértices, secciones
