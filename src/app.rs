@@ -429,6 +429,7 @@ pub struct App {
     /// The loaded DOAX character's offsets and `.mot` files, and the motion playing.
     doax_pose: Option<DoaxPose>,
     doax2_pose: Option<Doax2Pose>,
+    doax3_pose: Option<Doax3Pose>,
     doa4_pose: Option<Doa4Pose>,
     doax_hdd: Option<doax::LazyArchive>,
     doax_dvd: Option<doax::LazyArchive>,
@@ -571,6 +572,16 @@ struct Doax2Cloth {
     sim: crate::formats::doax2_cloth::ClothSim,
     node: usize,
     targets: Vec<(usize, Vec<(usize, usize)>)>,
+}
+
+/// A DOAX3 costume with its face and hair as placed at load, the piece each mesh input draws,
+/// and the character's motions.
+struct Doax3Pose {
+    models: Vec<crate::formats::doax3::Model>,
+    /// (model, piece) per mesh input, in order.
+    drawn: Vec<(usize, usize)>,
+    motions: crate::formats::doax3_motion::MotionFile,
+    playing: Option<usize>,
 }
 
 struct Doax2Pose {
@@ -956,6 +967,7 @@ impl App {
             doax_stage_lights,
             doax_pose: None,
             doax2_pose: None,
+            doax3_pose: None,
             doa4_pose: None,
             doax_hdd,
             doax_dvd,
@@ -1038,6 +1050,7 @@ impl App {
             .map(|entry| (entry.name.clone(), entry.doa3_motion_id, self.anim_time));
         self.doax_pose = None;
         self.doax2_pose = None;
+        self.doax3_pose = None;
         self.doa4_pose = None;
         self.mesh.set_lights_follow_camera(false);
         self.load_character_files(char_idx, costume_idx);
@@ -1719,11 +1732,8 @@ impl App {
             textures.extend(decoded.into_iter().chain(std::iter::repeat_with(|| crate::formats::model::ModelTexture { width: 1, height: 1, rgba: vec![255; 4] })).take(model.texture_count));
         }
         let models: Vec<doax3::Model> = models.into_iter().map(|(m, _)| m).collect();
-        let pieces: Vec<(&crate::formats::model::ModelPiece, usize)> = models
-            .iter()
-            .zip(&first_texture)
-            .flat_map(|(m, &first)| m.drawn_pieces().map(move |(_, p)| (p, first)))
-            .collect();
+        let drawn: Vec<(usize, usize)> = models.iter().enumerate().flat_map(|(k, m)| m.drawn_pieces().map(move |(i, _)| (k, i))).collect();
+        let pieces: Vec<(&crate::formats::model::ModelPiece, usize)> = drawn.iter().map(|&(k, i)| (&models[k].pieces[i], first_texture[k])).collect();
         let inputs: Vec<PieceInput> = pieces
             .iter()
             .map(|&(piece, first)| PieceInput {
@@ -1738,8 +1748,20 @@ impl App {
                 translucent: false,
             })
             .collect();
+        // The character's motions (`*_INGAME_MPM.mpm`): 21 body bones.
+        let motion_path = format!("00/character/{code}/animation/{code}_INGAME_MPM.mpm");
+        let motions = archives
+            .read(&motion_path)
+            .and_then(|d| crate::formats::doax3_motion::parse_mpm(&d))
+            .map_err(|e| log::warn!("DOAX3 {motion_path}: {e:#}"))
+            .unwrap_or(crate::formats::doax3_motion::MotionFile { bones: 0, root: String::new(), motions: Vec::new() });
         self.doa3_pose = None;
-        self.current_animations = Vec::new();
+        self.current_animations = motions
+            .motions
+            .iter()
+            .enumerate()
+            .map(|(i, m)| AnimationEntry { name: format!("Motion {i} ({} frames)", m.frames), file_key: motion_path.clone(), doa3_motion: None, doa3_motion_id: i })
+            .collect();
         self.anim_panel.selected_anim_idx = None;
         self.anim_time = 0.0;
         Self::set_loaded_name(&mut self.loaded_name, &mut self.char_panel, ("DOAX3".to_string(), display_name.clone(), label.clone()));
@@ -1752,7 +1774,9 @@ impl App {
         // the ground, as there is no motion to place it.
         let lowest = models[0].drawn_pieces().flat_map(|(_, p)| &p.vertices).map(|v| v.position[1]).fold(0.0f32, f32::min);
         self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * -lowest)]);
-        Ok(format!("DOAX3: {display_name} - {label}, {count} pieces at rest, {} textures", textures.len()))
+        let motion_count = motions.motions.len();
+        self.doax3_pose = Some(Doax3Pose { models, drawn, motions, playing: None });
+        Ok(format!("DOAX3: {display_name} - {label}, {count} pieces, {} textures, {motion_count} motions", textures.len()))
     }
 
     fn try_load_doax_character(&mut self, char_idx: usize, costume_idx: usize) -> anyhow::Result<String> {
@@ -3127,6 +3151,16 @@ impl App {
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.
     pub fn select_motion(&mut self, index: usize) {
+        if let Some(pose) = &mut self.doax3_pose {
+            if index < pose.motions.motions.len() {
+                pose.playing = Some(index);
+                self.anim_panel.selected_anim_idx = Some(index);
+                self.anim_panel.playing = true;
+                self.anim_time = 0.0;
+                self.update_doa3_pose();
+            }
+            return;
+        }
         if let Some(pose) = &mut self.doa4_pose {
             if index < pose.motions.len() {
                 pose.playing = Some(index);
@@ -3172,6 +3206,37 @@ impl App {
     }
 
     pub fn update_doa3_pose(&mut self) {
+        if let Some(pose) = &self.doax3_pose {
+            use crate::formats::doax3_motion as m;
+            let Some(index) = pose.playing else { return };
+            let motion = &pose.motions.motions[index];
+            let frame = self.anim_time;
+            // The body from the motion; parts follow the body's nodes of the same name.
+            let body = &pose.models[0];
+            let body_posed = m::pose_nodes(&body.nodes, |_| None, |i| m::body_bone(&body.nodes[i].name).filter(|&b| b < pose.motions.bones).map(|b| motion.local(b, frame)));
+            let changes: Vec<Vec<glam::Mat4>> = pose
+                .models
+                .iter()
+                .enumerate()
+                .map(|(k, model)| {
+                    let posed = if k == 0 {
+                        body_posed.clone()
+                    } else {
+                        m::pose_nodes(&model.nodes, |i| body.nodes.iter().position(|n| n.name == model.nodes[i].name).map(|b| body_posed[b]), |_| None)
+                    };
+                    posed.iter().zip(&model.nodes).map(|(p, n)| *p * n.global.inverse()).collect()
+                })
+                .collect();
+            for (input, &(k, i)) in pose.drawn.iter().enumerate() {
+                let model = &pose.models[k];
+                let Some(skins) = model.skins.get(i).filter(|s| !s.is_empty()) else { continue };
+                let skinned = m::skin(&model.pieces[i].vertices, skins, &changes[k]);
+                self.mesh.set_rest_positions(input, skinned.iter().enumerate().map(|(v, (p, _))| (v, *p)));
+                self.mesh.set_rest_normals(input, skinned.iter().enumerate().map(|(v, (_, n))| (v, n.to_array())));
+            }
+            self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::IDENTITY]);
+            return;
+        }
         if let Some(pose) = &mut self.doa4_pose {
             let Some(index) = pose.playing else { return };
             let (file, tracks, _) = &pose.motions[index];
@@ -3614,6 +3679,7 @@ impl App {
         if self.anim_panel.playing {
             self.anim_time += dt * self.anim_panel.speed * 60.0;
             let doax_length = self.doax_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32))
+                .or_else(|| self.doax3_pose.as_ref().and_then(|p| Some(p.motions.motions[p.playing?].frames.saturating_sub(1) as f32)))
                 .or_else(|| self.doax2_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].1.frames as f32)))
                 .or_else(|| self.doa4_pose.as_ref().and_then(|p| Some(p.motions[p.playing?].2 as f32)));
             let length = doax_length.unwrap_or_else(|| self.doa3_pose.as_ref().and_then(|p| p.motion.as_ref()).map_or(0.0, |m| m.length));

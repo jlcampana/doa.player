@@ -238,7 +238,13 @@ pub struct Model {
     /// models, Nyotengu's `WGT_face1`, which also has no texture coordinates) are depth or
     /// shadow passes, probably.
     pub has_normals: Vec<bool>,
+    /// Per piece, per vertex: up to 12 (node, weight) pairs, the weights summing to 1, with the
+    /// object's palette applied. Empty for pieces without weights or palette.
+    pub skins: Vec<Vec<Skin>>,
 }
+
+/// A vertex's influences: node numbers and weights; unused slots have weight 0.
+pub type Skin = [(u16, f32); 12];
 
 impl Model {
     /// Whether piece `i` is drawn in the rest view: by its object's name and its normals.
@@ -484,6 +490,28 @@ pub fn decode_texture(gnf: &[u8]) -> Result<ModelTexture> {
     Ok(ModelTexture { width: width as u32, height: height as u32, rgba })
 }
 
+/// The node palette of an object: in its `NodeObj` (named after it, see `object_node`), +0x60
+/// is the offset of a block whose +4 is the count and whose +0x60 starts the node numbers.
+fn object_palette(tmc: &[u8], nodes: &[Node], node_objects: &[usize], object: &str) -> Result<Option<Vec<u32>>> {
+    let found = match object.strip_prefix('*') {
+        Some(tail) => nodes.iter().position(|n| n.name.ends_with(tail) && n.name.starts_with("WGT")),
+        None => nodes.iter().position(|n| n.name == object),
+    };
+    let Some(at) = found.and_then(|i| node_objects.get(i)).copied() else { return Ok(None) };
+    let block = u32_at(tmc, at + 0x60)? as usize;
+    if block == 0 {
+        return Ok(None);
+    }
+    let count = u32_at(tmc, at + block + 4)? as usize;
+    // Some blocks read otherwise (Kasumi's `WGT_sweat_cheek_l`: 128 entries past the node
+    // count); such objects are left unskinned.
+    if count >= 1024 {
+        return Ok(None);
+    }
+    let list: Vec<u32> = (0..count).map(|i| u32_at(tmc, at + block + 0x60 + i * 4)).collect::<Result<_>>()?;
+    Ok(list.iter().all(|&n| (n as usize) < nodes.len()).then_some(list))
+}
+
 /// A sub-mesh, one of an `ObjGeo`'s children: +4 its `MtrCol` entry, +0x10 the number of
 /// texture entries and from +0x14 their offsets from the sub-mesh, +0x3C the declaration it
 /// draws from (within the object), +0x80 its first index, index count, first vertex and vertex
@@ -601,6 +629,8 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
     let mut objects = Vec::new();
     let mut colour_only = Vec::new();
     let mut has_normals = Vec::new();
+    let mut skins = Vec::new();
+    let node_objects: Vec<usize> = node_lay.children.clone();
     let mut k = 0;
     for &geo in get("MdlGeo")?.children.iter().filter(|&&g| g != 0) {
         let raw = tmc.get(geo + 0x60..geo + 0x80).context("object name")?;
@@ -627,6 +657,40 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
                     Ok(ModelVertex { position: p, normal: n, uv: [t[0], t[1]] })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            // Weights (usage 1) and node indices (usage 2), three sets of four, through the
+            // palette in the object's node (`NodeObj` +0x60: a block with the count at +4 and
+            // u32 node numbers from +0x60). Checked: the heaviest node lies 3 to 6 cm from its
+            // vertices, median, on Kasumi's body, suit and hair.
+            let palette = object_palette(tmc, &nodes, &node_objects, &object)?;
+            let weight_sets: Vec<(usize, u8)> = (0..3).filter_map(|i| decl.elements.iter().find(|e| e.2 == 1 && e.3 == i).map(|e| (e.0, e.1))).collect();
+            let joint_sets: Vec<(usize, u8)> = (0..3).filter_map(|i| decl.elements.iter().find(|e| e.2 == 2 && e.3 == i).map(|e| (e.0, e.1))).collect();
+            let skin = match &palette {
+                Some(palette) if !weight_sets.is_empty() && weight_sets.len() == joint_sets.len() => (0..used)
+                    .map(|v| {
+                        let at = vertex_base + vertex_at + v * decl.stride;
+                        let mut out: Skin = [(0, 0.0); 12];
+                        for (set, (&(wo, wt), &(jo, jt))) in weight_sets.iter().zip(&joint_sets).enumerate() {
+                            ensure!(jt == 5, "node indices of type {jt:#x}");
+                            for i in 0..4 {
+                                let w = match wt {
+                                    0xB => super::doax2::half(u16_at(tmcl, at + wo + i * 2)?),
+                                    3 => f32_at(tmcl, at + wo + i * 4)?,
+                                    other => bail!("weights of type {other:#x}"),
+                                };
+                                let j = *tmcl.get(at + jo + i).context("node index")? as usize;
+                                if w > 0.0 {
+                                    if let Some(&node) = palette.get(j) {
+                                        out[set * 4 + i] = (node as u16, w);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(out)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                _ => Vec::new(),
+            };
+            skins.push(skin);
             let drawn: Vec<&SubMesh> = subs.iter().filter(|sub| sub.declaration == d && sub.first_index + sub.index_count <= indices.len()).collect();
             colour_only.push(if drawn.is_empty() { vec![false] } else { drawn.iter().map(|sub| sub.entries == 1).collect() });
             let mut materials: Vec<ModelMaterial> = drawn
@@ -647,7 +711,7 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
         }
     }
     let texture_count = texture_files(tmc, tmcl).map_or(0, |t| t.len());
-    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals })
+    Ok(Model { name, nodes, pieces, objects, texture_count, colour_only, has_normals, skins })
 }
 
 /// The node named after an object. Object names longer than 15 characters are cut from the
