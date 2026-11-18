@@ -12,6 +12,7 @@ pub mod doax2_cloth;
 pub mod doa4;
 pub mod doax3;
 pub mod doax3_motion;
+pub mod chest_sway;
 pub mod doa3_chains;
 pub mod doa3_cloth;
 pub mod doa3_morphs;

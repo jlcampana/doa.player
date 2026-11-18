@@ -732,6 +732,19 @@ impl MeshRenderer {
         }
     }
 
+    /// Adds offsets to rest positions of a piece, in the space of its node (the chest's sway,
+    /// on top of the vertical shape written the same frame).
+    pub fn add_rest_offsets(&mut self, piece: usize, offsets: impl Iterator<Item = (usize, glam::Vec3)>) {
+        let Some(model) = &mut self.model else { return };
+        let Some(range) = model.pieces.get(piece).map(|p| p.vertices.clone()) else { return };
+        let rest = &mut model.rest_vertices[range];
+        for (vertex, offset) in offsets {
+            if let Some(out) = rest.get_mut(vertex) {
+                out.position = (glam::Vec3::from(out.position) + offset).to_array();
+            }
+        }
+    }
+
     /// Replaces rest positions of a piece, in the space of its node.
     pub fn set_rest_positions(&mut self, piece: usize, positions: impl Iterator<Item = (usize, glam::Vec3)>) {
         let Some(model) = &mut self.model else { return };

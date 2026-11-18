@@ -827,6 +827,8 @@ pub struct Doa3Chest {
     pub spring: Option<ChestSpring>,
     /// Game frames already simulated.
     pub frame: u64,
+    /// The sideways and forward sway, the viewer's stand-in (`chest_sway`), with its shapes.
+    pub sway: Option<(crate::formats::chest_sway::SwaySet, crate::formats::chest_sway::ChestSway)>,
 }
 
 pub struct Doa3Motion {
@@ -2332,7 +2334,7 @@ impl App {
         let chest = chest_morph.and_then(|(object, groups)| {
             let piece = chain_piece_of_chest?;
             log::info!("Chest spring on object {object}, {} groups", groups.len());
-            Some(Doa3Chest { piece, groups, spring: None, frame: 0 })
+            Some(Doa3Chest { piece, sway: crate::formats::chest_sway::SwaySet::from_groups(&groups).map(|set| (set, Default::default())), groups, spring: None, frame: 0 })
         });
         self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: false });
         self.game_clock = 0.0;
@@ -2743,7 +2745,10 @@ impl App {
             .filter(|_| spring_enabled)
             .and_then(|object| {
                 let piece = nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object)?;
-                Some(Doa3Chest { piece, groups: doa3::parse_chest_morph(cat)?, spring: None, frame: 0 })
+                {
+                    let groups = doa3::parse_chest_morph(cat)?;
+                    Some(Doa3Chest { piece, sway: crate::formats::chest_sway::SwaySet::from_groups(&groups).map(|set| (set, Default::default())), groups, spring: None, frame: 0 })
+                }
             });
 
         let hands = doa3_morphs::parse_hands(cat, &nodes.rigid);
@@ -3095,6 +3100,8 @@ impl App {
             .context("no motion to take a rest pose from")?;
         let soft = &pose.chains;
         let chest_set = pose.chest.as_ref().map(|chest| chest_morph_set(&chest.groups));
+        // The sideways and forward sway's sets, after the vertical one (the viewer's stand-in).
+        let sway_sets: Vec<doa3_morphs::PoseHand> = pose.chest.as_ref().and_then(|c| c.sway.as_ref()).map_or_else(Vec::new, |(set, _)| set.export_sets().to_vec());
         let hand_count = soft.pose_hands.iter().filter(|hand| soft.pieces.get(hand.object).is_some_and(Option::is_some)).count();
         let hands: Vec<ExportHand> = soft
             .pose_hands
@@ -3104,6 +3111,7 @@ impl App {
                 Some(ExportHand { piece, hand })
             })
             .chain(pose.chest.as_ref().zip(chest_set.as_ref()).map(|(chest, set)| ExportHand { piece: chest.piece, hand: set }))
+            .chain(pose.chest.as_ref().into_iter().flat_map(|chest| sway_sets.iter().map(move |set| ExportHand { piece: chest.piece, hand: set })))
             .chain(soft_frames.iter().zip(&soft_sets).map(|((piece, _), hand)| ExportHand { piece: *piece, hand }))
             .collect();
         let chest_parameters = if pose.doa2u_style.is_some() { doa2u::CHEST_SPRING } else { ChestSpring::DOA3 };
@@ -3122,6 +3130,7 @@ impl App {
             let (mut frames, mut hand_frames) = (Vec::new(), Vec::new());
             // The chest spring starts at rest on the motion's first frame and steps once a frame.
             let mut spring: Option<ChestSpring> = None;
+            let mut sway = crate::formats::chest_sway::ChestSway::new();
             for frame in 0..=doa3::motion_length(data, tracks) {
                 let values = doa3::eval_motion(data, tracks, frame as f32)?;
                 let nodes = solve(&values);
@@ -3139,6 +3148,11 @@ impl App {
                     // As `deform_piece`: the offset by the value's size, positive or negative.
                     let value = (spring.value * bounce).clamp(-1.0, 1.0);
                     frame_states.push((0, if value >= 0.0 { 1 } else { 2 }, value.abs()));
+                }
+                if !sway_sets.is_empty() {
+                    let value = sway.step(&nodes[0]) * bounce;
+                    frame_states.push(crate::formats::chest_sway::SwaySet::export_state(value.x));
+                    frame_states.push(crate::formats::chest_sway::SwaySet::export_state(value.y));
                 }
                 for set in &soft_sets {
                     let shape = (frame as usize).min(set.shapes.len().saturating_sub(1));
@@ -3183,6 +3197,9 @@ impl App {
             if let Some(chest) = &mut pose.chest {
                 chest.spring = None;
                 chest.frame = 0;
+                if let Some((_, sway)) = &mut chest.sway {
+                    *sway = Default::default();
+                }
             }
             length
         };
@@ -3693,6 +3710,9 @@ impl App {
                     // Holding the pose between 60 Hz frames, as the game does.
                     while chest.frame < clock {
                         spring.step(&nodes[0]);
+                        if let Some((_, sway)) = &mut chest.sway {
+                            sway.step(&nodes[0]);
+                        }
                         chest.frame += 1;
                     }
                     let scaled = spring.value * self.bg_panel.bounce_scale;
@@ -3703,6 +3723,9 @@ impl App {
                         chest.groups.iter().map(|g| (if scaled >= 0.0 { g.positive } else { g.negative }).length()).fold(0.0, f32::max) * scaled.abs(),
                     );
                     self.mesh.deform_piece(chest.piece, &chest.groups, scaled);
+                    if let Some((set, sway)) = &chest.sway {
+                        self.mesh.add_rest_offsets(chest.piece, set.offsets(sway.value * self.bg_panel.bounce_scale));
+                    }
                 }
                 if let Some(soft) = self.doa3_pose.as_mut().map(|p| &mut p.chains) {
                     // Holding the pose between 60 Hz frames, as the spring does.
