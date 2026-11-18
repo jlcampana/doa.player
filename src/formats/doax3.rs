@@ -490,18 +490,25 @@ pub fn decode_texture(gnf: &[u8]) -> Result<ModelTexture> {
     Ok(ModelTexture { width: width as u32, height: height as u32, rgba })
 }
 
-/// The node palette of an object: in its `NodeObj` (named after it, see `object_node`), +0x60
-/// is the offset of a block whose +4 is the count and whose +0x60 starts the node numbers.
-fn object_palette(tmc: &[u8], nodes: &[Node], node_objects: &[usize], object: &str) -> Result<Option<Vec<u32>>> {
-    let found = match object.strip_prefix('*') {
+/// The node named after an object, from a node list (see `object_node`).
+fn object_node_in(nodes: &[Node], object: &str) -> Option<usize> {
+    match object.strip_prefix('*') {
         Some(tail) => nodes.iter().position(|n| n.name.ends_with(tail) && n.name.starts_with("WGT")),
         None => nodes.iter().position(|n| n.name == object),
-    };
-    let Some(at) = found.and_then(|i| node_objects.get(i)).copied() else { return Ok(None) };
-    let block = u32_at(tmc, at + 0x60)? as usize;
-    if block == 0 {
-        return Ok(None);
     }
+}
+
+/// The node palette of an object: in its `NodeObj` (named after it, see `object_node`), the one
+/// child block, whose +4 is the count and whose +0x60 starts the node numbers.
+fn object_palette(tmc: &[u8], nodes: &[Node], node_objects: &[usize], object: &str) -> Result<Option<Vec<u32>>> {
+    let found = object_node_in(nodes, object);
+    let Some(at) = found.and_then(|i| node_objects.get(i)).copied() else { return Ok(None) };
+    // The block is the `NodeObj`'s only child, through its own table (+0x14 count, +0x20 the
+    // table): at +0x70, or at +0x80 when the name (from +0x50) runs past 16 characters. Nodes
+    // without a palette have none.
+    let node = chunk(tmc, at)?;
+    let Some(&block_at) = node.children.first().filter(|&&c| c != 0) else { return Ok(None) };
+    let block = block_at - at;
     let count = u32_at(tmc, at + block + 4)? as usize;
     // Some blocks read otherwise (Kasumi's `WGT_sweat_cheek_l`: 128 entries past the node
     // count); such objects are left unskinned.
@@ -658,8 +665,8 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             // Weights (usage 1) and node indices (usage 2), three sets of four, through the
-            // palette in the object's node (`NodeObj` +0x60: a block with the count at +4 and
-            // u32 node numbers from +0x60). Checked: the heaviest node lies 3 to 6 cm from its
+            // palette in the object's node (`NodeObj`'s child block: the count at +4 and u32
+            // node numbers from +0x60). Checked: the heaviest node lies 3 to 6 cm from its
             // vertices, median, on Kasumi's body, suit and hair.
             let palette = object_palette(tmc, &nodes, &node_objects, &object)?;
             let weight_sets: Vec<(usize, u8)> = (0..3).filter_map(|i| decl.elements.iter().find(|e| e.2 == 1 && e.3 == i).map(|e| (e.0, e.1))).collect();
@@ -688,7 +695,16 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
                         Ok(out)
                     })
                     .collect::<Result<Vec<_>>>()?,
-                _ => Vec::new(),
+                // Without weights or palette (the 31 `WGT_*_head` of `MAR_bi_08`), rigid on the
+                // object's own node, which follows its parents.
+                _ => match object_node_in(&nodes, &object) {
+                    Some(node) => {
+                        let mut one: Skin = [(0, 0.0); 12];
+                        one[0] = (node as u16, 1.0);
+                        vec![one; used]
+                    }
+                    None => Vec::new(),
+                },
             };
             skins.push(skin);
             let drawn: Vec<&SubMesh> = subs.iter().filter(|sub| sub.declaration == d && sub.first_index + sub.index_count <= indices.len()).collect();
@@ -718,10 +734,7 @@ pub fn parse_model(tmc: &[u8], tmcl: &[u8]) -> Result<Model> {
 /// front and start with `*`: `*_sweat_cheek_l` is node `WGT_sweat_cheek_l`, `*T_SHADOW_MODEL`
 /// is `WGT_SHADOW_MODEL`.
 pub fn object_node(model: &Model, object: &str) -> Option<usize> {
-    match object.strip_prefix('*') {
-        Some(tail) => model.nodes.iter().position(|n| n.name.ends_with(tail) && n.name.starts_with("WGT")),
-        None => model.nodes.iter().position(|n| n.name == object),
-    }
+    object_node_in(&model.nodes, object)
 }
 
 /// Moves a part (face, hairstyle) onto a body: the part's `MOT01_Head` onto the body's, and each
@@ -894,6 +907,37 @@ mod texture_tests {
                 }
             }
         }
+    }
+
+    /// Parses every model in the archives and prints those that fail, with counts of pieces
+    /// without a palette.
+    #[test]
+    #[ignore]
+    fn every_model_parses() {
+        let archives = Archives::open(&game_dir()).unwrap();
+        let names: Vec<String> = archives.names().filter(|n| n.ends_with("_TMC.tmc")).map(str::to_string).collect();
+        let (mut failed, mut unskinned, mut pieces) = (0, 0, 0);
+        for name in &names {
+            let (Ok(tmc), Ok(tmcl)) = (archives.read(name), archives.read(&tmcl_path(name))) else { failed += 1; continue };
+            match parse_model(&tmc, &tmcl) {
+                Ok(m) => {
+                    for (i, _) in m.drawn_pieces() {
+                        pieces += 1;
+                        if m.skins[i].is_empty() {
+                            unskinned += 1;
+                            if unskinned < 20 {
+                                println!("{name}: {} has no skin", m.objects[i]);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    println!("{name}: {e:#}");
+                }
+            }
+        }
+        println!("{} models, {failed} failed; {pieces} drawn pieces, {unskinned} without skin", names.len());
     }
 
     /// Counts texture formats, tile modes and resource types over every model in the archives.
