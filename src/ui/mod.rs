@@ -1,6 +1,8 @@
 pub mod char_select;
 pub mod anim_panel;
 pub mod bg_select;
+pub mod layers_panel;
+pub mod view_panel;
 pub mod voice_panel;
 
 pub use char_select::CharSelectPanel;

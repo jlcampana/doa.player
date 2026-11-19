@@ -29,62 +29,60 @@ impl BgSelectPanel {
         Self { selected: 0, outline_width: 1.0, anime_shading: false, no_textures: false, plain_color: [128, 128, 132], mesh_only: false, bounce_scale: 1.0, lights: 0, relief: 0.0, game_lights: true, frame_request: None }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, options: &[BackgroundOption], has_bounce: bool, lit: bool, light_names: &[String]) {
-        egui::Window::new("Background")
-            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
-            .default_size([160.0, 220.0])
-            .resizable(false)
-            .show(ctx, |ui| {
-                for (i, opt) in options.iter().enumerate() {
-                    let sel = self.selected == i;
-                    if ui.selectable_label(sel, &opt.name).clicked() {
-                        self.selected = i;
-                    }
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    use crate::renderer::mesh::FramePart;
-                    ui.label("View:");
-                    for (name, part) in [("Full", FramePart::Full), ("Head", FramePart::Head), ("Hands", FramePart::Hands), ("Feet", FramePart::Feet)] {
-                        if ui.small_button(name).clicked() {
-                            self.frame_request = Some(part);
-                        }
-                    }
-                });
+    /// How the model is drawn and the background, drawn into `ui`.
+    pub fn view_ui(&mut self, ui: &mut egui::Ui, options: &[BackgroundOption]) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mesh_only, false, "Texturizado");
+            ui.selectable_value(&mut self.mesh_only, true, "Alambre");
+        });
+        if !self.mesh_only {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.no_textures, "Sin texturas");
+                ui.color_edit_button_srgb(&mut self.plain_color);
             });
-        // Shading and lights in a window of their own, below.
-        egui::Window::new("Shading")
-            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 300.0])
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.checkbox(&mut self.anime_shading, "Anime shading");
-                if self.anime_shading {
-                    ui.indent("outline", |ui| {
-                        ui.add(egui::Slider::new(&mut self.outline_width, 0.0..=4.0).text("Outline"));
-                    });
-                }
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.no_textures, "No textures");
-                    ui.color_edit_button_srgb(&mut self.plain_color);
+            ui.checkbox(&mut self.anime_shading, "Sombreado anime");
+            if self.anime_shading {
+                ui.indent("outline", |ui| {
+                    ui.add(egui::Slider::new(&mut self.outline_width, 0.0..=4.0).text("Contorno"));
                 });
-                ui.checkbox(&mut self.mesh_only, "Mesh only");
-                if lit {
-                    ui.checkbox(&mut self.game_lights, "Game lights");
-                    ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relief (not in game)"));
-                    egui::CollapsingHeader::new("Stage lights").show(ui, |ui| {
-                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            for (i, name) in light_names.iter().enumerate() {
-                                if ui.selectable_label(self.lights == i, name).clicked() {
-                                    self.lights = i;
-                                }
-                            }
-                        });
-                    });
+            }
+        }
+        egui::ComboBox::from_label("Fondo").selected_text(options.get(self.selected).map_or("", |o| o.name.as_str())).show_ui(ui, |ui| {
+            for (i, opt) in options.iter().enumerate() {
+                ui.selectable_value(&mut self.selected, i, &opt.name);
+            }
+        });
+    }
+
+    /// The game's lights, drawn into `ui`. `lit` says whether the model has the game's
+    /// materials.
+    pub fn lighting_ui(&mut self, ui: &mut egui::Ui, lit: bool, light_names: &[String]) {
+        if !lit {
+            ui.label(egui::RichText::new("Este modelo usa el sombreado del visor").color(egui::Color32::GRAY));
+            return;
+        }
+        ui.checkbox(&mut self.game_lights, "Luces del juego");
+        ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relieve (no está en el juego)"));
+        ui.label("Escenario:");
+        egui::ScrollArea::vertical().id_salt("stage lights").max_height(180.0).show(ui, |ui| {
+            for (i, name) in light_names.iter().enumerate() {
+                if ui.selectable_label(self.lights == i, name).clicked() {
+                    self.lights = i;
                 }
-                if has_bounce {
-                    ui.add(egui::Slider::new(&mut self.bounce_scale, 0.0..=3.0).text("Bounce"));
+            }
+        });
+    }
+
+    /// The camera's shots, drawn into `ui`.
+    pub fn camera_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::renderer::mesh::FramePart;
+        ui.horizontal_wrapped(|ui| {
+            for (name, part) in [("Entero", FramePart::Full), ("Cabeza", FramePart::Head), ("Manos", FramePart::Hands), ("Pies", FramePart::Feet)] {
+                if ui.button(name).clicked() {
+                    self.frame_request = Some(part);
                 }
-            });
+            }
+        });
     }
 
     pub fn current_option<'a>(&self, options: &'a [BackgroundOption]) -> Option<&'a BackgroundOption> {

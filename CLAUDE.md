@@ -32,6 +32,7 @@ EXTRA="--doax3" tools/re/shot.sh out "Kasumi|0|0|20|1.3|1.3"                    
 EXTRA="--doa2u --variant 1" tools/re/shot.sh out "Kasumi|0|0|200|3|1"           # records' variant 1 (0xFE), e.g. the sword in the hand
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
+target/fast/doa_player --load "Zack" 0 --doa2u --detach capas                      # a panel in its own window (vista or capas); --no-panels hides both, as shot.sh does
 
 target/fast/doa_player --load "Zack" 0 --doa2u --export [--all-motions]            # writes exports/\<game>/\<character>/\<costume>.glb
 
@@ -57,12 +58,37 @@ Measured against the running game; see `docs/doa2u-notes.md` for numbers and cod
 Characters face away at yaw 20 and the front is near yaw 200. DOA3 does the same, so this is the viewer's convention, not a pose bug.
 
 ## Next steps, in order
-1. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: drawing in the game's order, fog, the lightning's own rule (the storm now flashes on timing measured in a match, 2026-11-12), real point lights with a fighter position, and which areas change their table in code.
-2. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
-3. **Remaining soft body error.** Chains match with wind, `hel00` chain 7 included (2026-11-12, storm stage). Cloth with wind: every sheet of `hel00` matches at 0.00 mm with Helena still; her coat's sheets are 6 to 9 mm off only while she is thrown or hit (the game seems to hold the coat then, not found in the code); Gen Fu's sheets 0.5 mm in a fight. Springs (kind 5) match at 0.001 mm. Shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each.
-4. **Other soft body kinds:** kind 5 (springs, 282 records) is DOA3's spring, read from the code and running since 2026-11-12, checked live at 0.001 mm. Kinds 8 (Helena's item and chain 9, live only in some phases of a round), 9 (a trail effect), 12 (a particle emitter) and 14 (an object aimed at a body point) are read from the code and documented in the notes ("Springs, kind 5" and after); none is a soft body, none is ported. Left: 32 (`pdg`). Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
-5. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. DOA2U has no per-character substitution of pose 0 (DOA3's `sub_0004B63C`; checked 2026-11-12).
-6. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
+1. **Update the user interface** (asked by the user, 2026-11-19), following the one built in `/home/pandi/Projects/anime2waifu3d` (same stack: winit 0.30, wgpu 22, egui 0.29). The user tested it there and it works. **Done 2026-11-19 on the branch `interfaz-nueva`** (the user asked for a branch apart, to go back to the old interface if needed; not merged into `main`, waiting for the user's opinion). How it is built:
+   - `src/shell.rs` holds the window side (`Shared`: jobs, dialogs, actions, status, process window); `src/main.rs` the main window, `PanelWindow` and the 3D pass. `App` (`app.rs`) is the viewer and no longer holds egui or the window surface: `RenderContext` has `Arc` device and queue, `WindowGpu` the surface, instance and adapter. So a job takes the whole `App` to a worker thread and gives it back (`Shared::start_job`), waiting up to 100 ms first so quick costume changes do not flicker; meanwhile the panels show a spinner and the view only the background. Startup (`App::new` and the command line, `arguments.rs`) is such a job too, so `--export` runs on it.
+   - Jobs: loading a costume or a motion, exports (one costume, as…, all costumes of a character, with a progress line each), opening the games. The old per-frame export queue is gone.
+   - Panels: `ui/view_panel.rs` (Vista: export, character, view, lighting, animation, physics, voices, camera) and `ui/layers_panel.rs` (Capas: pieces grouped by their node, DOA3/DOA2U nodes named). Per piece (`MeshRenderer::set_piece_layer`): visibility, opacity (`coords.w` of the material, drawn with the translucent draws) and "Física: quieta", which puts the piece back to its loaded rest positions and ignores soft bodies, chest shapes and hands, also in a baked export. Layers reset on each load. "Mesh only" ignores layers.
+   - Measured before the change (`fast` build): opening the games 0.8 s; a costume 120 to 170 ms in DOA2U, DOA3 and DOAX, 530 to 700 ms in DOAX2, DOA4 and DOAX3.
+   - Checked: startup, loading from the command line, `--export`, `--detach capas` (the panel's window and the wider view), and hiding, opacity and freezing by a temporary hook, in screenshots. Not checked by clicking (no `xdotool` here): the buttons, Alt+click, the "Traje como…" dialog (`rfd` on a thread), docking back by closing the window. Labels are in Spanish; status messages from `app.rs` stay in English.
+   - Planned layout, kept for reference:
+   - **Layout.**
+     - Left side panel, "Vista": the actions (open, save, export), view mode, lighting, pose and animation, physics, face, and camera shots.
+     - Right side panel, "Capas": a Photoshop-like layer palette. Each piece has an eye toggle; Alt+click on the eye shows only that piece; groups fold; the selected piece has an opacity slider and its own physics preset.
+     - Bottom status bar: what the app is doing.
+     - Long tasks open a "Proceso" window with their progress log.
+     - Here, the floating `egui::Window`s (Animations, Background, Shading, Voices) and the character select side panel would become these docked panels or tabs inside them.
+   - **Never block the event loop**, or GNOME shows "not responding".
+     - File dialogs (`rfd`) run in a `std::thread`. The result comes back over an `mpsc` channel that the frame polls with `try_recv`; the dialog thread calls `egui::Context::request_repaint`. While a dialog is open, the panel is disabled, so a second one cannot be opened.
+     - Long jobs (loading a big CAT/archive, exports, anything over ~100 ms) run the same way. They send `Line(progress)` and then `Done(Result<...>)` messages; the status bar and the process window show them; on `Done` the result goes into the viewer. Wrap the work in `catch_unwind` so a panic becomes an error message.
+     - Pieces that must live in one process only once should be created once and reused, not per job; in anime2waifu3d this was the ONNX Runtime environment.
+     - See `anime2waifu3d/src/main.rs` (`Dialog`, `Request`, `render_frame`) and `src/app.rs` (`start_job`, `poll_job`, `JobMessage`).
+   - **Panels that leave the app window.** Each side panel has "↗ Sacar a otra ventana" (detach) and "↙ Volver a la ventana principal" (dock). Closing the panel's window also docks it.
+     - A detached panel is a separate winit window, a `PanelWindow` in `anime2waifu3d/src/main.rs`. It has its own `wgpu::Surface`, made from the same `Instance`, `Adapter` and `Device`, which are kept in `RenderContext`. It also has its own `egui::Context` (with the main style copied), `egui_winit::State` and `egui_wgpu::Renderer`.
+     - It draws the same panel function over the shared app state.
+     - `window_event` routes events by `WindowId`. `about_to_wait` requests a redraw for every panel window.
+     - The main window stops reserving the detached panel's space, so the 3D view grows.
+     - Requests to detach or dock are queued in the app and handled where the `ActiveEventLoop` is available.
+     - This does not use egui's multi-viewport system, because this custom winit+wgpu integration does not implement it.
+2. **Rest of the lighting.** All stages' lights come from the executable (see the notes). Open: drawing in the game's order, fog, the lightning's own rule (the storm now flashes on timing measured in a match, 2026-11-12), real point lights with a fighter position, and which areas change their table in code.
+3. **Compare with the game.** Lighting was compared by eye on `hel08` and `kas00` only. Check `zac01`, `tin09` and `lei03`, for which screenshots exist, once the lighting is in. `kas00` hands after the normals fix.
+4. **Remaining soft body error.** Chains match with wind, `hel00` chain 7 included (2026-11-12, storm stage). Cloth with wind: every sheet of `hel00` matches at 0.00 mm with Helena still; her coat's sheets are 6 to 9 mm off only while she is thrown or hit (the game seems to hold the coat then, not found in the code); Gen Fu's sheets 0.5 mm in a fight. Springs (kind 5) match at 0.001 mm. Shoulders (up to 2.6 cm, not looked at again). The head strips and `tin09` cape match on 1 pair each.
+5. **Other soft body kinds:** kind 5 (springs, 282 records) is DOA3's spring, read from the code and running since 2026-11-12, checked live at 0.001 mm. Kinds 8 (Helena's item and chain 9, live only in some phases of a round), 9 (a trail effect), 12 (a particle emitter) and 14 (an object aimed at a body point) are read from the code and documented in the notes ("Springs, kind 5" and after); none is a soft body, none is ported. Left: 32 (`pdg`). Kind 0xFE variants are read but only variant 0 is shown; the notes list what `sub_0005B050` tests, but not what those values mean in play.
+6. **Hands against scripts.** Shapes match the game; scripts were not compared frame by frame. Motions with no script open the hand, where the game probably keeps the last pose. DOA2U has no per-character substitution of pose 0 (DOA3's `sub_0004B63C`; checked 2026-11-12).
+7. **DOA3 lighting.** Left for a session with only DOA3 running: the user has one controller. Do not assume it works like DOA2U.
 
 ## Quick wins for the next session (2026-11-12)
 

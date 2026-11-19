@@ -43,6 +43,36 @@ struct DrawCall {
     translucent: bool,
     /// Blended, writing depth: the game blends all of its materials by alpha.
     blended: bool,
+    /// The input piece the draw belongs to, for the layer palette.
+    piece: usize,
+    /// The material's words and their buffer, rewritten when the piece's opacity changes.
+    material: wgpu::Buffer,
+    words: [f32; 24],
+}
+
+/// A piece as the layer palette lists it.
+#[derive(Debug, Clone, Copy)]
+pub struct PieceSummary {
+    pub node: usize,
+    pub vertices: usize,
+    pub triangles: usize,
+}
+
+/// What the layer palette sets on a piece.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PieceLayer {
+    pub visible: bool,
+    /// 1 is as loaded. Below 1 the piece's draws are blended over the rest.
+    pub opacity: f32,
+    /// Keeps the piece at its rest positions as loaded: soft bodies, chest shapes and hands
+    /// stop moving it, in the view and in a baked export.
+    pub frozen: bool,
+}
+
+impl Default for PieceLayer {
+    fn default() -> Self {
+        Self { visible: true, opacity: 1.0, frozen: false }
+    }
 }
 
 /// Parts of the character the camera can frame.
@@ -186,6 +216,10 @@ struct LoadedModel {
     triangle_count: u32,
     pieces: Vec<PosedPiece>,
     draws: Vec<DrawCall>,
+    /// Per input piece, the layer palette's settings.
+    layers: Vec<PieceLayer>,
+    /// The rest vertices as loaded, which a frozen piece goes back to.
+    loaded_vertices: Vec<MeshVertex>,
     /// Keeps the materials' buffers and textures alive with the draws' bind groups.
     _textures: Vec<wgpu::TextureView>,
 }
@@ -493,7 +527,7 @@ impl MeshRenderer {
         });
 
         let white_view = create_texture(device, queue, 1, 1, &[255; 4]);
-        let white_bind_group = draw_bind_group(device, &texture_layout, &sampler, &white_view, &white_view, None);
+        let white_bind_group = draw_bind_group(device, &texture_layout, &sampler, &white_view, &white_view, None).0;
 
         Self {
             pipeline,
@@ -673,10 +707,10 @@ impl MeshRenderer {
                 }
                 let view = texture.and_then(|t| views.get(t)).unwrap_or(&self.white_view);
                 let layer = look.and_then(|l| l.layer).and_then(|t| views.get(t));
-                let bind_group = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), look.as_ref().map(|l| (l, layer.is_some())));
+                let (bind_group, material, words) = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), look.as_ref().map(|l| (l, layer.is_some())));
                 let translucent = input.translucent || look.is_some_and(|l| l.no_depth_write);
                 let blended = look.is_some_and(|l| l.alpha_from_texture || l.layer.is_some() || l.diffuse[3] < 1.0);
-                draws.push(DrawCall { indices: first_index..indices.len() as u32, bind_group, cull_back: *cull_back, translucent, blended });
+                draws.push(DrawCall { indices: first_index..indices.len() as u32, bind_group, cull_back: *cull_back, translucent, blended, piece: pieces.len() - 1, material, words });
             }
         }
 
@@ -701,6 +735,8 @@ impl MeshRenderer {
             line_count: lines.len() as u32,
             triangle_count: indices.len() as u32,
             posed_vertices: rest_vertices.clone(),
+            layers: vec![PieceLayer::default(); inputs.len()],
+            loaded_vertices: rest_vertices.clone(),
             unlit_triangles,
             rest_vertices,
             vertex_buffer,
@@ -711,12 +747,60 @@ impl MeshRenderer {
         });
     }
 
+    pub fn is_loaded(&self) -> bool {
+        self.model.is_some()
+    }
+
     pub fn clear_model(&mut self) {
         self.model = None;
     }
 
+    /// The loaded model's pieces, in the order the loader gave them.
+    pub fn piece_summaries(&self) -> Vec<PieceSummary> {
+        let Some(model) = &self.model else { return Vec::new() };
+        model
+            .pieces
+            .iter()
+            .enumerate()
+            .map(|(i, piece)| {
+                let draws = model.draws.iter().filter(|d| d.piece == i);
+                let triangles = draws.map(|d| d.indices.len() / 3).sum();
+                PieceSummary { node: piece.node, vertices: piece.vertices.len(), triangles }
+            })
+            .collect()
+    }
+
+    pub fn piece_layers(&self) -> &[PieceLayer] {
+        self.model.as_ref().map_or(&[], |m| &m.layers)
+    }
+
+    /// Applies the layer palette's settings to a piece.
+    pub fn set_piece_layer(&mut self, queue: &wgpu::Queue, piece: usize, layer: PieceLayer) {
+        let Some(model) = &mut self.model else { return };
+        let Some(old) = model.layers.get(piece).copied() else { return };
+        model.layers[piece] = layer;
+        if old.opacity != layer.opacity {
+            for draw in model.draws.iter_mut().filter(|d| d.piece == piece) {
+                draw.words[23] = layer.opacity;
+                queue.write_buffer(&draw.material, 0, bytemuck::cast_slice(&draw.words));
+            }
+        }
+        if layer.frozen && !old.frozen {
+            let range = model.pieces[piece].vertices.clone();
+            model.rest_vertices[range.clone()].copy_from_slice(&model.loaded_vertices[range]);
+        }
+    }
+
+    /// Whether loaders may move a piece's rest positions.
+    fn moves(&self, piece: usize) -> bool {
+        self.model.as_ref().is_some_and(|m| !m.layers.get(piece).is_some_and(|l| l.frozen))
+    }
+
     /// Replaces rest positions of one input piece's vertices.
     pub fn deform_piece(&mut self, piece: usize, groups: &[ChestMorphGroup], value: f32) {
+        if !self.moves(piece) {
+            return;
+        }
         let Some(model) = &mut self.model else { return };
         let Some(range) = model.pieces.get(piece).map(|p| p.vertices.clone()) else { return };
         let weight = value.abs();
@@ -735,6 +819,9 @@ impl MeshRenderer {
     /// Adds offsets to rest positions of a piece, in the space of its node (the chest's sway,
     /// on top of the vertical shape written the same frame).
     pub fn add_rest_offsets(&mut self, piece: usize, offsets: impl Iterator<Item = (usize, glam::Vec3)>) {
+        if !self.moves(piece) {
+            return;
+        }
         let Some(model) = &mut self.model else { return };
         let Some(range) = model.pieces.get(piece).map(|p| p.vertices.clone()) else { return };
         let rest = &mut model.rest_vertices[range];
@@ -747,6 +834,9 @@ impl MeshRenderer {
 
     /// Replaces rest positions of a piece, in the space of its node.
     pub fn set_rest_positions(&mut self, piece: usize, positions: impl Iterator<Item = (usize, glam::Vec3)>) {
+        if !self.moves(piece) {
+            return;
+        }
         let Some(model) = &mut self.model else { return };
         let Some(range) = model.pieces.get(piece).map(|p| p.vertices.clone()) else { return };
         let rest = &mut model.rest_vertices[range];
@@ -759,6 +849,9 @@ impl MeshRenderer {
 
     /// Copies rest positions between pieces, as they are.
     pub fn copy_rest_positions(&mut self, from: usize, to: usize, links: &[(usize, usize)]) {
+        if !self.moves(to) {
+            return;
+        }
         let Some(model) = &mut self.model else { return };
         let (Some(source), Some(target)) = (model.pieces.get(from).map(|p| p.vertices.clone()), model.pieces.get(to).map(|p| p.vertices.clone())) else {
             return;
@@ -779,6 +872,9 @@ impl MeshRenderer {
 
     /// Replaces rest normals of a piece, in the space of its node.
     pub fn set_rest_normals(&mut self, piece: usize, normals: impl Iterator<Item = (usize, [f32; 3])>) {
+        if !self.moves(piece) {
+            return;
+        }
         let Some(model) = &mut self.model else { return };
         let Some(range) = model.pieces.get(piece).map(|p| p.vertices.clone()) else { return };
         let rest = &mut model.rest_vertices[range];
@@ -891,7 +987,7 @@ impl MeshRenderer {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, model.vertex_buffer.slice(..));
         pass.set_index_buffer(model.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        for draw in model.draws.iter().filter(|draw| !draw.translucent) {
+        for draw in model.draws.iter().filter(|draw| !draw.translucent && model.layers[draw.piece].visible && model.layers[draw.piece].opacity >= 1.0) {
             pass.set_bind_group(1, &draw.bind_group, &[]);
             pass.draw_indexed(draw.indices.clone(), 0, 0..1);
         }
@@ -913,9 +1009,12 @@ impl MeshRenderer {
                     pass.draw_indexed(0..model.line_count, 0, 0..1);
                     return;
                 }
-                let (solid, translucent): (Vec<_>, Vec<_>) = model.draws.iter().partition(|draw| !draw.translucent);
+                // Hidden pieces are not drawn; see-through ones go with the translucent draws.
+                let see_through = |draw: &DrawCall| draw.translucent || model.layers[draw.piece].opacity < 1.0;
+                let shown = model.draws.iter().filter(|draw| model.layers[draw.piece].visible && model.layers[draw.piece].opacity > 0.0);
+                let (solid, translucent): (Vec<_>, Vec<_>) = shown.partition(|draw| !see_through(draw));
                 for draw in solid.into_iter().chain(translucent) {
-                    pass.set_pipeline(match (draw.translucent, draw.blended, draw.cull_back) {
+                    pass.set_pipeline(match (see_through(draw), draw.blended, draw.cull_back) {
                         (false, false, false) => &self.pipeline,
                         (false, false, true) => &self.culling_pipeline,
                         (false, true, false) => &self.blended_pipeline,
@@ -1058,8 +1157,10 @@ fn draw_bind_group(
     base: &wgpu::TextureView,
     layer: &wgpu::TextureView,
     look: Option<(&MaterialLook, bool)>,
-) -> wgpu::BindGroup {
+) -> (wgpu::BindGroup, wgpu::Buffer, [f32; 24]) {
     let mut words = [0f32; 24];
+    // The layer palette's opacity.
+    words[23] = 1.0;
     if let Some((look, has_layer)) = look {
         words[..4].copy_from_slice(&look.diffuse);
         words[4..7].copy_from_slice(&look.ambient);
@@ -1075,9 +1176,9 @@ fn draw_bind_group(
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Material UB"),
         contents: bytemuck::cast_slice(&words),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Draw BG"),
         layout,
         entries: &[
@@ -1086,7 +1187,8 @@ fn draw_bind_group(
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(layer) },
             wgpu::BindGroupEntry { binding: 3, resource: buffer.as_entire_binding() },
         ],
-    })
+    });
+    (group, buffer, words)
 }
 
 fn create_texture(
@@ -1194,7 +1296,7 @@ struct Material {
     emissive: vec4<f32>,
     /// x: the game's lighting, y: specular, z: alpha from the texture, w: has a layer.
     flags: vec4<f32>,
-    /// x: base reflects, y: layer reflects, z: no diffuse.
+    /// x: base reflects, y: layer reflects, z: no diffuse, w: the layer palette's opacity.
     coords: vec4<f32>,
 }
 @group(1) @binding(0) var color_texture: texture_2d<f32>;
@@ -1397,6 +1499,11 @@ fn from_stored(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(v: VertOut) -> @location(0) vec4<f32> {
+    let color = shade(v);
+    return vec4<f32>(color.rgb, color.a * material.coords.w);
+}
+
+fn shade(v: VertOut) -> vec4<f32> {
     let light = normalize(vec3<f32>(0.5, 1.0, 0.7));
     let diff = abs(dot(normalize(v.normal), light));
     let ambient = 0.3;

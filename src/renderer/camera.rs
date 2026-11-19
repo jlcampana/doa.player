@@ -55,10 +55,18 @@ impl Camera {
     }
 
     /// Tells the camera how many pixels on the left panels cover.
+    #[cfg(test)]
     pub fn set_left_inset(&mut self, inset: f32, width: f32, height: f32) {
-        let inset = inset.min(width * 0.6);
-        self.view_shift = inset / width;
-        self.free_aspect = (width - inset) / height;
+        self.set_insets(inset, 0.0, width, height);
+    }
+
+    /// Tells the camera how many pixels panels cover on the left and on the right, so that the
+    /// target sits in the middle of the free part.
+    pub fn set_insets(&mut self, left: f32, right: f32, width: f32, height: f32) {
+        let left = left.min(width * 0.45);
+        let right = right.min(width * 0.45);
+        self.view_shift = (left - right) / width;
+        self.free_aspect = ((width - left - right) / height).max(0.1);
     }
 
     /// Handle drag input. delta is in pixels.
@@ -180,6 +188,11 @@ mod tests {
         let mut camera = Camera::new(1.5);
         camera.set_left_inset(200.0, 600.0, 400.0);
         let (origin, direction) = camera.ray(400.0, 200.0, 600.0, 400.0);
+        assert!(direction.distance((camera.target - origin).normalize()) < 1e-4);
+        // And with panels on both sides.
+        let mut camera = Camera::new(1.5);
+        camera.set_insets(150.0, 90.0, 600.0, 400.0);
+        let (origin, direction) = camera.ray(330.0, 200.0, 600.0, 400.0);
         assert!(direction.distance((camera.target - origin).normalize()) < 1e-4);
     }
 }
