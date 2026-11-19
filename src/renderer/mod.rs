@@ -5,4 +5,4 @@ pub mod mesh;
 pub mod wireframe;
 
 pub use camera::Camera;
-pub use context::RenderContext;
+pub use context::{RenderContext, WindowGpu};

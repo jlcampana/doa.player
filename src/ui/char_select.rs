@@ -1,7 +1,6 @@
 use crate::app::{CharacterEntry, GameSource};
 
 pub struct CharSelectPanel {
-    pub visible: bool,
     pub selected_source: GameSource,
     pub selected_char_idx: Option<usize>,
     pub selected_costume_idx: usize,
@@ -17,23 +16,14 @@ pub struct CharSelectPanel {
     pub selected_face: usize,
     /// Exports with all motions, not only the playing one.
     pub export_all_motions: bool,
-    pub export_request: Option<ExportRequest>,
     filter: String,
     /// The app's icon, beside its name.
     pub logo: Option<egui::TextureHandle>,
 }
 
-/// What the Export buttons ask for.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExportRequest {
-    Costume,
-    Character,
-}
-
 impl CharSelectPanel {
     pub fn new() -> Self {
         Self {
-            visible: true,
             selected_source: GameSource::Doa2U,
             selected_char_idx: None,
             selected_costume_idx: 0,
@@ -43,99 +33,49 @@ impl CharSelectPanel {
             face_count: 0,
             selected_face: 0,
             export_all_motions: false,
-            export_request: None,
             filter: String::new(),
             logo: None,
         }
     }
 
-    pub fn show(
+    /// The game buttons, the character list and the costume's choices, drawn into `ui`.
+    /// `on_char_selected` asks for a costume to be loaded.
+    pub fn ui(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         characters: &[CharacterEntry],
         on_char_selected: &mut dyn FnMut(usize, usize),
     ) {
-        if !self.visible {
-            return;
-        }
-
-        egui::SidePanel::left("char_select")
-            .resizable(true)
-            .default_width(200.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if let Some(logo) = &self.logo {
-                        ui.image((logo.id(), egui::Vec2::splat(26.0)));
-                    }
-                    ui.heading("DOA Player");
-                });
+        ui.horizontal_wrapped(|ui| {
+            for (source, name) in [
+                (GameSource::Doa2U, "DOA2U"),
+                (GameSource::Doa3, "DOA3"),
+                (GameSource::Doax, "DOAX"),
+                (GameSource::Doax2, "DOAX2"),
+                (GameSource::Doa4, "DOA4"),
+                (GameSource::Doax3, "DOAX3"),
+            ] {
+                if ui.selectable_label(self.selected_source == source, name).clicked() && self.selected_source != source {
+                    self.selected_source = source;
+                    self.selected_char_idx = None;
+                    self.selected_hair_idx = None;
+                    self.selected_costume_idx = 0;
+                }
+            }
+        });
+        {
+            {
                 ui.separator();
-
-                // Game source toggle
-                ui.horizontal(|ui| {
-                    ui.label("Game:");
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doa2U, "DOA2U"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doa2U;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doa3, "DOA3"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doa3;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doax, "DOAX"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doax;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doax2, "DOAX2"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doax2;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doa4, "DOA4"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doa4;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                    if ui.selectable_label(
-                        self.selected_source == GameSource::Doax3, "DOAX3"
-                    ).clicked() {
-                        self.selected_source = GameSource::Doax3;
-                        self.selected_char_idx = None;
-                        self.selected_hair_idx = None;
-                        self.selected_costume_idx = 0;
-                    }
-                });
-
-                ui.separator();
-                ui.label("Characters:");
+                ui.label("Personajes:");
 
                 egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Filter...")
+                    .hint_text("Filtrar…")
                     .show(ui);
 
                 let filter_lower = self.filter.to_lowercase();
 
                 // Each list scrolls on its own, so that long costume lists stay reachable.
-                let list_height = (ui.available_height() * 0.5).max(80.0);
-                egui::ScrollArea::vertical().id_salt("characters").max_height(list_height).auto_shrink([false, true]).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("characters").max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                     // Fighters first, then the others under their own heading.
                     for intro in [false, true] {
                         let mut heading_shown = !intro;
@@ -148,7 +88,7 @@ impl CharSelectPanel {
                             }
                             if !heading_shown {
                                 ui.separator();
-                                ui.weak("Intro and others");
+                                ui.weak("Intro y otros");
                                 heading_shown = true;
                             }
                             let selected = self.selected_char_idx == Some(i);
@@ -167,24 +107,12 @@ impl CharSelectPanel {
                 // Costume selector
                 if let Some(char_idx) = self.selected_char_idx {
                     if let Some(entry) = characters.get(char_idx) {
-                        ui.separator();
-                        ui.label("Export to Blender (.glb):");
-                        ui.horizontal(|ui| {
-                            if ui.button("Costume").on_hover_text("Writes this costume to exports/").clicked() {
-                                self.export_request = Some(ExportRequest::Costume);
-                            }
-                            if ui.button("All costumes").on_hover_text("Writes each costume of this character to its own file").clicked() {
-                                self.export_request = Some(ExportRequest::Character);
-                            }
-                        });
-                        ui.checkbox(&mut self.export_all_motions, "All motions")
-                            .on_hover_text("Otherwise only the playing motion. Files get large, and Blender takes long to import them.");
                         if entry.hairstyles.len() > 1 {
                             ui.separator();
-                            ui.label("Hair:");
+                            ui.label("Peinado:");
                             ui.horizontal_wrapped(|ui| {
                                 let mut pick = None;
-                                if ui.selectable_label(self.selected_hair_idx.is_none(), "Default").on_hover_text("The head the costume comes with").clicked() {
+                                if ui.selectable_label(self.selected_hair_idx.is_none(), "Propio").on_hover_text("La cabeza con la que viene el traje").clicked() {
                                     pick = Some(None);
                                 }
                                 for (hi, name) in entry.hairstyles.iter().enumerate() {
@@ -202,9 +130,9 @@ impl CharSelectPanel {
                         }
                         if self.face_count > 0 {
                             ui.separator();
-                            ui.label("Face:").on_hover_text("The face file's expressions, in file order; which is which is not read. Rest is the model's own face.");
+                            ui.label("Cara:").on_hover_text("Las expresiones del archivo de la cara, en su orden; no se sabe cuál es cuál. Reposo es la cara del modelo.");
                             ui.horizontal_wrapped(|ui| {
-                                if ui.selectable_label(self.selected_face == 0, "Rest").clicked() {
+                                if ui.selectable_label(self.selected_face == 0, "Reposo").clicked() {
                                     self.selected_face = 0;
                                 }
                                 for face in 1..=self.face_count {
@@ -216,7 +144,7 @@ impl CharSelectPanel {
                         }
                         if self.variant_count > 1 {
                             ui.separator();
-                            ui.label("Variant:").on_hover_text("Records the costume holds in more than one version, such as an item worn or held. The game picks one in play; 0 is the default.");
+                            ui.label("Variante:").on_hover_text("Registros que el traje tiene en más de una versión, como un objeto puesto o en la mano. El juego elige uno al jugar; 0 es el de por defecto.");
                             ui.horizontal_wrapped(|ui| {
                                 for variant in 0..self.variant_count {
                                     if ui.selectable_label(self.selected_variant == variant, variant.to_string()).clicked() && variant != self.selected_variant {
@@ -227,7 +155,7 @@ impl CharSelectPanel {
                             });
                         }
                         ui.separator();
-                        ui.label("Costume:");
+                        ui.label("Traje:");
                         // The up and down keys walk the list, loading each costume, unless a
                         // text box has the keyboard.
                         let step = if ui.ctx().wants_keyboard_input() {
@@ -242,7 +170,7 @@ impl CharSelectPanel {
                             self.selected_costume_idx = next;
                             on_char_selected(char_idx, next);
                         }
-                        egui::ScrollArea::vertical().id_salt("costumes").auto_shrink([false, true]).show(ui, |ui| {
+                        egui::ScrollArea::vertical().id_salt("costumes").max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
                             for (ci, name) in entry.costumes.iter().enumerate() {
                                 let selected = self.selected_costume_idx == ci;
                                 let label = ui.selectable_label(selected, name);
@@ -257,6 +185,7 @@ impl CharSelectPanel {
                         });
                     }
                 }
-            });
+            }
+        }
     }
 }

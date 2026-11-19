@@ -22,15 +22,6 @@ use std::path::{Path, PathBuf};
 
 // ─── Data model ───────────────────────────────────────────────────────────────
 
-/// The costumes of a character still to export.
-pub struct ExportQueue {
-    character: usize,
-    next: usize,
-    count: usize,
-    written: usize,
-    all_motions: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GameSource {
     Doa2U,
@@ -415,11 +406,6 @@ pub struct App {
     pub mesh: MeshRenderer,
     pub wireframe: WireframeRenderer,
 
-    // egui
-    pub egui_ctx: egui::Context,
-    pub egui_state: egui_winit::State,
-    pub egui_renderer: egui_wgpu::Renderer,
-
     // UI panels
     pub char_panel: CharSelectPanel,
     pub app_icon: Option<ModelTexture>,
@@ -459,7 +445,6 @@ pub struct App {
     pub export_source: crate::export::ExportModel,
     /// Name of the loaded costume, and of its character and game, for the export's path.
     pub loaded_name: (String, String, String),
-    pub export_queue: Option<ExportQueue>,
     pub background_options: Vec<BackgroundOption>,
 
     // Archives (lazily loaded)
@@ -853,9 +838,7 @@ pub struct Doa3Motion {
 impl App {
     pub fn new(
         ctx: RenderContext,
-        egui_ctx: egui::Context,
-        egui_state: egui_winit::State,
-        window: &winit::window::Window,
+        egui_ctx: &egui::Context,
     ) -> Self {
         let w = ctx.surface_config.width;
         let h = ctx.surface_config.height;
@@ -864,7 +847,6 @@ impl App {
         let grid = GridRenderer::new(&ctx.device, fmt);
         let mesh = MeshRenderer::new(&ctx.device, &ctx.queue, fmt);
         let wireframe = WireframeRenderer::new(&ctx.device, fmt, 8192);
-        let egui_renderer = egui_wgpu::Renderer::new(&ctx.device, fmt, None, 1, false);
 
         let mut camera = Camera::new(w as f32 / h as f32);
         camera.frame_character(1.8);
@@ -1019,8 +1001,6 @@ impl App {
         let app_icon = read_app_icon(hdd_archive.as_ref());
         let mut char_panel = CharSelectPanel::new();
         if let Some(icon) = &app_icon {
-            // Wayland ignores this: there the icon comes from the desktop entry.
-            window.set_window_icon(winit::window::Icon::from_rgba(icon.rgba.clone(), icon.width, icon.height).ok());
             let image = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
             char_panel.logo = Some(egui_ctx.load_texture("app icon", image, egui::TextureOptions::LINEAR));
         }
@@ -1058,9 +1038,6 @@ impl App {
             grid,
             mesh,
             wireframe,
-            egui_ctx,
-            egui_state,
-            egui_renderer,
             char_panel,
             app_icon,
             doax_characters,
@@ -1091,7 +1068,6 @@ impl App {
             current_animations: Vec::new(),
             export_source: Default::default(),
             loaded_name: Default::default(),
-            export_queue: None,
             background_options,
             hdd_archive,
             hdd2_archive,
@@ -1139,6 +1115,7 @@ impl App {
     }
 
     pub fn load_character(&mut self, char_idx: usize, costume_idx: usize) {
+        let started = std::time::Instant::now();
         // The motion carries over, playing or paused, on the same frame, if the new list has
         // the same motion: changing a costume keeps what was on screen. A paused motion stays
         // paused even when the new list lacks it.
@@ -1166,6 +1143,7 @@ impl App {
             }
             self.update_doa3_pose();
         }
+        log::info!("Loaded in {} ms", started.elapsed().as_millis());
     }
 
     fn load_character_files(&mut self, char_idx: usize, costume_idx: usize) {
@@ -3313,20 +3291,6 @@ impl App {
         out
     }
 
-    /// Queues every costume of a character for `step_character_export`.
-    pub fn start_character_export(&mut self, char_idx: usize, all_motions: bool) {
-        let costumes = match self.char_panel.selected_source {
-            GameSource::Doa2U => self.doa2u_characters.get(char_idx),
-            GameSource::Doa3 => self.doa3_characters.get(char_idx),
-            GameSource::Doax => self.doax_characters.get(char_idx),
-            GameSource::Doax2 => self.doax2_characters.get(char_idx),
-            GameSource::Doa4 => self.doa4_characters.get(char_idx),
-            GameSource::Doax3 => self.doax3_characters.get(char_idx),
-        }
-        .map_or(0, |entry| entry.costumes.len());
-        self.export_queue = Some(ExportQueue { character: char_idx, next: 0, count: costumes, written: 0, all_motions });
-    }
-
     /// Writes the icon and a desktop entry to the user's folders, so that the desktop shows
     /// the icon. Wayland has no other way. Returns the entry's path.
     pub fn install_desktop_entry(&self) -> anyhow::Result<PathBuf> {
@@ -3351,26 +3315,9 @@ impl App {
         Ok(entry)
     }
 
-    /// Exports the next queued costume, if any.
-    pub fn step_character_export(&mut self) {
-        let Some(mut queue) = self.export_queue.take() else { return };
-        if queue.next >= queue.count {
-            self.status_msg = format!("Exported {} of {} costumes to exports/", queue.written, queue.count);
-            return;
-        }
-        self.load_character(queue.character, queue.next);
-        match self.export_current(queue.all_motions, false) {
-            Ok(_) => queue.written += 1,
-            Err(error) => log::warn!("Export of costume {} failed: {error:#}", queue.next),
-        }
-        queue.next += 1;
-        self.status_msg = format!("Exporting costume {} of {}...", queue.next, queue.count);
-        self.export_queue = Some(queue);
-    }
-
-    /// Exports every costume of a character, loading each. Returns how many it wrote,
-    /// and logs the ones that fail. Stays on the last one loaded.
-    pub fn export_character(&mut self, char_idx: usize, all_motions: bool) -> usize {
+    /// Exports every costume of a character, loading each. Returns how many it wrote, and
+    /// tells `progress` about each. Stays on the last one loaded.
+    pub fn export_character(&mut self, char_idx: usize, all_motions: bool, progress: &dyn Fn(String)) -> usize {
         let costumes = match self.char_panel.selected_source {
             GameSource::Doa2U => self.doa2u_characters.get(char_idx),
             GameSource::Doa3 => self.doa3_characters.get(char_idx),
@@ -3387,9 +3334,13 @@ impl App {
             match self.export_current(all_motions, false) {
                 Ok(path) => {
                     log::info!("Exported {}", path.display());
+                    progress(format!("{} de {}: {}", costume + 1, costumes, path.display()));
                     written += 1;
                 }
-                Err(error) => log::warn!("Export of costume {costume} failed: {error:#}"),
+                Err(error) => {
+                    log::warn!("Export of costume {costume} failed: {error:#}");
+                    progress(format!("{} de {}: error: {error:#}", costume + 1, costumes));
+                }
             }
             // The command line exports in one loop, with no frames to do this. wgpu keeps
             // uploads and dropped models until a submit and a poll, and over the whole roster

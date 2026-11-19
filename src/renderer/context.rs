@@ -2,17 +2,28 @@ use anyhow::Result;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+/// The GPU as the viewer uses it. It holds no window surface, so that the viewer can be handed
+/// to a worker thread for long jobs while the window keeps drawing; the device and queue are
+/// shared with the window side.
 pub struct RenderContext {
-    pub surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub device: std::sync::Arc<wgpu::Device>,
+    pub queue: std::sync::Arc<wgpu::Queue>,
+    /// The main window's surface settings, kept for their size and format.
     pub surface_config: wgpu::SurfaceConfiguration,
     pub depth_texture: wgpu::Texture,
     pub depth_view: wgpu::TextureView,
 }
 
+/// What only the window side holds: the main window's surface, and the instance and adapter
+/// that surfaces of other windows (detached panels) are made from.
+pub struct WindowGpu {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub surface: wgpu::Surface<'static>,
+}
+
 impl RenderContext {
-    pub async fn new(window: std::sync::Arc<Window>) -> Result<Self> {
+    pub async fn new(window: std::sync::Arc<Window>) -> Result<(Self, WindowGpu)> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -65,23 +76,26 @@ impl RenderContext {
 
         let (depth_texture, depth_view) = create_depth_texture(&device, size.width, size.height);
 
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            surface_config,
-            depth_texture,
-            depth_view,
-        })
+        Ok((
+            Self {
+                device: std::sync::Arc::new(device),
+                queue: std::sync::Arc::new(queue),
+                surface_config,
+                depth_texture,
+                depth_view,
+            },
+            WindowGpu { instance, adapter, surface },
+        ))
     }
 
+    /// Takes the window's new size: the depth buffer follows. The window side configures its
+    /// surface after this, with `WindowGpu::configure`.
     pub fn resize(&mut self, new_width: u32, new_height: u32) {
         if new_width == 0 || new_height == 0 {
             return;
         }
         self.surface_config.width = new_width;
         self.surface_config.height = new_height;
-        self.surface.configure(&self.device, &self.surface_config);
         let (dt, dv) = create_depth_texture(&self.device, new_width, new_height);
         self.depth_texture = dt;
         self.depth_view = dv;
