@@ -190,6 +190,13 @@ pub fn rotation(rx: f32, ry: f32, rz: f32) -> Quat {
 }
 
 impl Motion {
+    /// Whether the motion places the hips. Kasumi's motion 0 (100 frames) does not: every
+    /// channel holds the rest pose and the hips stay at the origin, so the body would stand half
+    /// under the ground; the others start with the hips 0.87 to 0.93 m up.
+    pub fn places_root(&self) -> bool {
+        (0..3).any(|k| self.channels.get(k).is_some_and(|v| v.iter().any(|x| x.abs() > 1e-4)))
+    }
+
     /// A channel at a frame, linear between whole frames, held at the ends.
     pub fn value(&self, channel: usize, frame: f32) -> f32 {
         let Some(values) = self.channels.get(channel) else { return 0.0 };
@@ -324,6 +331,8 @@ mod tests {
         let m = &file.motions[14];
         assert!((m.value(1, 0.0) - 0.879).abs() < 0.01);
         assert!((m.value(6 * 9, 0.0) - 0.077).abs() < 0.002);
+        assert!(!file.motions[0].places_root());
+        assert!(file.motions[1..].iter().all(Motion::places_root));
     }
 }
 
@@ -583,3 +592,4 @@ impl SpringBones {
         touched.into_iter().map(|n| (n, result[n])).collect()
     }
 }
+

@@ -1052,3 +1052,4 @@ mod texture_tests {
         }
     }
 }
+

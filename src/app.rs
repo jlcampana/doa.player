@@ -1332,6 +1332,7 @@ impl App {
                 // Blended through the material, which writes depth: the hair's inner shadow
                 // layers stay under its outer strands. Without depth they drew over them.
                 translucent: false,
+                soft_edges: false,
             }
         }
         let mut inputs: Vec<PieceInput> = drawn.iter().map(|d| input_of(d, false)).collect();
@@ -1616,7 +1617,7 @@ impl App {
                     } else {
                         drawn_objects.last_mut().unwrap().entry(placed.object).or_default().push((inputs.len(), piece_node));
                     }
-                    inputs.push(PieceInput { node: piece_node, vertices: &piece.vertices, draws, parent: piece_node, skin: None, bend: None, multi, welds: Vec::new(), translucent });
+                    inputs.push(PieceInput { node: piece_node, vertices: &piece.vertices, draws, parent: piece_node, skin: None, bend: None, multi, welds: Vec::new(), translucent, soft_edges: false });
                 }
             }
         }
@@ -1815,10 +1816,14 @@ impl App {
         }
         let models: Vec<doax3::Model> = models.into_iter().map(|(m, _)| m).collect();
         let drawn: Vec<(usize, usize)> = models.iter().enumerate().flat_map(|(k, m)| m.drawn_pieces().map(move |(i, _)| (k, i))).collect();
-        let pieces: Vec<(&crate::formats::model::ModelPiece, usize)> = drawn.iter().map(|&(k, i)| (&models[k].pieces[i], first_texture[k])).collect();
+        // Hair (and lashes) have coverage in alpha: their strand tips fade, in two passes.
+        let pieces: Vec<(&crate::formats::model::ModelPiece, usize, bool)> = drawn
+            .iter()
+            .map(|&(k, i)| (&models[k].pieces[i], first_texture[k], models[k].colour_only[i].iter().any(|&only| doax3::alpha_is_coverage(&models[k].objects[i], only))))
+            .collect();
         let inputs: Vec<PieceInput> = pieces
             .iter()
-            .map(|&(piece, first)| PieceInput {
+            .map(|&(piece, first, soft_edges)| PieceInput {
                 node: 0,
                 vertices: &piece.vertices,
                 draws: piece.materials.iter().map(|m| (m.indices.as_slice(), m.textures.first().map(|t| t + first), m.cull_back, None)).collect(),
@@ -1828,6 +1833,7 @@ impl App {
                 multi: None,
                 welds: Vec::new(),
                 translucent: false,
+                soft_edges,
             })
             .collect();
         // The character's motions (`*_INGAME_MPM.mpm`): 21 body bones.
@@ -1945,6 +1951,7 @@ impl App {
                 multi,
                 welds: Vec::new(),
                 translucent: false,
+                soft_edges: false,
             });
         }
         for skin in &skins {
@@ -1969,6 +1976,7 @@ impl App {
                 bend: None, multi: None,
                 welds,
                 translucent: false,
+                soft_edges: false,
             });
         }
         let mut suit_inputs: Vec<(usize, usize)> = Vec::new();
@@ -1986,6 +1994,7 @@ impl App {
                 multi,
                 welds: Vec::new(),
                 translucent: false,
+                soft_edges: false,
             });
         }
         let nodes = doax::rest_pose(&rows);
@@ -2198,6 +2207,7 @@ impl App {
                     multi: None,
                     welds: Vec::new(),
                     translucent: false,
+                    soft_edges: false,
                 })
             })
             .collect();
@@ -2232,6 +2242,7 @@ impl App {
                 bend: None, multi: None,
                 welds,
                 translucent: false,
+                soft_edges: false,
             });
         }
         log::info!("DOA2U: {stem}: {rigid_count} placed objects, {} joint pieces", skins.len());
@@ -2258,6 +2269,7 @@ impl App {
                     bend: None, multi: None,
                     welds: Vec::new(),
                     translucent: false,
+                    soft_edges: false,
                 });
             }
         }
@@ -2273,7 +2285,7 @@ impl App {
                 placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: model.pieces[*object].vertices.clone() });
             }
             let piece = &model.pieces[*object];
-            inputs.push(PieceInput { node: bone, vertices, draws: draws_of(piece, texture_count), parent: bone, skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false });
+            inputs.push(PieceInput { node: bone, vertices, draws: draws_of(piece, texture_count), parent: bone, skin: None, bend: None, multi: None, welds: Vec::new(), translucent: false, soft_edges: false });
         }
         if !copies.is_empty() {
             log::info!("DOA2U {stem}: {} objects drawn whole by chains", copies.len());
@@ -2294,6 +2306,7 @@ impl App {
                 bend: None, multi: None,
                 welds: Vec::new(),
                 translucent: extra.translucent,
+                soft_edges: false,
             });
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
@@ -2421,7 +2434,7 @@ impl App {
         };
         let rigid = nodes.rigid.iter().filter_map(|&(node, object)| {
             let (vertices, draws) = draws_of(object)?;
-            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None })
+            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, soft_edges: false, bend: None, multi: None })
         });
         let rigid_input = |object: usize| nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object);
         let skins = nodes.skins.iter().filter_map(|skin| {
@@ -2436,7 +2449,7 @@ impl App {
                     source < count && target < vertices.len()
                 })
                 .collect();
-            Some(PieceInput { node: skin.node, vertices, draws, parent: skin.parent, skin: Some((skin.blend, skin.vertices.as_slice())), welds, translucent: false, bend: None, multi: None })
+            Some(PieceInput { node: skin.node, vertices, draws, parent: skin.parent, skin: Some((skin.blend, skin.vertices.as_slice())), welds, translucent: false, soft_edges: false, bend: None, multi: None })
         });
         let mut inputs: Vec<PieceInput> = rigid.chain(skins).collect();
 
@@ -2465,7 +2478,7 @@ impl App {
                 }
                 let Some((vertices, draws)) = draws_of(target.object) else { continue };
                 chain_pieces[target.object] = Some((inputs.len(), chain.bone));
-                inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
+                inputs.push(PieceInput { node: chain.bone, vertices, draws, parent: chain.bone, skin: None, welds: Vec::new(), translucent: false, soft_edges: false, bend: None, multi: None });
             }
         }
         // Objects that chains draw whole, a piece per copy on the chain's bone.
@@ -2477,7 +2490,7 @@ impl App {
             if placement_moves(&chains[*c]) {
                 placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: pieces[*object].vertices.clone() });
             }
-            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
+            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, soft_edges: false, bend: None, multi: None });
         }
         if !copies.is_empty() {
             log::info!("DOA2U {stem}: {} objects drawn whole by chains", copies.len());
@@ -2488,7 +2501,7 @@ impl App {
             }
             let Some((vertices, draws)) = draws_of(prop.object) else { continue };
             chain_pieces[prop.object] = Some((inputs.len(), prop.bone));
-            inputs.push(PieceInput { node: prop.bone, vertices, draws, parent: prop.bone, skin: None, welds: Vec::new(), translucent, bend: None, multi: None });
+            inputs.push(PieceInput { node: prop.bone, vertices, draws, parent: prop.bone, skin: None, welds: Vec::new(), translucent, soft_edges: false, bend: None, multi: None });
         }
         let triangles: usize = inputs.iter().flat_map(|p| &p.draws).map(|(t, _, _, _)| t.len() / 3).sum();
         let piece_count = inputs.len();
@@ -2605,7 +2618,7 @@ impl App {
         };
         let rigid = nodes.rigid.iter().filter_map(|&(node, object)| {
             let (vertices, draws) = draws_of(object)?;
-            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None })
+            Some(PieceInput { node, vertices, draws, parent: node, skin: None, welds: Vec::new(), translucent: false, soft_edges: false, bend: None, multi: None })
         });
         let rigid_input = |object: usize| {
             nodes.rigid.iter().filter(|&&(_, o)| o < pieces.len()).position(|&(_, o)| o == object)
@@ -2639,6 +2652,7 @@ impl App {
                 skin: Some((skin.blend, skin.vertices.as_slice())),
                 welds,
                 translucent: false,
+                soft_edges: false,
                 bend: None, multi: None,
             })
         });
@@ -2688,6 +2702,7 @@ impl App {
                     skin: None,
                     welds: Vec::new(),
                     translucent: false,
+                    soft_edges: false,
                     bend: None, multi: None,
                 });
             }
@@ -2701,7 +2716,7 @@ impl App {
             if placement_moves(&chains[*c]) {
                 placed.push(PlacedPiece { chain: *c, index: *index, piece: inputs.len(), node: bone, rest: pieces[*object].vertices.clone() });
             }
-            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, bend: None, multi: None });
+            inputs.push(PieceInput { node: bone, vertices, draws, parent: bone, skin: None, welds: Vec::new(), translucent: false, soft_edges: false, bend: None, multi: None });
         }
         if !copies.is_empty() {
             log::info!("DOA3: {} objects drawn whole by chains", copies.len());
@@ -2723,6 +2738,7 @@ impl App {
                 skin: None,
                 welds: Vec::new(),
                 translucent,
+                soft_edges: false,
                 bend: None, multi: None,
             });
         }
@@ -2847,6 +2863,8 @@ impl App {
                 let mut jiggles = pose.jiggles.clone();
                 jiggles.iter_mut().for_each(|j| j.reset());
                 let bounce = self.bg_panel.bounce_scale;
+                // As in the viewer: a motion that does not place the hips keeps the rest lift.
+                let lift = glam::Mat4::from_translation(glam::Vec3::Y * if motion.places_root() { 0.0 } else { pose.lift });
                 let frames: Vec<Vec<glam::Mat4>> = (0..motion.frames)
                     .map(|frame| {
                         let plain = pose.posed(Some(motion), frame as f32, expression);
@@ -2866,7 +2884,7 @@ impl App {
                         let mut all = bind.clone();
                         for (model, map) in posed.iter().zip(&maps) {
                             for (i, m) in model.iter().enumerate() {
-                                all[map[i]] = *m;
+                                all[map[i]] = lift * *m;
                             }
                         }
                         all
@@ -3489,7 +3507,8 @@ impl App {
                 self.mesh.set_rest_positions(input, skinned.iter().enumerate().map(|(v, (p, _))| (v, *p)));
                 self.mesh.set_rest_normals(input, skinned.iter().enumerate().map(|(v, (_, n))| (v, n.to_array())));
             }
-            let lift = if motion.is_some() { 0.0 } else { pose.lift };
+            // A motion that does not place the hips (motion 0) keeps the rest lift.
+            let lift = if motion.is_some_and(|m| m.places_root()) { 0.0 } else { pose.lift };
             self.mesh.apply_pose(&self.ctx.queue, &[glam::Mat4::from_translation(glam::Vec3::Y * lift)]);
             return;
         }

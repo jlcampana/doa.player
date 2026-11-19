@@ -240,6 +240,11 @@ pub struct PieceInput<'a> {
     pub welds: Vec<(usize, usize, usize)>,
     /// Blended over everything else, without writing depth.
     pub translucent: bool,
+    /// Alpha is coverage (hair cards, lashes): drawn twice, solid where alpha reaches 0.5,
+    /// then the soft edges blended over without writing depth, so strand tips fade instead of
+    /// ending in hard cut-outs that show the layers beneath. The viewer's choice, not read
+    /// from a game.
+    pub soft_edges: bool,
 }
 
 pub struct MeshRenderer {
@@ -527,7 +532,7 @@ impl MeshRenderer {
         });
 
         let white_view = create_texture(device, queue, 1, 1, &[255; 4]);
-        let white_bind_group = draw_bind_group(device, &texture_layout, &sampler, &white_view, &white_view, None).0;
+        let white_bind_group = draw_bind_group(device, &texture_layout, &sampler, &white_view, &white_view, None, ALPHA_TEST).0;
 
         Self {
             pipeline,
@@ -707,10 +712,15 @@ impl MeshRenderer {
                 }
                 let view = texture.and_then(|t| views.get(t)).unwrap_or(&self.white_view);
                 let layer = look.and_then(|l| l.layer).and_then(|t| views.get(t));
-                let (bind_group, material, words) = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), look.as_ref().map(|l| (l, layer.is_some())));
+                let soft = input.soft_edges && look.is_none();
+                let (bind_group, material, words) = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), look.as_ref().map(|l| (l, layer.is_some())), if soft { ALPHA_SOLID } else { ALPHA_TEST });
                 let translucent = input.translucent || look.is_some_and(|l| l.no_depth_write);
                 let blended = look.is_some_and(|l| l.alpha_from_texture || l.layer.is_some() || l.diffuse[3] < 1.0);
                 draws.push(DrawCall { indices: first_index..indices.len() as u32, bind_group, cull_back: *cull_back, translucent, blended, piece: pieces.len() - 1, material, words });
+                if soft {
+                    let (bind_group, material, words) = draw_bind_group(device, &self.texture_layout, &self.sampler, view, layer.unwrap_or(&self.white_view), None, ALPHA_SOFT);
+                    draws.push(DrawCall { indices: first_index..indices.len() as u32, bind_group, cull_back: *cull_back, translucent: true, blended: true, piece: pieces.len() - 1, material, words });
+                }
             }
         }
 
@@ -1038,27 +1048,47 @@ impl MeshRenderer {
 /// Normals from triangles, area weighted and shared by vertices at the same place, so that
 /// seams stay smooth. Triangle strips do not keep one winding, so each face takes the side
 /// that the given normals of its corners point to, and only their sign is used.
+/// Sheets drawn from both sides (DOAX3's and DOAX2's hair: a front and a back copy at the same
+/// positions) would cancel out, so faces at a place go in two sums, by the side of the first
+/// given normal there, and each vertex takes the sum on its own given normal's side.
 /// Vertices in none of the triangles get none.
 fn smooth_normals(positions: &[glam::Vec3], given: &[glam::Vec3], triangles: &[u32]) -> Vec<Option<glam::Vec3>> {
     let key = |p: glam::Vec3| [p.x, p.y, p.z].map(|c| (c * 10000.0).round() as i64);
-    let mut sums: std::collections::HashMap<[i64; 3], glam::Vec3> = std::collections::HashMap::new();
+    // Per place: the reference side, the faces on it and the faces against it.
+    let mut sums: std::collections::HashMap<[i64; 3], (glam::Vec3, glam::Vec3, glam::Vec3)> = std::collections::HashMap::new();
     let mut used = vec![false; positions.len()];
+    let given_at = |i: usize| given.get(i).copied().unwrap_or(glam::Vec3::ZERO);
     for triangle in triangles.chunks_exact(3) {
         let [Some(&a), Some(&b), Some(&c)] = [0, 1, 2].map(|i| positions.get(triangle[i] as usize)) else { continue };
         let mut face = (b - a).cross(c - a);
-        let hint: glam::Vec3 = triangle.iter().filter_map(|&i| given.get(i as usize)).sum();
+        let hint: glam::Vec3 = triangle.iter().map(|&i| given_at(i as usize)).sum();
         if face.dot(hint) < 0.0 {
             face = -face;
         }
         for &index in triangle {
             used[index as usize] = true;
-            *sums.entry(key(positions[index as usize])).or_default() += face;
+            let entry = sums.entry(key(positions[index as usize])).or_insert((given_at(index as usize), glam::Vec3::ZERO, glam::Vec3::ZERO));
+            if face.dot(entry.0) >= 0.0 {
+                entry.1 += face;
+            } else {
+                entry.2 += face;
+            }
         }
     }
     positions
         .iter()
+        .enumerate()
         .zip(used)
-        .map(|(&p, used)| used.then(|| sums.get(&key(p)).map_or(glam::Vec3::ZERO, |sum| sum.normalize_or_zero())))
+        .map(|((i, &p), used)| {
+            used.then(|| {
+                sums.get(&key(p)).map_or(glam::Vec3::ZERO, |&(side, with, against)| {
+                    let mine = if given_at(i).dot(side) >= 0.0 { with } else { against };
+                    // A vertex whose side has no face (its own faces all lean the other way)
+                    // takes them all.
+                    if mine == glam::Vec3::ZERO { (with + against).normalize_or_zero() } else { mine.normalize_or_zero() }
+                })
+            })
+        })
         .collect()
 }
 
@@ -1150,6 +1180,13 @@ fn with_mipmaps(width: u32, height: u32, rgba: &[u8]) -> (u32, Vec<u8>) {
 }
 
 /// A draw's textures and material. Without a look it keeps the viewer's own shading.
+/// How a draw without the game's material treats texture alpha (`emissive.w` in the shader):
+/// cut below 0.1; cut below 0.5 (the solid pass of soft edges); or only what lies under 0.5,
+/// blended (their second pass).
+const ALPHA_TEST: f32 = 0.0;
+const ALPHA_SOLID: f32 = 1.0;
+const ALPHA_SOFT: f32 = 2.0;
+
 fn draw_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1157,8 +1194,10 @@ fn draw_bind_group(
     base: &wgpu::TextureView,
     layer: &wgpu::TextureView,
     look: Option<(&MaterialLook, bool)>,
+    alpha_mode: f32,
 ) -> (wgpu::BindGroup, wgpu::Buffer, [f32; 24]) {
     let mut words = [0f32; 24];
+    words[15] = alpha_mode;
     // The layer palette's opacity.
     words[23] = 1.0;
     if let Some((look, has_layer)) = look {
@@ -1293,6 +1332,7 @@ struct Material {
     ambient: vec4<f32>,
     /// Power in w.
     specular: vec4<f32>,
+    /// w: alpha mode of draws without the game's material (`ALPHA_TEST`, `_SOLID`, `_SOFT`).
     emissive: vec4<f32>,
     /// x: the game's lighting, y: specular, z: alpha from the texture, w: has a layer.
     flags: vec4<f32>,
@@ -1515,7 +1555,7 @@ fn shade(v: VertOut) -> vec4<f32> {
         layer = vec4<f32>(1.0, 1.0, 1.0, 0.0);
     }
     if u.anime_shading.x > 0.5 {
-        if texel.a < 0.1 {
+        if !alpha_kept(texel.a) {
             discard;
         }
         return cel_shaded(v, texel, layer);
@@ -1558,10 +1598,22 @@ fn shade(v: VertOut) -> vec4<f32> {
         let lit = clamp(color * diffuse_light + specular_light, vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(from_stored(lit), alpha);
     }
-    if texel.a < 0.1 {
+    if !alpha_kept(texel.a) {
         discard;
     }
     return vec4<f32>(texel.rgb * (ambient + diff * 0.7), texel.a);
+}
+
+// Whether a texel's alpha is drawn, by the draw's alpha mode (see `ALPHA_TEST` in the Rust).
+fn alpha_kept(a: f32) -> bool {
+    let mode = material.emissive.w;
+    if mode > 1.5 {
+        return a >= 0.02 && a < 0.5;
+    }
+    if mode > 0.5 {
+        return a >= 0.5;
+    }
+    return a >= 0.1;
 }
 "#;
 
@@ -1582,6 +1634,20 @@ mod tests {
         }
         assert_eq!(normals[0], normals[4]);
         assert_eq!(smooth_normals(&corners, &given, &[0, 1, 2])[3], None);
+    }
+
+    /// A bent sheet with a back copy at the same positions, as DOAX3's hair: each side keeps
+    /// its own normals instead of the two cancelling out.
+    #[test]
+    fn smooth_normals_keep_two_sided_sheets_apart() {
+        let front = [Vec3::ZERO, Vec3::X, Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 1.0, 0.3)];
+        let corners: Vec<Vec3> = front.iter().chain(front.iter()).copied().collect();
+        let given: Vec<Vec3> = (0..8).map(|i| if i < 4 { Vec3::Z } else { -Vec3::Z }).collect();
+        let triangles = [0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7];
+        let normals = smooth_normals(&corners, &given, &triangles);
+        for (i, n) in normals.iter().enumerate() {
+            assert!(n.unwrap().dot(given[i]) > 0.8, "{i}: {n:?}");
+        }
     }
 
 
