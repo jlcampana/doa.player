@@ -896,6 +896,26 @@ impl MeshRenderer {
     }
 
     /// Moves the vertices of every piece by its node matrix and uploads them.
+    /// Every piece back to its rest vertices as loaded, undoing soft bodies, hands and chest
+    /// shapes. For the reference pose.
+    pub fn reset_rest(&mut self) {
+        if let Some(model) = &mut self.model {
+            model.rest_vertices.clone_from(&model.loaded_vertices);
+        }
+    }
+
+    /// The lowest posed vertex's height, over visible pieces.
+    pub fn lowest_point(&self) -> Option<f32> {
+        let model = self.model.as_ref()?;
+        model
+            .pieces
+            .iter()
+            .zip(&model.layers)
+            .filter(|(_, layer)| layer.visible)
+            .flat_map(|(piece, _)| model.posed_vertices[piece.vertices.clone()].iter().map(|v| v.position[1]))
+            .reduce(f32::min)
+    }
+
     pub fn apply_pose(&mut self, queue: &wgpu::Queue, nodes: &[glam::Mat4]) {
         self.last_nodes.clear();
         self.last_nodes.extend_from_slice(nodes);

@@ -29,6 +29,7 @@ EXTRA="--doax" tools/re/shot.sh out "Tina Armstrong|0|0|200|3.2|1"              
 EXTRA="--doax2" tools/re/shot.sh out "Tina Armstrong|2|0|200|2.2|1.1"              # a DOAX2 suit and motion
 EXTRA="--doa4 --hair 2" tools/re/shot.sh out "Kasumi|0|1|200|3.6|0.9"              # a DOA4 costume and motion, with her third head file
 EXTRA="--doax3" tools/re/shot.sh out "Kasumi|0|0|20|1.3|1.3"                      # DOAX3 from the front (yaw 20); add --face N for an expression
+EXTRA="--doa2u" tools/re/shot.sh out "Zack|0|-|200|3|1"                         # "-" for the motion: the viewer's reference pose (any game)
 EXTRA="--doa2u --variant 1" tools/re/shot.sh out "Kasumi|0|0|200|3|1"           # records' variant 1 (0xFE), e.g. the sword in the hand
 EXTRA="--doa2u --view hands" tools/re/shot.sh out "Helena Douglas|0|0|200|3|1"   # frames a part of the pose
 EXTRA="--doa2u --mesh-only" tools/re/shot.sh out "Zack|0|0|200|3|1"              # also --no-textures
@@ -149,6 +150,7 @@ GPU memory does not show in any process's memory use, and `--export-all` runs in
 ## Development notes
 - Anime shading (`cel_shaded`, `vs_outline` in `mesh.rs`) is the viewer's own and applies to all games. Reworked 2026-11-18 toward Fire Emblem (Three Houses, Engage), as the user asked: three tones with soft steps from the strongest light, shadows from the material's own colour (base times itself, warm-shifted) instead of one cool tint, a narrow warm middle tone along the terminator, a warm rim on the lit side and a faint cool one in shadow, a broad faint sheen only on materials with specular (a tight one blotted DOA2U's low-poly clothes), and an inverted hull ink line in each material's deepened colour, thinner where the surface faces the camera. Values chosen by eye, not compared with those games; the user's opinion is pending (`humano.md`).
 
+- Reference pose (2026-11-19, asked by the user): the first row of every game's motion list, "Pose de referencia", and `-` as the motion on the command line (`App::select_reference_pose`). Arms out, legs straight, lifted so the lowest vertex is on the ground. DOA3 and DOA2U build it as synthetic tracks (`doa3::reference_tracks`, poles and hand turns chosen by eye), so chains and cloth keep running from their load state; DOAX, DOAX2 and DOA4 show each costume's rest nodes with the loaded shapes, still; DOAX3 is its motion 0, which is the same pose in the files. Motion numbers on the command line are unchanged (the game's).
 - Framing: the Background panel's View buttons, or `--view full|head|hands|feet`, frame from the posed character.
 
 - `datadvd.afs` costumes and the extra characters are in, see "Costume files" in the notes. Not compared with the game.

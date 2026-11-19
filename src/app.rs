@@ -461,6 +461,8 @@ pub struct App {
     pub character_configs: CharacterConfigs,
     /// Game frames elapsed, for systems that run at the game's fixed 60 Hz.
     pub game_clock: f32,
+    /// DOAX, DOAX2 and DOA4: the nodes of the costume's rest pose, for the reference pose.
+    rest_nodes: Vec<glam::Mat4>,
 
     // Input state
     pub mouse_drag: Option<(f64, f64)>,
@@ -729,6 +731,8 @@ pub struct Doa3Pose {
     pub chains_at_load: Doa3Chains,
     /// The motions are in DOA3's `loadfile.afs`, not in DOA2U's archive.
     pub motions_in_doa3: bool,
+    /// With no motion: the viewer's reference pose, its hips this high.
+    pub reference: Option<f32>,
 }
 
 /// Hair, ribbons and hanging cloth.
@@ -1080,6 +1084,7 @@ impl App {
             doa2u_xbe: None,
             character_configs: load_character_configs(),
             game_clock: 0.0,
+            rest_nodes: Vec::new(),
             mouse_drag: None,
             right_drag: None,
             status_msg: "Ready. Select a character to begin.".into(),
@@ -1130,8 +1135,11 @@ impl App {
         self.doax3_pose = None;
         self.doa4_pose = None;
         self.mesh.set_lights_follow_camera(false);
+        let reference = self.anim_panel.reference;
         self.load_character_files(char_idx, costume_idx);
-        if let Some((name, id, time)) = kept {
+        if reference {
+            self.select_reference_pose();
+        } else if let Some((name, id, time)) = kept {
             let same = self.current_animations.iter().position(|a| a.name == name)
                 .or_else(|| self.current_animations.iter().position(|a| a.doa3_motion_id == id));
             if let Some(index) = same {
@@ -1475,6 +1483,7 @@ impl App {
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         let pieces = inputs.len();
         drop(inputs);
+        self.rest_nodes = nodes.to_vec();
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
         let count = self.current_animations.len();
         if count > 0 {
@@ -1744,6 +1753,7 @@ impl App {
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         let pieces = inputs.len();
         drop(inputs);
+        self.rest_nodes = nodes.to_vec();
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
         let count = self.current_animations.len();
         if count > 0 {
@@ -2078,6 +2088,7 @@ impl App {
         }
         self.mesh.set_model(&self.ctx.device, &self.ctx.queue, &inputs, &textures);
         drop(inputs);
+        self.rest_nodes = nodes.to_vec();
         self.mesh.apply_pose(&self.ctx.queue, &nodes);
         let count = self.current_animations.len();
         if count > 0 {
@@ -2360,7 +2371,7 @@ impl App {
             log::info!("Chest spring on object {object}, {} groups", groups.len());
             Some(Doa3Chest { piece, sway: crate::formats::chest_sway::SwaySet::from_groups(&groups).map(|set| (set, Default::default())), groups, spring: None, frame: 0 })
         });
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: false });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: Some(style), skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: false, reference: None });
         self.game_clock = 0.0;
         self.select_motion(0);
 
@@ -2551,7 +2562,7 @@ impl App {
             copies: Vec::new(),
             placed,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains_at_load: chains.clone(), chains, motions_in_doa3: home.is_some() });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest: None, chains_at_load: chains.clone(), chains, motions_in_doa3: home.is_some(), reference: None });
         self.game_clock = 0.0;
         self.select_motion(0);
         Ok(format!("DOA2U: {display_name} {stem}, DOA3 format: {piece_count} pieces, {triangles} triangles, {} textures", textures.len()))
@@ -2799,7 +2810,7 @@ impl App {
             copies: Vec::new(),
             placed,
         };
-        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: true });
+        self.doa3_pose = Some(Doa3Pose { doa2u_style: None, skeleton, motion: None, chest, chains_at_load: chains.clone(), chains, motions_in_doa3: true, reference: None });
         self.game_clock = 0.0;
         let motion_index = config
             .motion
@@ -3370,7 +3381,65 @@ impl App {
     }
 
     /// Starts a motion of the loaded DOA3 character. Other characters ignore this.
+    /// The viewer's reference pose, first in every motion list: no motion, the costume as
+    /// modelled (DOAX3's motion 0 is the same), arms out, standing on the ground. DOA3 and
+    /// DOA2U build it as tracks, so their soft bodies keep running; the other games show the
+    /// loaded rest shapes, still.
+    pub fn select_reference_pose(&mut self) {
+        self.anim_panel.selected_anim_idx = None;
+        self.anim_panel.reference = true;
+        self.anim_time = 0.0;
+        if let Some(pose) = &mut self.doax3_pose {
+            pose.playing = None;
+            self.update_doa3_pose();
+            return;
+        }
+        let still = if let Some(pose) = &mut self.doa4_pose {
+            pose.playing = None;
+            true
+        } else if let Some(pose) = &mut self.doax2_pose {
+            pose.playing = None;
+            true
+        } else if let Some(pose) = &mut self.doax_pose {
+            pose.playing = None;
+            true
+        } else {
+            false
+        };
+        if still {
+            self.mesh.reset_rest();
+            self.mesh.apply_pose(&self.ctx.queue, &self.rest_nodes);
+            let lift = glam::Mat4::from_translation(glam::Vec3::Y * -self.mesh.lowest_point().unwrap_or(0.0));
+            let nodes: Vec<glam::Mat4> = self.rest_nodes.iter().map(|n| lift * *n).collect();
+            self.mesh.apply_pose(&self.ctx.queue, &nodes);
+            return;
+        }
+        let clock = self.game_clock as u64;
+        let Some(pose) = &mut self.doa3_pose else { return };
+        pose.motion = None;
+        // Soft bodies start afresh, as on loading, rather than swinging in from the last pose.
+        pose.chains = pose.chains_at_load.clone();
+        pose.chest = pose.chest.take().map(|chest| Doa3Chest { spring: None, frame: clock, ..chest });
+        if pose.reference.is_none() {
+            // Posed with the hips at the origin, then raised by the lowest point.
+            pose.reference = Some(0.0);
+            self.mesh.reset_rest();
+            let tracks = doa3::reference_tracks(&pose.skeleton, 0.0);
+            let nodes = match pose.doa2u_style {
+                Some(style) => doa2u::solve_pose(&tracks, &pose.skeleton, style),
+                None => doa3::solve_pose(&tracks, &pose.skeleton),
+            };
+            self.mesh.apply_pose(&self.ctx.queue, &nodes);
+            let height = -self.mesh.lowest_point().unwrap_or(0.0);
+            if let Some(pose) = &mut self.doa3_pose {
+                pose.reference = Some(height);
+            }
+        }
+        self.update_doa3_pose();
+    }
+
     pub fn select_motion(&mut self, index: usize) {
+        self.anim_panel.reference = false;
         if let Some(pose) = &mut self.doax3_pose {
             if index < pose.motions.motions.len() {
                 pose.playing = Some(index);
@@ -3754,19 +3823,25 @@ impl App {
             return;
         }
         let Some(pose) = &self.doa3_pose else { return };
-        let Some(motion) = &pose.motion else { return };
-        let Some(data) = self.motion_archive().and_then(|a| a.get_by_index(motion.afs_entry)) else {
-            return;
+        // A motion, or the viewer's reference pose (no motion: id past every script's).
+        let evaluated = match (&pose.motion, pose.reference) {
+            (Some(motion), _) => {
+                let Some(data) = self.motion_archive().and_then(|a| a.get_by_index(motion.afs_entry)) else {
+                    return;
+                };
+                doa3::eval_motion(data, &motion.tracks, self.anim_time).map(|values| (values, motion.id, self.anim_time as u16))
+            }
+            (None, Some(height)) => Ok((doa3::reference_tracks(&pose.skeleton, height), usize::MAX, 0)),
+            (None, None) => return,
         };
-        match doa3::eval_motion(data, &motion.tracks, self.anim_time) {
-            Ok(values) => {
+        match evaluated {
+            Ok((values, motion_id, motion_frame)) => {
                 let doa2u_pose = pose.doa2u_style.is_some();
                 let nodes = match pose.doa2u_style {
                     Some(style) => doa2u::solve_pose(&values, &pose.skeleton, style),
                     None => doa3::solve_pose(&values, &pose.skeleton),
                 };
                 let clock = self.game_clock as u64;
-                let (motion_id, motion_frame) = (motion.id, self.anim_time as u16);
                 if let Some(chest) = self.doa3_pose.as_mut().and_then(|p| p.chest.as_mut()) {
                     let parameters = if doa2u_pose { doa2u::CHEST_SPRING } else { ChestSpring::DOA3 };
                     let spring = chest.spring.get_or_insert_with(|| ChestSpring::with_parameters(&nodes[0], parameters));

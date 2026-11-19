@@ -86,8 +86,10 @@ pub fn load_from_arguments(app: &mut App) {
         app.bg_panel.bounce_scale = scale;
     }
     app.load_character(index, number(0));
-    // A `-` for the motion leaves the costume at rest (DOAX3 has no default motion).
-    if rest.get(1).map(String::as_str) != Some("-") {
+    // A `-` for the motion shows the viewer's reference pose, the list's first row.
+    if rest.get(1).map(String::as_str) == Some("-") {
+        app.select_reference_pose();
+    } else {
         app.select_motion(number(1));
     }
     let value_of = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)?.parse::<usize>().ok());

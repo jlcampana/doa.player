@@ -9,7 +9,8 @@ use crate::app::{self, App, GameSource};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Load(usize, usize),
-    Motion(usize),
+    /// A motion of the list, or `None` for the reference pose.
+    Motion(Option<usize>),
     Voice(usize),
     /// The loaded costume to `exports/`.
     ExportCostume,

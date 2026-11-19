@@ -314,6 +314,30 @@ const LIMBS: [Limb; 4] = [
     Limb { upper: 6, mid: 7, end: 3, first_track: 36, parent: 2, length_axis: 1, negate: false },
 ];
 
+/// Tracks for the viewer's reference pose, not a game motion: hips at the origin with no
+/// turn, arms straight out to the sides and legs straight down, hands and feet unturned, the
+/// hips `height` up (the caller picks it to stand the model on the ground). Works for
+/// `solve_pose` and DOA2U's solve, which read the same tracks.
+pub fn reference_tracks(skeleton: &[Vec3; 17], height: f32) -> [f32; TRACK_COUNT] {
+    let mut tracks = [0f32; TRACK_COUNT];
+    tracks[1] = height;
+    let hips = translation(Vec3::Y * height);
+    let chest = hips * translation(skeleton[0]);
+    for limb in &LIMBS {
+        let parent = if limb.parent == 0 { chest } else { hips };
+        let origin = parent.transform_point3(skeleton[limb.upper]);
+        let reach = skeleton[limb.mid][limb.length_axis].abs() + skeleton[limb.end][limb.length_axis].abs();
+        let direction = if limb.length_axis == 0 { Vec3::X * skeleton[limb.mid].x.signum() } else { Vec3::NEG_Y };
+        let target = origin + direction * reach;
+        tracks[limb.first_track..limb.first_track + 3].copy_from_slice(&target.to_array());
+        tracks[limb.first_track + 6..limb.first_track + 8].copy_from_slice(&REFERENCE_POLES[limb.length_axis]);
+    }
+    tracks
+}
+
+/// The reference pose's pole angles (track 6 and 7 of a limb): arms, then legs.
+const REFERENCE_POLES: [[f32; 2]; 2] = [[0.0, 0.0], [0.0, 0.0]];
+
 /// Builds the node matrices for a frame (`sub_00091C30`, `sub_00091720`,
 /// `sub_00094660`). The game uses a left-handed space; the viewer's Z flip is
 /// applied here so that the result can be drawn directly.

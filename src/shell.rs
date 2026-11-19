@@ -256,7 +256,10 @@ impl Shared {
                 });
             }
             Action::Motion(index) => self.start_job("Cargando la animación", false, move |app, _| {
-                app.select_motion(index);
+                match index {
+                    Some(index) => app.select_motion(index),
+                    None => app.select_reference_pose(),
+                }
                 Ok(String::new())
             }),
             Action::Voice(entry) => {

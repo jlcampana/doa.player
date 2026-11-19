@@ -2,6 +2,8 @@ use crate::app::AnimationEntry;
 
 pub struct AnimPanel {
     pub selected_anim_idx: Option<usize>,
+    /// The viewer's reference pose is shown (the list's first row, not a game motion).
+    pub reference: bool,
     pub playing: bool,
     pub loop_anim: bool,
     pub speed: f32,
@@ -18,6 +20,7 @@ impl AnimPanel {
     pub fn new() -> Self {
         Self {
             selected_anim_idx: None,
+            reference: false,
             playing: false,
             loop_anim: true,
             speed: 1.0,
@@ -29,8 +32,9 @@ impl AnimPanel {
         }
     }
 
-    /// Play controls and the motion list, drawn into `ui`.
-    pub fn ui(&mut self, ui: &mut egui::Ui, animations: &[AnimationEntry], on_anim_selected: &mut dyn FnMut(usize)) {
+    /// Play controls and the motion list, drawn into `ui`. The list starts with the viewer's
+    /// reference pose, which `on_anim_selected` gets as `None`.
+    pub fn ui(&mut self, ui: &mut egui::Ui, animations: &[AnimationEntry], on_anim_selected: &mut dyn FnMut(Option<usize>)) {
         ui.horizontal(|ui| {
             if ui.button(if self.playing { "⏸ Pausa" } else { "▶ Reproducir" }).clicked() {
                 self.playing = !self.playing;
@@ -49,6 +53,14 @@ impl AnimPanel {
         let filter_lower = self.filter.to_lowercase();
         // The last list of its panel: it takes the height left.
         egui::ScrollArea::vertical().id_salt("animations").max_height((ui.available_height() - 6.0).max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
+            let name = "Pose de referencia";
+            if filter_lower.is_empty() || name.to_lowercase().contains(&filter_lower) {
+                if ui.selectable_label(self.reference, name).on_hover_text("Del visor, no del juego: el modelo como está hecho, de pie en el suelo").clicked() {
+                    self.reference = true;
+                    self.selected_anim_idx = None;
+                    on_anim_selected(None);
+                }
+            }
             for (i, anim) in animations.iter().enumerate() {
                 if !filter_lower.is_empty() && !anim.name.to_lowercase().contains(&filter_lower) {
                     continue;
@@ -57,7 +69,7 @@ impl AnimPanel {
                 if ui.selectable_label(selected, &anim.name).clicked() {
                     self.selected_anim_idx = Some(i);
                     self.playing = true;
-                    on_anim_selected(i);
+                    on_anim_selected(Some(i));
                 }
             }
         });
