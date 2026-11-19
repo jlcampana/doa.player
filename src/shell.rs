@@ -6,7 +6,7 @@
 
 use crate::app::App;
 use crate::ui::layers_panel::{layers_panel, LayersUi};
-use crate::ui::view_panel::{detach_button, view_panel, Action, Panel};
+use crate::ui::view_panel::{character_panel, detach_button, motion_panel, view_panel, Action, Panel};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
@@ -64,7 +64,7 @@ pub struct Shared {
     pub viewer: Option<Box<App>>,
     pub layers: LayersUi,
     /// Panels in a window of their own, by `Panel::index`.
-    pub detached: [bool; 2],
+    pub detached: [bool; 4],
     /// Panels to take out (true) or bring back, handled where the event loop is at hand.
     pub panel_requests: Vec<(Panel, bool)>,
     job: Option<Job>,
@@ -83,7 +83,7 @@ impl Shared {
         Self {
             viewer: None,
             layers: LayersUi::default(),
-            detached: [false; 2],
+            detached: [false; 4],
             panel_requests: Vec::new(),
             job: None,
             job_log: Vec::new(),
@@ -305,10 +305,7 @@ fn panic_text(panic: &Box<dyn std::any::Any + Send>) -> String {
 /// A panel's contents, in the main window or in its own.
 pub fn panel_contents(ui: &mut egui::Ui, kind: Panel, shared: &mut Shared) {
     detach_button(ui, shared.detached[kind.index()], kind, &mut shared.actions);
-    match kind {
-        Panel::View => ui.heading("Vista"),
-        Panel::Layers => ui.heading("Capas"),
-    };
+    ui.heading(kind.heading());
     let dialog_open = shared.dialog_open();
     let last_job = !shared.job_log.is_empty();
     let Shared { viewer, layers, actions, job, .. } = shared;
@@ -316,7 +313,9 @@ pub fn panel_contents(ui: &mut egui::Ui, kind: Panel, shared: &mut Shared) {
         Some(app) => {
             // With a dialog open no other can be asked for.
             ui.add_enabled_ui(!dialog_open, |ui| match kind {
-                Panel::View => egui::ScrollArea::vertical().id_salt("view panel").show(ui, |ui| view_panel(ui, app, actions, last_job)).inner,
+                Panel::Character => egui::ScrollArea::vertical().id_salt("character panel").show(ui, |ui| character_panel(ui, app, actions, last_job)).inner,
+                Panel::View => egui::ScrollArea::vertical().id_salt("view panel").show(ui, |ui| view_panel(ui, app)).inner,
+                Panel::Motion => egui::ScrollArea::vertical().id_salt("motion panel").show(ui, |ui| motion_panel(ui, app, actions)).inner,
                 Panel::Layers => layers_panel(ui, app, layers),
             });
         }

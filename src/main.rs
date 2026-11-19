@@ -179,7 +179,7 @@ impl ApplicationHandler for Handler {
                         .with_title(std::env::var("DOA_PLAYER_TITLE").unwrap_or_else(|_| "DOA Player".to_string()))
                         // Exporting from the command line needs the GPU, not a window on the desktop.
                         .with_visible(!std::env::args().any(|a| a == "--export" || a == "--export-all" || a == "--install-icon"))
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
+                        .with_inner_size(winit::dpi::LogicalSize::new(1600u32, 900u32)),
                 )
                 .expect("window creation failed"),
         );
@@ -195,7 +195,9 @@ impl ApplicationHandler for Handler {
         let args: Vec<String> = std::env::args().collect();
         for value in args.windows(2).filter(|w| w[0] == "--detach").map(|w| w[1].as_str()) {
             match value {
+                "personaje" | "character" => shared.panel_requests.push((Panel::Character, true)),
                 "vista" | "view" => shared.panel_requests.push((Panel::View, true)),
+                "animacion" | "animación" | "fisica" | "física" | "motion" => shared.panel_requests.push((Panel::Motion, true)),
                 "capas" | "layers" => shared.panel_requests.push((Panel::Layers, true)),
                 other => log::warn!("Unknown panel for --detach: {other}"),
             }
@@ -340,10 +342,17 @@ fn render_frame(shell: &mut Shell) {
     let egui_output = egui_ctx.run(raw_input, |ctx| {
         shell::status_bar(ctx, shared);
         // Panels in their own windows are not drawn here, and their space goes to the view.
-        let left = (!shared.detached[Panel::View.index()] && !shared.panels_hidden)
-            .then(|| egui::SidePanel::left("vista").default_width(270.0).show(ctx, |ui| shell::panel_contents(ui, Panel::View, shared)));
-        let right = (!shared.detached[Panel::Layers.index()] && !shared.panels_hidden)
-            .then(|| egui::SidePanel::right("capas").default_width(230.0).show(ctx, |ui| shell::panel_contents(ui, Panel::Layers, shared)));
+        // Left to right: Personaje, Vista, the view, Física y animación, Capas. The first panel
+        // shown on a side is the outermost.
+        let side = |kind: Panel, id: &str, left: bool, width: f32, shared: &mut Shared| {
+            if shared.detached[kind.index()] || shared.panels_hidden {
+                return 0.0;
+            }
+            let panel = if left { egui::SidePanel::left(id.to_string()) } else { egui::SidePanel::right(id.to_string()) };
+            panel.default_width(width).show(ctx, |ui| shell::panel_contents(ui, kind, shared)).response.rect.width()
+        };
+        let left = side(Panel::Character, "personaje", true, 250.0, shared) + side(Panel::View, "vista", true, 230.0, shared);
+        let right = side(Panel::Layers, "capas", false, 220.0, shared) + side(Panel::Motion, "animacion", false, 230.0, shared);
         shell::job_window(ctx, shared);
         if shared.viewer.is_none() {
             egui::Area::new(egui::Id::new("busy")).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -351,7 +360,7 @@ fn render_frame(shell: &mut Shell) {
             });
         }
         let ppp = ctx.pixels_per_point();
-        insets = (left.map_or(0.0, |l| l.response.rect.width() * ppp), right.map_or(0.0, |r| r.response.rect.width() * ppp));
+        insets = (left * ppp, right * ppp);
     });
     shell.insets = insets;
     shell.shared.poll();

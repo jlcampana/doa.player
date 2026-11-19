@@ -1,5 +1,6 @@
-//! The "Vista" panel: actions (export), the character and costume, how the model is drawn,
-//! lighting, animation, physics, voices and camera shots.
+//! The left and middle panels: "Personaje" (export, the character and costume, voices),
+//! "Vista" (how the model is drawn, camera shots, lighting) and "Animación" (physics, then
+//! the motions).
 
 use crate::app::{self, App, GameSource};
 
@@ -25,17 +26,31 @@ pub enum Action {
 /// Panels that can leave the main window.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Panel {
+    Character,
     View,
+    Motion,
     Layers,
 }
 
 impl Panel {
     pub fn title(self) -> &'static str {
         match self {
+            Panel::Character => "DOA Player · Personaje",
             Panel::View => "DOA Player · Vista",
+            Panel::Motion => "DOA Player · Física y animación",
             Panel::Layers => "DOA Player · Capas",
         }
     }
+
+    pub fn heading(self) -> &'static str {
+        match self {
+            Panel::Character => "Personaje",
+            Panel::View => "Vista",
+            Panel::Motion => "Física y animación",
+            Panel::Layers => "Capas",
+        }
+    }
+
 
     pub fn index(self) -> usize {
         self as usize
@@ -66,7 +81,8 @@ pub fn characters(app: &App) -> &[app::CharacterEntry] {
     }
 }
 
-pub fn view_panel(ui: &mut egui::Ui, app: &mut App, actions: &mut Vec<Action>, last_job: bool) {
+/// Export, the character and costume, and DOA2U's voices.
+pub fn character_panel(ui: &mut egui::Ui, app: &mut App, actions: &mut Vec<Action>, last_job: bool) {
     ui.horizontal(|ui| {
         if let Some(logo) = &app.char_panel.logo {
             ui.image((logo.id(), egui::Vec2::splat(26.0)));
@@ -115,24 +131,38 @@ pub fn view_panel(ui: &mut egui::Ui, app: &mut App, actions: &mut Vec<Action>, l
         char_panel.ui(ui, characters, &mut |ci, costume| actions.push(Action::Load(ci, costume)));
     });
 
+    // DOA2U's clips have names. DOA3's do not, and which is whose is unknown there.
+    if app.char_panel.selected_source == GameSource::Doa2U {
+        egui::CollapsingHeader::new(egui::RichText::new("Voces").heading()).default_open(false).show(ui, |ui| {
+            let selected = app.char_panel.selected_char_idx.and_then(|i| app.doa2u_characters.get(i)).map(|c| c.display_name.clone());
+            let character = if app.voice_panel.show_others { None } else { selected };
+            let clips = if app.voice_panel.show_others || character.is_some() { app.voices.clips(app::doa2u_voice_path(), character.as_deref()) } else { Vec::new() };
+            app.voice_panel.ui(ui, &clips, &mut |entry| actions.push(Action::Voice(entry)));
+        });
+    }
+}
+
+/// How the model is drawn, camera shots and lighting.
+pub fn view_panel(ui: &mut egui::Ui, app: &mut App) {
     egui::CollapsingHeader::new(egui::RichText::new("Vista").heading()).default_open(true).show(ui, |ui| {
         let backgrounds = app.background_options.clone();
         app.bg_panel.view_ui(ui, &backgrounds);
     });
 
-    egui::CollapsingHeader::new(egui::RichText::new("Iluminación").heading()).default_open(false).show(ui, |ui| {
+    egui::CollapsingHeader::new(egui::RichText::new("Cámara").heading()).default_open(true).show(ui, |ui| {
+        app.bg_panel.camera_ui(ui);
+        ui.weak("Izquierdo: girar · Derecho: desplazar · Rueda: acercar");
+    });
+    egui::CollapsingHeader::new(egui::RichText::new("Iluminación").heading()).default_open(true).show(ui, |ui| {
         let lit = app.mesh.is_lit();
         let names: Vec<String> = app.stage_light_list().iter().map(|(name, _)| name.clone()).collect();
         app.bg_panel.lighting_ui(ui, lit, &names);
     });
+}
 
-    egui::CollapsingHeader::new(egui::RichText::new("Animación").heading()).default_open(true).show(ui, |ui| {
-        let animations = std::mem::take(&mut app.current_animations);
-        app.anim_panel.ui(ui, &animations, &mut |index| actions.push(Action::Motion(index)));
-        app.current_animations = animations;
-    });
-
-    egui::CollapsingHeader::new(egui::RichText::new("Física").heading()).default_open(false).show(ui, |ui| {
+/// Physics first, then the motions.
+pub fn motion_panel(ui: &mut egui::Ui, app: &mut App, actions: &mut Vec<Action>) {
+    egui::CollapsingHeader::new(egui::RichText::new("Física").heading()).default_open(true).show(ui, |ui| {
         app.anim_panel.physics_ui(ui);
         if app.has_chest_spring() {
             let before = app.bg_panel.bounce_scale;
@@ -145,18 +175,9 @@ pub fn view_panel(ui: &mut egui::Ui, app: &mut App, actions: &mut Vec<Action>, l
         ui.weak("Física de una sola pieza: en Capas.");
     });
 
-    // DOA2U's clips have names. DOA3's do not, and which is whose is unknown there.
-    if app.char_panel.selected_source == GameSource::Doa2U {
-        egui::CollapsingHeader::new(egui::RichText::new("Voces").heading()).default_open(false).show(ui, |ui| {
-            let selected = app.char_panel.selected_char_idx.and_then(|i| app.doa2u_characters.get(i)).map(|c| c.display_name.clone());
-            let character = if app.voice_panel.show_others { None } else { selected };
-            let clips = if app.voice_panel.show_others || character.is_some() { app.voices.clips(app::doa2u_voice_path(), character.as_deref()) } else { Vec::new() };
-            app.voice_panel.ui(ui, &clips, &mut |entry| actions.push(Action::Voice(entry)));
-        });
-    }
-
-    egui::CollapsingHeader::new(egui::RichText::new("Cámara").heading()).default_open(true).show(ui, |ui| {
-        app.bg_panel.camera_ui(ui);
-        ui.weak("Izquierdo: girar · Derecho: desplazar · Rueda: acercar");
+    egui::CollapsingHeader::new(egui::RichText::new("Animación").heading()).default_open(true).show(ui, |ui| {
+        let animations = std::mem::take(&mut app.current_animations);
+        app.anim_panel.ui(ui, &animations, &mut |index| actions.push(Action::Motion(index)));
+        app.current_animations = animations;
     });
 }

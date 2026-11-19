@@ -12,7 +12,7 @@ use crate::renderer;
 /// only that game's.
 /// `--export` writes that costume to `exports/` and exits, with the chosen motion or, with
 /// `--all-motions`, all of them.
-/// `--detach vista|capas` opens that panel in its own window (read in `main.rs`).
+/// `--detach personaje|vista|animacion|capas` opens that panel in its own window (read in `main.rs`).
 /// `--no-panels` leaves only the 3D view and the status bar, for screenshots.
 /// Also takes `--anime`, `--no-textures`, `--mesh-only`, `--wind`, `--bounce <scale>`, `--motion-id <id>` and
 /// `--frame <frame>`, which holds the motion on that frame, and for DOAX3 `--face <n>`, an
