@@ -2,7 +2,9 @@
 //! jobs. Nothing slow runs on the event loop, or GNOME shows the window as not responding:
 //! loading a costume, exporting and opening the games' files run on a worker thread that is
 //! handed the viewer (`App`) and gives it back when done. File dialogs run on threads of their
-//! own. Short jobs are waited for up to `JOB_WAIT`, so that quick costume changes do not flicker.
+//! own. Short jobs are waited for up to `JOB_WAIT`, so that quick costume changes do not flicker;
+//! loads (costume, hairstyle, motion) up to `LOAD_WAIT`, as the viewer is away meanwhile and the
+//! view would go blank for the half second DOAX2, DOA4 and DOAX3 take.
 
 use crate::app::App;
 use crate::ui::layers_panel::{layers_panel, LayersUi};
@@ -13,6 +15,8 @@ use std::time::{Duration, Instant};
 
 /// How long a new job is waited for before the window goes back to drawing.
 const JOB_WAIT: Duration = Duration::from_millis(100);
+/// Over this a load shows the spinner. GNOME calls a window hung after about 5 s.
+const LOAD_WAIT: Duration = Duration::from_millis(2000);
 
 enum JobMessage {
     Line(String),
@@ -103,7 +107,7 @@ impl Shared {
 
     /// Runs `work` on a worker thread. It makes the viewer, or takes it from `self` when
     /// `work` is given one. A panic becomes an error, and the viewer comes back as it was left.
-    fn spawn(&mut self, title: String, work: impl FnOnce(&dyn Fn(String)) -> Option<(Box<App>, anyhow::Result<String>)> + Send + 'static) {
+    fn spawn(&mut self, title: String, wait: Duration, work: impl FnOnce(&dyn Fn(String)) -> Option<(Box<App>, anyhow::Result<String>)> + Send + 'static) {
         let (sender, receiver) = std::sync::mpsc::channel();
         let repaint = self.egui_ctx.clone();
         std::thread::spawn(move || {
@@ -119,13 +123,13 @@ impl Shared {
         self.status = format!("{title}…");
         self.job_log = vec![title.clone()];
         self.job = Some(Job { title, receiver, started: Instant::now() });
-        self.wait_job(JOB_WAIT);
+        self.wait_job(wait);
     }
 
     /// Opens the games' files and builds the viewer, then applies the command line.
     pub fn start_viewer(&mut self, ctx: crate::renderer::RenderContext) {
         let egui_ctx = self.egui_ctx.clone();
-        self.spawn("Abriendo los archivos de los juegos".into(), move |_| {
+        self.spawn("Abriendo los archivos de los juegos".into(), JOB_WAIT, move |_| {
             let started = Instant::now();
             let mut app = Box::new(App::new(ctx, &egui_ctx));
             log::info!("App ready in {} ms", started.elapsed().as_millis());
@@ -138,7 +142,8 @@ impl Shared {
         });
     }
 
-    /// Runs `work` on the viewer in a worker thread. Does nothing while another job runs.
+    /// Runs `work` on the viewer in a worker thread. Does nothing while another job runs. Jobs
+    /// with the process window (exports) are waited for `JOB_WAIT`, others (loads) `LOAD_WAIT`.
     pub fn start_job(&mut self, title: impl Into<String>, open_window: bool, work: impl FnOnce(&mut App, &dyn Fn(String)) -> anyhow::Result<String> + Send + 'static) {
         let title = title.into();
         if self.job.is_some() {
@@ -149,7 +154,8 @@ impl Shared {
         if open_window {
             self.show_job_window = true;
         }
-        self.spawn(title, move |progress| {
+        let wait = if open_window { JOB_WAIT } else { LOAD_WAIT };
+        self.spawn(title, wait, move |progress| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&mut app, progress)))
                 .unwrap_or_else(|panic| Err(anyhow::anyhow!("falló de forma inesperada: {}", panic_text(&panic))));
             Some((app, result))
