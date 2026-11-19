@@ -18,7 +18,7 @@ impl VoicePanel {
             ui.label("Sin voces para este personaje.");
         }
         let filter = self.filter.to_lowercase();
-        egui::ScrollArea::vertical().id_salt("voices").max_height(200.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("voices").max_height(200.0).auto_shrink([false, true]).show(ui, |ui| {
             for clip in clips.iter().filter(|c| c.name.to_lowercase().contains(&filter)) {
                 if ui.small_button(&clip.name).clicked() {
                     on_play(clip.entry);

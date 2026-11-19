@@ -64,7 +64,8 @@ impl BgSelectPanel {
         ui.checkbox(&mut self.game_lights, "Luces del juego");
         ui.add(egui::Slider::new(&mut self.relief, 0.0..=1.0).text("Relieve (no está en el juego)"));
         ui.label("Escenario:");
-        egui::ScrollArea::vertical().id_salt("stage lights").max_height(180.0).show(ui, |ui| {
+        // The last list of its panel: it takes the height left.
+        egui::ScrollArea::vertical().id_salt("stage lights").max_height((ui.available_height() - 6.0).max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
             for (i, name) in light_names.iter().enumerate() {
                 if ui.selectable_label(self.lights == i, name).clicked() {
                     self.lights = i;

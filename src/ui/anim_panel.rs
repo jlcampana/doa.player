@@ -47,7 +47,8 @@ impl AnimPanel {
         }
         egui::TextEdit::singleline(&mut self.filter).hint_text("Filtrar…").show(ui);
         let filter_lower = self.filter.to_lowercase();
-        egui::ScrollArea::vertical().id_salt("animations").max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
+        // The last list of its panel: it takes the height left.
+        egui::ScrollArea::vertical().id_salt("animations").max_height((ui.available_height() - 6.0).max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
             for (i, anim) in animations.iter().enumerate() {
                 if !filter_lower.is_empty() && !anim.name.to_lowercase().contains(&filter_lower) {
                     continue;

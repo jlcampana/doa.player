@@ -314,8 +314,9 @@ pub fn panel_contents(ui: &mut egui::Ui, kind: Panel, shared: &mut Shared) {
             // With a dialog open no other can be asked for.
             ui.add_enabled_ui(!dialog_open, |ui| match kind {
                 Panel::Character => egui::ScrollArea::vertical().id_salt("character panel").show(ui, |ui| character_panel(ui, app, actions, last_job)).inner,
-                Panel::View => egui::ScrollArea::vertical().id_salt("view panel").show(ui, |ui| view_panel(ui, app)).inner,
-                Panel::Motion => egui::ScrollArea::vertical().id_salt("motion panel").show(ui, |ui| motion_panel(ui, app, actions)).inner,
+                // No scroll around these two: their last list fills the panel's height and scrolls itself.
+                Panel::View => view_panel(ui, app),
+                Panel::Motion => motion_panel(ui, app, actions),
                 Panel::Layers => layers_panel(ui, app, layers),
             });
         }
